@@ -1,8 +1,10 @@
 name: CI
 
+# PR-only status check. Push-to-main gating lives entirely inside
+# deploy.yml's own `test` job (sequential: test -> build -> deploy, one
+# workflow run, one SHA) so this workflow can never race a broken push
+# against a deploy — see docs/DEPLOYMENT.md.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 

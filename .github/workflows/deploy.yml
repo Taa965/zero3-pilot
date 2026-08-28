@@ -1,5 +1,11 @@
 name: Deploy
 
+# Strict release gate: test -> build -> deploy, as three jobs in ONE
+# workflow run so they always share the same $GITHUB_SHA and can never
+# race against each other. A push to main that fails fmt/clippy/build/test
+# never reaches `build` or `deploy` — GitHub Actions skips downstream jobs
+# automatically when a `needs:` dependency fails.
+#
 # Isolated deploy path for the zero3-pilot control server only.
 # - Builds on a GitHub-hosted runner (never the existing self-hosted
 #   runner on the target host, which belongs to a different repo/project).
@@ -15,7 +21,33 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false # upstream/codex is large; not needed to build zero3-* crates
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: build
+        run: cargo build --workspace --all-targets
+
+      - name: test
+        run: cargo test --workspace
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,18 +112,23 @@ jobs:
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
             "rm -rf /tmp/zero3-pilot-deploy-${{ github.sha }}" || true
 
-      - name: External health check
+      - name: External health check (must match exact deployed SHA)
         run: |
           set -e
+          expected_sha="$(git rev-parse --short HEAD)"
+          echo "expected git_sha=$expected_sha"
           for i in $(seq 1 10); do
-            code=$(ssh -i ~/.ssh/zero3pilot_deploy -p "${{ secrets.DEPLOY_PORT }}" \
+            body="$(ssh -i ~/.ssh/zero3pilot_deploy -p "${{ secrets.DEPLOY_PORT }}" \
               "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-              "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8788/health")
-            if [ "$code" = "200" ]; then
-              echo "health check passed"
+              "curl -s http://127.0.0.1:8788/health" || true)"
+            actual_sha="$(printf '%s' "$body" | jq -r '.git_sha // empty' 2>/dev/null || true)"
+            status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
+            if [ "$status" = "ok" ] && [ "$actual_sha" = "$expected_sha" ]; then
+              echo "health check passed: git_sha=$actual_sha matches expected"
               exit 0
             fi
+            echo "attempt $i: status=$status actual_sha=$actual_sha (waiting for $expected_sha)"
             sleep 2
           done
-          echo "health check failed after deploy"
+          echo "health check failed: deployed git_sha never matched expected $expected_sha"
           exit 1

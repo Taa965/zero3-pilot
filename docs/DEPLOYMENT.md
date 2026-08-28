@@ -10,11 +10,20 @@ construction — see the isolation table in
 
 ## How a deploy happens
 
+`.github/workflows/deploy.yml` is one workflow run with three sequential
+jobs (`test -> build -> deploy`, each `needs:` the previous), so they
+always share the same `$GITHUB_SHA` and a failure at any stage stops the
+ones after it — GitHub Actions skips downstream jobs automatically when a
+`needs:` dependency fails. `.github/workflows/ci.yml` only runs on pull
+requests (a separate, faster feedback loop); it is not part of the deploy
+gate and cannot race it.
+
 ```
 push to main
-  -> CI (fmt, clippy, build, test)
-  -> build job: cargo build --release -p zero3-web (GitHub-hosted runner)
-  -> deploy job:
+  -> job "test":  fmt, clippy, build --all-targets, test --workspace
+       (fails here -> build/deploy never run, nothing reaches AWS)
+  -> job "build": cargo build --release -p zero3-web (GitHub-hosted runner)
+  -> job "deploy":
        scp binary + deployment/deploy.sh to the host, as `zero3pilot`
        ssh: deployment/deploy.sh
          - releases/<sha>/bin/zero3-web
@@ -22,7 +31,10 @@ push to main
          - sudo zero3pilot-deploy-release   (only privileged step: daemon-reload + restart)
          - curl 127.0.0.1:8788/health, retry up to 10x
          - on failure: symlink back to the previous release, restart again, exit 1
-  -> external health check step re-confirms 200 over SSH
+       external health check step re-curls /health over SSH and parses the
+       JSON response, and only passes if BOTH `status == "ok"` AND
+       `git_sha` matches `git rev-parse --short HEAD` for this exact
+       workflow run — a stale or wrong binary responding 200 is not enough
 ```
 
 No GitHub-hosted step, and no code running under the `zero3pilot` account,
