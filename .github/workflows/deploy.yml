@@ -1,0 +1,33 @@
+name: Deploy
+
+# Deliberately workflow_dispatch-only for now — see docs/DEPLOYMENT.md.
+# A target host hasn't been chosen yet (an existing Lightsail host already
+# runs an unrelated production system). Flip the trigger to `push: main`
+# only after DEPLOY_HOST/DEPLOY_PORT/DEPLOY_USER/DEPLOY_SSH_KEY/DEPLOY_PATH
+# are configured as repo secrets and the manual run below has been proven
+# idempotent and rollback-safe.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p zero3-web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zero3-web
+          path: target/release/zero3-web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: false # flip on once DEPLOY_* secrets exist — see docs/DEPLOYMENT.md
+    steps:
+      - name: placeholder
+        run: |
+          echo "Deploy target not configured yet. See docs/DEPLOYMENT.md."
+          exit 1

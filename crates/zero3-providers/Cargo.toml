@@ -1,0 +1,13 @@
+[package]
+name = "zero3-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Provider interfaces (Computer, Browser) plus placeholder implementations."
+
+[dependencies]
+zero3-core = { path = "../zero3-core" }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true

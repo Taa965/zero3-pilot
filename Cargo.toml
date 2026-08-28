@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/zero3-core",
+    "crates/zero3-providers",
+    "crates/zero3-scheduler",
+    "crates/zero3-memory",
+    "apps/web",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Taa965/zero3-pilot"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1"
+thiserror = "1"

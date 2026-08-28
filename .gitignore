@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+Thumbs.db
+*.pem
+*.key
+.env
+.env.*
+!.env.example
