@@ -17,12 +17,28 @@ async fn real_windows_ocu_mcp_handshake_tools_and_notepad_state() {
 
     adapter.health_check().await.unwrap();
     let tools = adapter.list_remote_tools().await.unwrap();
-    for required in ["get_app_state", "click", "type_text", "press_key"] {
+    for required in [
+        "list_apps",
+        "get_app_state",
+        "click",
+        "type_text",
+        "press_key",
+    ] {
         assert!(
             tools.iter().any(|tool| tool == required),
             "missing upstream tool {required}: {tools:?}"
         );
     }
+
+    // Real tools/call through the installed Windows native runtime. This is
+    // deliberately checked before deep UIA traversal so a hosted-desktop
+    // limitation can be distinguished from an MCP/runtime failure.
+    let apps = adapter.execute(ComputerAction::ListApps).await.unwrap();
+    assert!(
+        apps.ok,
+        "real list_apps returned MCP error: {:?}",
+        apps.detail
+    );
 
     let state = adapter
         .execute(ComputerAction::Screenshot { app })
