@@ -158,7 +158,8 @@ impl CliWorker {
 }
 
 fn render_prompt(task: &SubagentTask) -> anyhow::Result<String> {
-    let context = serde_json::to_string_pretty(&task.context).context("serialize subagent context")?;
+    let context =
+        serde_json::to_string_pretty(&task.context).context("serialize subagent context")?;
     Ok(format!(
         "Goal:\n{}\n\nZero3 Pilot task context (JSON):\n{}",
         task.goal, context
@@ -334,7 +335,10 @@ mod tests {
     #[test]
     fn each_worker_uses_the_documented_noninteractive_entrypoint() {
         assert_eq!(CliKind::Codex.base_args(), ["exec", "--json"]);
-        assert_eq!(CliKind::Claude.base_args(), ["-p", "--output-format", "json"]);
+        assert_eq!(
+            CliKind::Claude.base_args(),
+            ["-p", "--output-format", "json"]
+        );
         assert_eq!(CliKind::Hermes.base_args(), ["-z"]);
     }
 

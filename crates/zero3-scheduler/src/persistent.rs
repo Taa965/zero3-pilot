@@ -199,11 +199,7 @@ impl PersistentScheduler {
     /// at-least-once across a process crash that happens after JobManager has
     /// durably accepted a job but before this SQLite row advances. The emitted
     /// `schedule_id` + `scheduled_for` pair is the stable downstream dedupe key.
-    pub fn dispatch_due(
-        &self,
-        jobs: &JobManager,
-        now: DateTime<Utc>,
-    ) -> anyhow::Result<Vec<Uuid>> {
+    pub fn dispatch_due(&self, jobs: &JobManager, now: DateTime<Utc>) -> anyhow::Result<Vec<Uuid>> {
         let due = self.due(now)?;
         let mut created = Vec::with_capacity(due.len());
         for task in due {

@@ -267,8 +267,11 @@ impl CdpBrowserProvider {
 
     async fn with_session<T>(
         &self,
-        f: impl for<'a> FnOnce(&'a mut BrowserSession) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<T>> + Send + 'a>>
-            + Send,
+        f: impl for<'a> FnOnce(
+                &'a mut BrowserSession,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = anyhow::Result<T>> + Send + 'a>,
+            > + Send,
     ) -> anyhow::Result<T> {
         let mut guard = self.session.lock().await;
         let session = guard.as_mut().ok_or(BrowserError::NotConnected)?;
@@ -285,7 +288,10 @@ impl CdpBrowserProvider {
             .ok_or_else(|| BrowserError::NoActivePage.into())
     }
 
-    async fn query_on_page(page: &Page, selector: &BrowserSelector) -> anyhow::Result<Vec<BrowserElement>> {
+    async fn query_on_page(
+        page: &Page,
+        selector: &BrowserSelector,
+    ) -> anyhow::Result<Vec<BrowserElement>> {
         let predicate = match selector {
             BrowserSelector::Css { value } => {
                 let value = serde_json::to_string(value)?;
@@ -302,7 +308,10 @@ impl CdpBrowserProvider {
             }
         };
         let script = semantic_elements_script(&predicate);
-        let result = page.evaluate(script).await.context("query page semantics")?;
+        let result = page
+            .evaluate(script)
+            .await
+            .context("query page semantics")?;
         result
             .into_value::<Vec<BrowserElement>>()
             .context("decode browser query result")
@@ -346,8 +355,20 @@ impl Provider for CdpBrowserProvider {
 
     fn capabilities(&self) -> Vec<String> {
         [
-            "launch", "connect", "tabs", "open", "navigate", "snapshot", "query", "click",
-            "type", "press_key", "scroll", "wait", "screenshot", "evaluate",
+            "launch",
+            "connect",
+            "tabs",
+            "open",
+            "navigate",
+            "snapshot",
+            "query",
+            "click",
+            "type",
+            "press_key",
+            "scroll",
+            "wait",
+            "screenshot",
+            "evaluate",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -357,7 +378,11 @@ impl Provider for CdpBrowserProvider {
     async fn health_check(&self) -> anyhow::Result<()> {
         self.with_session(|session| {
             Box::pin(async move {
-                session.browser.version().await.context("browser health/version")?;
+                session
+                    .browser
+                    .version()
+                    .await
+                    .context("browser health/version")?;
                 Ok(())
             })
         })
@@ -395,7 +420,11 @@ impl BrowserProvider for CdpBrowserProvider {
             BrowserAction::Open { url } => {
                 self.with_session(|session| {
                     Box::pin(async move {
-                        let page = session.browser.new_page(url).await.context("open browser tab")?;
+                        let page = session
+                            .browser
+                            .new_page(url)
+                            .await
+                            .context("open browser tab")?;
                         let url = page.url().await?.unwrap_or_default();
                         session.active_page = Some(page);
                         Ok(json!({ "url": url }))
@@ -465,7 +494,10 @@ impl BrowserProvider for CdpBrowserProvider {
                             .await
                             .with_context(|| format!("find type target {selector:?}"))?;
                         element.click().await.context("focus type target")?;
-                        element.type_str(text).await.context("type into browser target")?;
+                        element
+                            .type_str(text)
+                            .await
+                            .context("type into browser target")?;
                         Ok(json!({ "selector": selector }))
                     })
                 })
@@ -479,7 +511,10 @@ impl BrowserProvider for CdpBrowserProvider {
                             Ok(element) => element,
                             Err(_) => page.find_element("body").await.context("find page body")?,
                         };
-                        element.press_key(key.clone()).await.context("press browser key")?;
+                        element
+                            .press_key(key.clone())
+                            .await
+                            .context("press browser key")?;
                         Ok(json!({ "key": key }))
                     })
                 })
@@ -489,7 +524,10 @@ impl BrowserProvider for CdpBrowserProvider {
                 self.with_session(|session| {
                     Box::pin(async move {
                         let page = Self::active_page(session).await?;
-                        let script = format!("window.scrollBy({delta_x}, {delta_y}); ({})", "({x: window.scrollX, y: window.scrollY})");
+                        let script = format!(
+                            "window.scrollBy({delta_x}, {delta_y}); ({})",
+                            "({x: window.scrollX, y: window.scrollY})"
+                        );
                         let value = page.evaluate(script).await?.into_value::<Value>()?;
                         Ok(value)
                     })
@@ -538,7 +576,10 @@ impl BrowserProvider for CdpBrowserProvider {
                 self.with_session(|session| {
                     Box::pin(async move {
                         let page = Self::active_page(session).await?;
-                        let result = page.evaluate(expression).await.context("evaluate page script")?;
+                        let result = page
+                            .evaluate(expression)
+                            .await
+                            .context("evaluate page script")?;
                         let value = result.into_value::<Value>().unwrap_or(Value::Null);
                         Ok(json!({ "value": value }))
                     })

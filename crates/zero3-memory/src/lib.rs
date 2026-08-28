@@ -94,7 +94,8 @@ pub trait MemoryStore: Send + Sync {
     fn put(&self, record: MemoryRecord) -> anyhow::Result<()>;
     fn delete(&self, key: &str, scope: &MemoryScope) -> anyhow::Result<bool>;
     fn list(&self, scope: Option<&MemoryScope>) -> anyhow::Result<Vec<MemoryRecord>>;
-    fn search(&self, query: &str, scope: Option<&MemoryScope>) -> anyhow::Result<Vec<MemoryRecord>>;
+    fn search(&self, query: &str, scope: Option<&MemoryScope>)
+        -> anyhow::Result<Vec<MemoryRecord>>;
 }
 
 pub struct SqliteMemoryStore {
@@ -218,22 +219,21 @@ impl MemoryStore for SqliteMemoryStore {
 
     fn delete(&self, key: &str, scope: &MemoryScope) -> anyhow::Result<bool> {
         let scope_key = scope_key(scope)?;
-        Ok(self
-            .connection
-            .lock()
-            .unwrap()
-            .execute(
-                "DELETE FROM memory_records WHERE key = ?1 AND scope_key = ?2",
-                params![key, scope_key],
-            )?
-            > 0)
+        Ok(self.connection.lock().unwrap().execute(
+            "DELETE FROM memory_records WHERE key = ?1 AND scope_key = ?2",
+            params![key, scope_key],
+        )? > 0)
     }
 
     fn list(&self, scope: Option<&MemoryScope>) -> anyhow::Result<Vec<MemoryRecord>> {
         query_records(&self.connection, None, scope)
     }
 
-    fn search(&self, query: &str, scope: Option<&MemoryScope>) -> anyhow::Result<Vec<MemoryRecord>> {
+    fn search(
+        &self,
+        query: &str,
+        scope: Option<&MemoryScope>,
+    ) -> anyhow::Result<Vec<MemoryRecord>> {
         query_records(&self.connection, Some(query), scope)
     }
 }
@@ -265,7 +265,9 @@ fn query_records(
         (None, None) => statement.query_map([], row_to_record)?,
         (Some(scope), None) => statement.query_map([scope], row_to_record)?,
         (None, Some(pattern)) => statement.query_map([pattern], row_to_record)?,
-        (Some(scope), Some(pattern)) => statement.query_map(params![scope, pattern], row_to_record)?,
+        (Some(scope), Some(pattern)) => {
+            statement.query_map(params![scope, pattern], row_to_record)?
+        }
     };
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
@@ -353,7 +355,10 @@ mod tests {
             ))
             .unwrap_err();
         assert!(err.to_string().contains("requires explicit approval"));
-        assert!(store.get("preference", &MemoryScope::Global).unwrap().is_none());
+        assert!(store
+            .get("preference", &MemoryScope::Global)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
