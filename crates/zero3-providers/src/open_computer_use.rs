@@ -19,13 +19,9 @@
 //! - The real tool surface (`apps/OpenComputerUseWindows/main.go`'s
 //!   `toolDefinitions()`) is `click`, `drag`, `get_app_state`,
 //!   `list_apps`, `perform_secondary_action`, `press_key`, `scroll`,
-//!   `set_value`, `type_text` — every one of them (except `list_apps`)
-//!   requires an `app` argument (app name or bundle identifier). This
-//!   adapter maps the four `ComputerAction` variants it currently
-//!   supports onto four of those real tools; `drag`/`scroll`/`set_value`/
-//!   `perform_secondary_action`/`list_apps` aren't reachable through
-//!   `ComputerAction` yet — a `ComputerAction` surface gap, not a
-//!   protocol one.
+//!   `set_value`, `type_text`. This adapter currently maps `list_apps`,
+//!   `get_app_state`, `click`, `type_text`, and `press_key` behind the
+//!   backend-agnostic `ComputerAction` contract.
 //!
 //! A JSON-RPC session is stateful (the `initialize` handshake happens
 //! once), so unlike a stateless request/response adapter this one keeps a
@@ -49,6 +45,9 @@ use crate::computer::{ComputerAction, ComputerActionResult, ComputerProvider};
 use crate::provider::Provider;
 
 const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
+const DEFAULT_SNAPSHOT_MAX_TREE_NODES: usize = 200;
+const DEFAULT_SNAPSHOT_MAX_TREE_DEPTH: usize = 16;
+const DEFAULT_SNAPSHOT_TEXT_LIMIT: usize = 4_000;
 
 /// How long `shutdown()` waits for the child to exit on its own after
 /// closing stdin before force-killing it. Deliberately short and
@@ -303,6 +302,7 @@ impl Provider for OpenComputerUseAdapter {
     /// directly comparable to `list_remote_tools`'s output.
     fn capabilities(&self) -> Vec<String> {
         vec![
+            "list_apps".into(),
             "get_app_state".into(),
             "click".into(),
             "type_text".into(),
@@ -323,8 +323,19 @@ impl Provider for OpenComputerUseAdapter {
 impl ComputerProvider for OpenComputerUseAdapter {
     async fn execute(&self, action: ComputerAction) -> anyhow::Result<ComputerActionResult> {
         let (name, arguments) = match action {
-            ComputerAction::Screenshot { app } => ("get_app_state", json!({ "app": app })),
-            ComputerAction::Click { app, x, y } => ("click", json!({ "app": app, "x": x, "y": y })),
+            ComputerAction::ListApps => ("list_apps", json!({})),
+            ComputerAction::Screenshot { app } => (
+                "get_app_state",
+                json!({
+                    "app": app,
+                    "max_tree_nodes": DEFAULT_SNAPSHOT_MAX_TREE_NODES,
+                    "max_tree_depth": DEFAULT_SNAPSHOT_MAX_TREE_DEPTH,
+                    "text_limit": DEFAULT_SNAPSHOT_TEXT_LIMIT
+                }),
+            ),
+            ComputerAction::Click { app, x, y } => {
+                ("click", json!({ "app": app, "x": x, "y": y }))
+            }
             ComputerAction::Type { app, text } => {
                 ("type_text", json!({ "app": app, "text": text }))
             }
