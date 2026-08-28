@@ -58,6 +58,13 @@ rule: the Nginx site for `pilot.03.336r.com` is installed and passes
 external HTTPS is **not** live — this is intentionally listed under
 Remaining below rather than blocking the rest of the pipeline.
 
+## Status
+
+First automated deploy (exact-SHA, atomic, health-checked) verified
+2026-08-28. Isolation confirmed: the existing five Zero3 self-media
+systemd units stayed active throughout, and its public health endpoint
+kept returning 200 before, during, and after.
+
 ## Remaining (real gaps, not deferred-by-choice)
 
 - DNS record for `pilot.03.336r.com` -> `34.218.104.186` (not something
