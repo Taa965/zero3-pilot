@@ -1,0 +1,26 @@
+[Unit]
+Description=Zero3 Pilot control/web server
+After=network.target
+
+[Service]
+Type=simple
+# Dedicated, isolated service account — never the shared admin/runner user
+# and never any `zero3*` identity already used by the unrelated Zero3
+# self-media system on this host. See docs/DEPLOYMENT.md.
+User=zero3pilot
+Group=zero3pilot
+WorkingDirectory=/opt/zero3-pilot-runtime/current
+ExecStart=/opt/zero3-pilot-runtime/current/bin/zero3-web
+Environment=ZERO3_WEB_PORT=8788
+EnvironmentFile=-/etc/zero3-pilot/zero3-pilot.env
+Restart=on-failure
+RestartSec=2
+
+# Minimal hardening; loosen only if a specific capability is proven needed.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/zero3-pilot-runtime /var/lib/zero3-pilot /var/log/zero3-pilot
+
+[Install]
+WantedBy=multi-user.target

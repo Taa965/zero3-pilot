@@ -1,54 +1,68 @@
 # Deployment
 
-**Status: deferred by explicit decision, not blocked by a technical
-problem.**
+## Target
 
-An existing AWS Lightsail host (`34.218.104.186`, us-west-2) already runs an
-unrelated production system ("零三自媒体管理系统") with its own `zero3.service`
-/ `zero3-cloud.service` systemd units, a fixed sudo whitelist
-(`zero3-deploy-release`, `zero3-verify`, `zero3-host-maintenance`), and its
-own GitHub Actions self-hosted runner. Zero3 Pilot is an unrelated product
-that happens to share the "zero3" name. Rather than risk a naming or port
-collision on that host, deployment was deliberately deferred during Phase 1
-setup pending a decision on the target host — options discussed:
+Shared AWS Lightsail host `34.218.104.186` (also runs an unrelated,
+independently-developed "Zero3 自媒体管理系统"). Both projects are in active
+development; the host is shared by an explicit decision, isolated by
+construction — see the isolation table in
+[`deployment/README.md`](../deployment/README.md).
 
-1. **Reuse the same Lightsail host**, isolated by subdomain
-   (`pilot.<domain>`), its own upstream port (see
-   `deployment/nginx/zero3-pilot.conf`), and a `zero3pilot-*` naming prefix
-   for every systemd unit / sudo entry so nothing collides with the
-   existing `zero3-*` names.
-2. **Provision a separate host** for full isolation from the production
-   自媒体 system.
+## How a deploy happens
 
-## What's ready for whichever is chosen
+```
+push to main
+  -> CI (fmt, clippy, build, test)
+  -> build job: cargo build --release -p zero3-web (GitHub-hosted runner)
+  -> deploy job:
+       scp binary + deployment/deploy.sh to the host, as `zero3pilot`
+       ssh: deployment/deploy.sh
+         - releases/<sha>/bin/zero3-web
+         - current -> releases/<sha> (atomic symlink swap)
+         - sudo zero3pilot-deploy-release   (only privileged step: daemon-reload + restart)
+         - curl 127.0.0.1:8788/health, retry up to 10x
+         - on failure: symlink back to the previous release, restart again, exit 1
+  -> external health check step re-confirms 200 over SSH
+```
 
-- [`deployment/systemd/zero3-web.service`](../deployment/systemd/zero3-web.service) —
-  idempotent unit template (create-if-missing / reload-if-present, matches
-  §13 of the project brief).
-- [`deployment/nginx/zero3-pilot.conf`](../deployment/nginx/zero3-pilot.conf) —
-  standalone site block, does not touch any other `server{}` block.
-- [`deployment/deploy.sh`](../deployment/deploy.sh) — atomic
-  `releases/<sha>/` + `current` symlink swap, health-checks before
-  switching, auto-rolls-back to the previous release on failure.
-- [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) —
-  `workflow_dispatch`-only for now (no `push` trigger) so it cannot fire
-  accidentally; flip it to run on `push: main` once `DEPLOY_HOST`,
-  `DEPLOY_PORT`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH` secrets are
-  set via `gh secret set`.
+No GitHub-hosted step, and no code running under the `zero3pilot` account,
+ever has: the existing Zero3 system's sudo entries, its `.env`, its
+database credentials, its GitHub deploy key, or its Commander token. The
+only sudo `zero3pilot` can run is
+`/usr/local/sbin/zero3pilot-deploy-release`, which does exactly two things
+(`systemctl daemon-reload`, `systemctl restart zero3-pilot.service`) and
+nothing else.
 
-## Before running this for real, in order
+The existing self-hosted GitHub Actions runner on this host is registered
+to `Taa965/zero3-commander-bridge` only — it does not pick up
+`zero3-pilot` workflow runs, and this project does not register a runner
+on it either. All zero3-pilot CI/CD runs on GitHub-hosted `ubuntu-latest`.
 
-1. Pick a target host (see options above) and confirm with the user.
-2. `ssh` in and run the read-only audit from the project brief
-   (`uname -a`, `nginx -v`, `systemctl status nginx`, `ss -lntp`,
-   `systemctl list-units --type=service`) — reuse what's there, don't
-   reinstall.
-3. Pick a subdomain, confirm DNS already resolves to the target host before
-   running certbot (do not loop certbot waiting for DNS).
-4. Pin the SSH host key into a `known_hosts` GitHub Actions can trust — no
-   `StrictHostKeyChecking=no` as a permanent setting.
-5. Set the five `DEPLOY_*` secrets with `gh secret set`, sourced from the
-   real SSH command that already works (do not guess a username).
-6. Flip `deploy.yml`'s trigger on, push, verify `/health` externally,
-   re-run a second time to prove idempotency, then verify rollback by
-   deliberately deploying a broken build once.
+## GitHub secrets (repository-level, set via `gh secret set`)
+
+| Secret | Value |
+|---|---|
+| `DEPLOY_HOST` | `34.218.104.186` |
+| `DEPLOY_PORT` | `22` |
+| `DEPLOY_USER` | `zero3pilot` |
+| `DEPLOY_SSH_KEY` | private half of a dedicated ed25519 keypair generated only for this purpose; the matching public key is the only line added to `zero3pilot`'s `authorized_keys` |
+| `DEPLOY_PATH` | `/opt/zero3-pilot-runtime` |
+
+## HTTPS / public domain
+
+`03.336r.com` already resolves to this host with a working Let's Encrypt
+certificate (used by the existing, unrelated site). No subdomain for Zero3
+Pilot (`pilot.03.336r.com`) exists in DNS yet. Per the no-loop-certbot
+rule: the Nginx site for `pilot.03.336r.com` is installed and passes
+`nginx -t` (HTTP only, port 80), but Certbot has **not** been run and
+external HTTPS is **not** live — this is intentionally listed under
+Remaining below rather than blocking the rest of the pipeline.
+
+## Remaining (real gaps, not deferred-by-choice)
+
+- DNS record for `pilot.03.336r.com` -> `34.218.104.186` (not something
+  this environment can create — needs whoever controls `336r.com`'s DNS).
+- `certbot --nginx -d pilot.03.336r.com` once that DNS record exists.
+- Everything past the control/web server (computer use, browser
+  automation, scheduler, memory) — Phase 1 scope, tracked in
+  `docs/ARCHITECTURE.md`.
