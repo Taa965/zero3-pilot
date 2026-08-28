@@ -4,18 +4,17 @@
 //! release: `GET /health` must return 200 with `{"status":"ok",...}`.
 //! No secrets are ever included in the response.
 
-use axum::{routing::get, Json, Router};
-use serde_json::{json, Value};
+use axum::http::StatusCode;
+use axum::{routing::get, Router};
 
 const GIT_SHA: &str = env!("ZERO3_GIT_SHA");
+#[allow(dead_code)]
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-async fn health() -> Json<Value> {
-    Json(json!({
-        "status": "ok",
-        "version": VERSION,
-        "git_sha": GIT_SHA,
-    }))
+async fn health() -> StatusCode {
+    // TEMPORARY: deliberately broken to prove deploy.sh's rollback path.
+    // Reverted in the very next commit — see docs/DEPLOYMENT.md rollback test.
+    StatusCode::INTERNAL_SERVER_ERROR
 }
 
 #[tokio::main]
@@ -38,11 +37,11 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::http::Request;
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn health_returns_ok() {
+    async fn health_is_temporarily_broken_for_the_rollback_drill() {
         let app = Router::new().route("/health", get(health));
         let response = app
             .oneshot(
@@ -53,6 +52,6 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
