@@ -189,7 +189,9 @@ impl CdpBrowserProvider {
         if let Some(path) = executable {
             builder = builder.chrome_executable(path);
         }
-        let config = builder.build().context("build Chromium launch config")?;
+        let config = builder
+            .build()
+            .map_err(|error| anyhow!("build Chromium launch config: {error}"))?;
         let (browser, handler) = Browser::launch(config)
             .await
             .context("launch Chromium through CDP")?;
@@ -245,7 +247,7 @@ impl CdpBrowserProvider {
     }
 
     async fn close(&self) -> anyhow::Result<Value> {
-        let session = self
+        let mut session = self
             .session
             .lock()
             .await
@@ -380,7 +382,7 @@ impl BrowserProvider for CdpBrowserProvider {
                         let mut tabs = Vec::with_capacity(pages.len());
                         for page in pages {
                             tabs.push(json!({
-                                "target_id": page.target_id().to_string(),
+                                "target_id": format!("{:?}", page.target_id()),
                                 "url": page.url().await?.unwrap_or_default(),
                                 "title": page.get_title().await?.unwrap_or_default(),
                             }));
