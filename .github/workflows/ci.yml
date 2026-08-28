@@ -120,8 +120,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $env:ZERO3_PILOT_NODE_PORT = '8790'
           $env:ZERO3_DESKTOP_SMOKE_MS = '2000'
-          & 'target\debug\zero3-pilot.exe'
-          if ($LASTEXITCODE -ne 0) { throw "zero3-pilot desktop exited with $LASTEXITCODE" }
+          $desktopPath = (Resolve-Path 'target\debug\zero3-pilot.exe').Path
+          $desktop = Start-Process -FilePath $desktopPath -PassThru -Wait
+          if ($desktop.ExitCode -ne 0) { throw "zero3-pilot desktop exited with $($desktop.ExitCode)" }
       - name: Stop product smoke Node
         if: always()
         shell: pwsh
