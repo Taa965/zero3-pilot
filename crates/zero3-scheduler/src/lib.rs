@@ -16,7 +16,15 @@
 //!
 //! State is enforced, not advisory: an invalid transition (e.g.
 //! cancelling an already-succeeded job) is rejected with
-//! `JobManagerError::InvalidTransition`, never silently accepted.
+//! `JobManagerError::InvalidTransition`, never silently accepted. The
+//! same enforcement applies when *reconstructing* state from a replayed
+//! log (`from_events`/`recover`): a malformed history (an orphan
+//! transition with no prior `JobQueued`, a duplicate `JobQueued`, a
+//! transition that couldn't have legally happened) is reported as
+//! `JobManagerError::CorruptHistory`, never silently skipped. Recovering
+//! from a physically crash-torn tail is a separate, explicit opt-in via
+//! `RecoveryMode::RecoverCrashTail` / `recover_with_mode` — the normal
+//! `recover()` path never silently tolerates one.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -25,7 +33,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
-use zero3_core::event::{Event, EventKind, EventLog, EventSource};
+use zero3_core::event::{
+    Event, EventKind, EventLog, EventSource, RecoverableReplay, TruncatedTail,
+};
 use zero3_core::job::JobStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +63,44 @@ pub enum JobManagerError {
     },
     #[error("failed to record job event: {0}")]
     EventLog(#[source] anyhow::Error),
+    #[error(transparent)]
+    CorruptHistory(#[from] CorruptHistoryError),
+}
+
+/// A replayed event log that doesn't describe a legal job-state-machine
+/// history — as opposed to `StoreError`/parse-level corruption (which
+/// `EventLog::replay` itself already rejects), this is corruption at the
+/// *semantic* level: the JSON all parsed fine, but the sequence of events
+/// couldn't have come from a real `JobManager`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CorruptHistoryError {
+    #[error("job {job_id}: {event} event with no prior JobQueued event for that job")]
+    OrphanEvent { job_id: Uuid, event: &'static str },
+    #[error("job {job_id}: duplicate JobQueued event")]
+    DuplicateQueued { job_id: Uuid },
+    #[error("job {job_id}: {event} event is illegal from status {from:?}")]
+    InvalidTransition {
+        job_id: Uuid,
+        event: &'static str,
+        from: JobStatus,
+    },
+}
+
+/// `recover`/`recover_with_mode`'s policy for a log whose event history
+/// doesn't parse or replay cleanly to the physical end of the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RecoveryMode {
+    /// Reject any log that isn't fully intact, including a physically
+    /// unterminated last record (see `EventLog::replay`).
+    #[default]
+    Strict,
+    /// Tolerate a physically crash-torn last record (see
+    /// `EventLog::replay_recoverable`) and recover everything before it —
+    /// the diagnostic is always returned alongside the manager, never
+    /// hidden. Semantic corruption (an illegal sequence of otherwise
+    /// well-formed events) is still always rejected in this mode too;
+    /// this only widens what counts as an acceptable *physical* log.
+    RecoverCrashTail,
 }
 
 pub struct JobManager {
@@ -69,79 +117,154 @@ impl JobManager {
     }
 
     /// Rebuilds a `JobManager` entirely from a durable log's history —
-    /// `EventStore::replay()` (or any other `EventLog::replay()`) is the
-    /// source of truth, not a cache in front of one.
+    /// `EventLog::replay()` is the source of truth, not a cache in front
+    /// of one. Equivalent to `recover_with_mode(log, RecoveryMode::Strict)`
+    /// but without the `Option<TruncatedTail>` a caller would otherwise
+    /// have to unwrap knowing it's always `None`.
     pub fn recover(event_log: Arc<dyn EventLog>) -> Result<Self, JobManagerError> {
         let events = event_log.replay().map_err(JobManagerError::EventLog)?;
-        Ok(Self::from_events(&events, event_log))
+        Self::from_events(&events, event_log)
     }
 
-    /// Pure reconstruction from an already-replayed event slice. Events
-    /// referencing a job with no prior `JobQueued` (a truncated/partial
-    /// log) are skipped rather than panicking or fabricating a record —
-    /// there's nothing to recover `kind`/`payload` from.
-    pub fn from_events(events: &[Event], event_log: Arc<dyn EventLog>) -> Self {
-        let mut jobs: HashMap<Uuid, JobRecord> = HashMap::new();
-        for event in events {
-            match &event.kind {
-                EventKind::JobQueued {
-                    job_id,
-                    kind,
-                    payload,
-                } => {
-                    jobs.insert(
-                        *job_id,
-                        JobRecord {
-                            id: *job_id,
-                            kind: kind.clone(),
-                            payload: payload.clone(),
-                            status: JobStatus::Queued,
-                            output: None,
-                            error: None,
-                            session_id: event.session_id,
-                            created_at: event.at,
-                            updated_at: event.at,
-                        },
-                    );
-                }
-                EventKind::JobStarted { job_id } => {
-                    if let Some(record) = jobs.get_mut(job_id) {
-                        record.status = JobStatus::Running;
-                        record.updated_at = event.at;
-                    }
-                }
-                EventKind::JobProgress { .. } => {
-                    // Doesn't affect JobRecord fields we track (matches
-                    // JobManager::progress, which doesn't bump updated_at
-                    // either) — replayed for completeness of the log, not
-                    // for state reconstruction.
-                }
-                EventKind::JobCompleted { job_id, output } => {
-                    if let Some(record) = jobs.get_mut(job_id) {
-                        record.status = JobStatus::Succeeded;
-                        record.output = Some(output.clone());
-                        record.updated_at = event.at;
-                    }
-                }
-                EventKind::JobFailed { job_id, reason } => {
-                    if let Some(record) = jobs.get_mut(job_id) {
-                        record.status = JobStatus::Failed;
-                        record.error = Some(reason.clone());
-                        record.updated_at = event.at;
-                    }
-                }
-                EventKind::JobCancelled { job_id } => {
-                    if let Some(record) = jobs.get_mut(job_id) {
-                        record.status = JobStatus::Cancelled;
-                        record.updated_at = event.at;
-                    }
-                }
-                _ => {}
+    /// Like [`recover`](Self::recover), but lets the caller explicitly opt
+    /// into tolerating a physically crash-torn tail
+    /// (`RecoveryMode::RecoverCrashTail`) instead of failing outright. The
+    /// tail diagnostic (if any) is always returned, never swallowed — a
+    /// caller that ignores the second element of the tuple is choosing to
+    /// ignore it, not having it hidden from them.
+    pub fn recover_with_mode(
+        event_log: Arc<dyn EventLog>,
+        mode: RecoveryMode,
+    ) -> Result<(Self, Option<TruncatedTail>), JobManagerError> {
+        match mode {
+            RecoveryMode::Strict => Self::recover(event_log).map(|mgr| (mgr, None)),
+            RecoveryMode::RecoverCrashTail => {
+                let RecoverableReplay {
+                    events,
+                    truncated_tail,
+                } = event_log
+                    .replay_recoverable()
+                    .map_err(JobManagerError::EventLog)?;
+                let manager = Self::from_events(&events, event_log)?;
+                Ok((manager, truncated_tail))
             }
         }
-        Self {
+    }
+
+    /// Strict reconstruction from an already-replayed event slice: every
+    /// event must describe a transition that a live `JobManager` could
+    /// actually have produced, in this exact order. An orphan transition,
+    /// a duplicate `JobQueued`, or an event illegal for the job's current
+    /// status is `Err(JobManagerError::CorruptHistory(..))`, never
+    /// silently skipped or ignored — a caller that genuinely wants
+    /// best-effort salvage of a malformed history should build one
+    /// explicitly rather than have this default path do it quietly.
+    pub fn from_events(
+        events: &[Event],
+        event_log: Arc<dyn EventLog>,
+    ) -> Result<Self, JobManagerError> {
+        let mut jobs: HashMap<Uuid, JobRecord> = HashMap::new();
+        for event in events {
+            Self::apply_event_strict(&mut jobs, event)?;
+        }
+        Ok(Self {
             jobs: Mutex::new(jobs),
             event_log,
+        })
+    }
+
+    fn apply_event_strict(
+        jobs: &mut HashMap<Uuid, JobRecord>,
+        event: &Event,
+    ) -> Result<(), CorruptHistoryError> {
+        match &event.kind {
+            EventKind::JobQueued {
+                job_id,
+                kind,
+                payload,
+            } => {
+                if jobs.contains_key(job_id) {
+                    return Err(CorruptHistoryError::DuplicateQueued { job_id: *job_id });
+                }
+                jobs.insert(
+                    *job_id,
+                    JobRecord {
+                        id: *job_id,
+                        kind: kind.clone(),
+                        payload: payload.clone(),
+                        status: JobStatus::Queued,
+                        output: None,
+                        error: None,
+                        session_id: event.session_id,
+                        created_at: event.at,
+                        updated_at: event.at,
+                    },
+                );
+            }
+            EventKind::JobStarted { job_id } => {
+                let record = Self::require_existing(jobs, *job_id, "JobStarted")?;
+                Self::require_replay_status(record, &[JobStatus::Queued], "JobStarted")?;
+                record.status = JobStatus::Running;
+                record.updated_at = event.at;
+            }
+            EventKind::JobProgress { job_id, .. } => {
+                let record = Self::require_existing(jobs, *job_id, "JobProgress")?;
+                Self::require_replay_status(record, &[JobStatus::Running], "JobProgress")?;
+                // Doesn't affect JobRecord fields we track (matches
+                // JobManager::progress, which doesn't bump updated_at
+                // either) — replayed only to validate the sequence.
+            }
+            EventKind::JobCompleted { job_id, output } => {
+                let record = Self::require_existing(jobs, *job_id, "JobCompleted")?;
+                Self::require_replay_status(record, &[JobStatus::Running], "JobCompleted")?;
+                record.status = JobStatus::Succeeded;
+                record.output = Some(output.clone());
+                record.updated_at = event.at;
+            }
+            EventKind::JobFailed { job_id, reason } => {
+                let record = Self::require_existing(jobs, *job_id, "JobFailed")?;
+                Self::require_replay_status(record, &[JobStatus::Running], "JobFailed")?;
+                record.status = JobStatus::Failed;
+                record.error = Some(reason.clone());
+                record.updated_at = event.at;
+            }
+            EventKind::JobCancelled { job_id } => {
+                let record = Self::require_existing(jobs, *job_id, "JobCancelled")?;
+                Self::require_replay_status(
+                    record,
+                    &[JobStatus::Queued, JobStatus::Running],
+                    "JobCancelled",
+                )?;
+                record.status = JobStatus::Cancelled;
+                record.updated_at = event.at;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn require_existing<'a>(
+        jobs: &'a mut HashMap<Uuid, JobRecord>,
+        job_id: Uuid,
+        event: &'static str,
+    ) -> Result<&'a mut JobRecord, CorruptHistoryError> {
+        jobs.get_mut(&job_id)
+            .ok_or(CorruptHistoryError::OrphanEvent { job_id, event })
+    }
+
+    fn require_replay_status(
+        record: &JobRecord,
+        allowed: &[JobStatus],
+        event: &'static str,
+    ) -> Result<(), CorruptHistoryError> {
+        if allowed.contains(&record.status) {
+            Ok(())
+        } else {
+            Err(CorruptHistoryError::InvalidTransition {
+                job_id: record.id,
+                event,
+                from: record.status,
+            })
         }
     }
 
@@ -397,6 +520,17 @@ mod tests {
         (JobManager::new(log.clone()), log)
     }
 
+    fn from_events_ok(events: &[Event]) -> JobManager {
+        JobManager::from_events(events, Arc::new(InMemoryEventLog::default())).unwrap()
+    }
+
+    fn expect_err<T>(result: Result<T, JobManagerError>) -> JobManagerError {
+        match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected an error"),
+        }
+    }
+
     #[test]
     fn happy_path_queued_running_succeeded() {
         let (mgr, log) = manager();
@@ -526,12 +660,9 @@ mod tests {
         let id = mgr.create("k", json!({}), None).unwrap();
         let before = mgr.get(id).unwrap();
 
-        // Swap in a failing log for the transition under test by building
-        // a second manager sharing the same in-memory job... instead,
-        // simplest: construct a manager whose log always fails and seed
-        // it via from_events so the job pre-exists as Queued.
         let queued_event = log.events.lock().unwrap().clone();
-        let failing_mgr = JobManager::from_events(&queued_event, Arc::new(FailingEventLog));
+        let failing_mgr =
+            JobManager::from_events(&queued_event, Arc::new(FailingEventLog)).unwrap();
 
         let err = failing_mgr.start(id).unwrap_err();
         assert!(matches!(err, JobManagerError::EventLog(_)));
@@ -552,7 +683,7 @@ mod tests {
         seed_mgr.start(id).unwrap();
 
         let events = log.events.lock().unwrap().clone();
-        let failing_mgr = JobManager::from_events(&events, Arc::new(FailingEventLog));
+        let failing_mgr = JobManager::from_events(&events, Arc::new(FailingEventLog)).unwrap();
         let before = failing_mgr.get(id).unwrap();
         assert_eq!(before.status, JobStatus::Running);
 
@@ -578,7 +709,7 @@ mod tests {
         seed_mgr.start(id).unwrap();
 
         let events = log.events.lock().unwrap().clone();
-        let failing_mgr = JobManager::from_events(&events, Arc::new(FailingEventLog));
+        let failing_mgr = JobManager::from_events(&events, Arc::new(FailingEventLog)).unwrap();
         let before = failing_mgr.get(id).unwrap();
 
         let err = failing_mgr.fail(id, "should not persist").unwrap_err();
@@ -601,7 +732,7 @@ mod tests {
             }
 
             let events = log.events.lock().unwrap().clone();
-            let failing_mgr = JobManager::from_events(&events, Arc::new(FailingEventLog));
+            let failing_mgr = JobManager::from_events(&events, Arc::new(FailingEventLog)).unwrap();
             let before = failing_mgr.get(id).unwrap();
             let expected_status = if start_first {
                 JobStatus::Running
@@ -648,7 +779,7 @@ mod tests {
         let still_queued = mgr.create("k2", json!("payload"), None).unwrap();
 
         let events = log.replay().unwrap();
-        let recovered = JobManager::from_events(&events, Arc::new(InMemoryEventLog::default()));
+        let recovered = from_events_ok(&events);
 
         let a = recovered.get(succeeded).unwrap();
         assert_eq!(a.kind, "computer.click");
@@ -687,15 +818,308 @@ mod tests {
         assert_eq!(record.payload, json!({"n": 1}));
     }
 
+    // --- P0.1 task 3: strict state-machine validation during recovery ---
+
     #[test]
-    fn orphan_transition_events_without_a_prior_queued_are_skipped_not_panicking() {
+    fn orphan_started_event_without_prior_queued_is_corrupt_history() {
         let orphan_id = Uuid::new_v4();
         let events = vec![Event::new(
             EventSource::Scheduler,
             EventKind::JobStarted { job_id: orphan_id },
         )];
-        let recovered = JobManager::from_events(&events, Arc::new(InMemoryEventLog::default()));
-        assert_eq!(recovered.status(orphan_id), None);
-        assert!(recovered.list().is_empty());
+        let err = expect_err(JobManager::from_events(
+            &events,
+            Arc::new(InMemoryEventLog::default()),
+        ));
+        assert!(matches!(
+            err,
+            JobManagerError::CorruptHistory(CorruptHistoryError::OrphanEvent {
+                job_id,
+                event: "JobStarted"
+            }) if job_id == orphan_id
+        ));
+    }
+
+    #[test]
+    fn completed_without_running_is_corrupt_history() {
+        let id = Uuid::new_v4();
+        let events = vec![
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobQueued {
+                    job_id: id,
+                    kind: "k".into(),
+                    payload: json!({}),
+                },
+            ),
+            // Skips JobStarted entirely.
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobCompleted {
+                    job_id: id,
+                    output: json!(null),
+                },
+            ),
+        ];
+        let err = expect_err(JobManager::from_events(
+            &events,
+            Arc::new(InMemoryEventLog::default()),
+        ));
+        assert!(matches!(
+            err,
+            JobManagerError::CorruptHistory(CorruptHistoryError::InvalidTransition {
+                event: "JobCompleted",
+                from: JobStatus::Queued,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn failed_without_running_is_corrupt_history() {
+        let id = Uuid::new_v4();
+        let events = vec![
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobQueued {
+                    job_id: id,
+                    kind: "k".into(),
+                    payload: json!({}),
+                },
+            ),
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobFailed {
+                    job_id: id,
+                    reason: "x".into(),
+                },
+            ),
+        ];
+        let err = expect_err(JobManager::from_events(
+            &events,
+            Arc::new(InMemoryEventLog::default()),
+        ));
+        assert!(matches!(
+            err,
+            JobManagerError::CorruptHistory(CorruptHistoryError::InvalidTransition {
+                event: "JobFailed",
+                from: JobStatus::Queued,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn cancelled_from_a_terminal_state_is_corrupt_history() {
+        let id = Uuid::new_v4();
+        let events = vec![
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobQueued {
+                    job_id: id,
+                    kind: "k".into(),
+                    payload: json!({}),
+                },
+            ),
+            Event::new(EventSource::Scheduler, EventKind::JobStarted { job_id: id }),
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobCompleted {
+                    job_id: id,
+                    output: json!(null),
+                },
+            ),
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobCancelled { job_id: id },
+            ),
+        ];
+        let err = expect_err(JobManager::from_events(
+            &events,
+            Arc::new(InMemoryEventLog::default()),
+        ));
+        assert!(matches!(
+            err,
+            JobManagerError::CorruptHistory(CorruptHistoryError::InvalidTransition {
+                event: "JobCancelled",
+                from: JobStatus::Succeeded,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn duplicate_queued_for_same_job_id_is_corrupt_history() {
+        let id = Uuid::new_v4();
+        let queued = || {
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobQueued {
+                    job_id: id,
+                    kind: "k".into(),
+                    payload: json!({}),
+                },
+            )
+        };
+        let events = vec![queued(), queued()];
+        let err = expect_err(JobManager::from_events(
+            &events,
+            Arc::new(InMemoryEventLog::default()),
+        ));
+        assert!(matches!(
+            err,
+            JobManagerError::CorruptHistory(CorruptHistoryError::DuplicateQueued { job_id }) if job_id == id
+        ));
+    }
+
+    #[test]
+    fn event_after_terminal_state_is_corrupt_history() {
+        let id = Uuid::new_v4();
+        let events = vec![
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobQueued {
+                    job_id: id,
+                    kind: "k".into(),
+                    payload: json!({}),
+                },
+            ),
+            Event::new(EventSource::Scheduler, EventKind::JobStarted { job_id: id }),
+            Event::new(
+                EventSource::Scheduler,
+                EventKind::JobFailed {
+                    job_id: id,
+                    reason: "x".into(),
+                },
+            ),
+            // Job is Failed (terminal) — a second JobStarted is illegal.
+            Event::new(EventSource::Scheduler, EventKind::JobStarted { job_id: id }),
+        ];
+        let err = expect_err(JobManager::from_events(
+            &events,
+            Arc::new(InMemoryEventLog::default()),
+        ));
+        assert!(matches!(
+            err,
+            JobManagerError::CorruptHistory(CorruptHistoryError::InvalidTransition {
+                event: "JobStarted",
+                from: JobStatus::Failed,
+                ..
+            })
+        ));
+    }
+
+    // --- P0.1 task 2: RecoveryMode::RecoverCrashTail --------------------
+
+    /// An `EventLog` double whose `replay` (strict) fails, but whose
+    /// `replay_recoverable` reports a fixed set of salvaged events plus a
+    /// tail diagnostic — models `zero3-store::EventStore` behavior
+    /// without needing a real file for this unit test.
+    struct CrashTailEventLog {
+        events: Vec<Event>,
+        tail: TruncatedTail,
+    }
+
+    impl EventLog for CrashTailEventLog {
+        fn append(&self, _event: Event) -> anyhow::Result<()> {
+            anyhow::bail!("read-only test double")
+        }
+
+        fn replay(&self) -> anyhow::Result<Vec<Event>> {
+            anyhow::bail!("simulated: strict replay sees the torn tail as fatal corruption")
+        }
+
+        fn replay_recoverable(&self) -> anyhow::Result<RecoverableReplay> {
+            Ok(RecoverableReplay {
+                events: self.events.clone(),
+                truncated_tail: Some(self.tail.clone()),
+            })
+        }
+    }
+
+    #[test]
+    fn strict_recovery_rejects_a_log_with_a_crash_tail() {
+        let id = Uuid::new_v4();
+        let log = Arc::new(CrashTailEventLog {
+            events: vec![Event::new(
+                EventSource::Scheduler,
+                EventKind::JobQueued {
+                    job_id: id,
+                    kind: "k".into(),
+                    payload: json!({}),
+                },
+            )],
+            tail: TruncatedTail {
+                line: 2,
+                raw: "{\"id\":\"partial".into(),
+                reason: "eof".into(),
+            },
+        });
+
+        let err = expect_err(JobManager::recover_with_mode(
+            log.clone(),
+            RecoveryMode::Strict,
+        ));
+        assert!(matches!(err, JobManagerError::EventLog(_)));
+        // The plain `recover()` alias behaves identically.
+        assert!(JobManager::recover(log).is_err());
+    }
+
+    #[test]
+    fn crash_tail_recovery_salvages_valid_jobs_and_surfaces_the_diagnostic() {
+        let id = Uuid::new_v4();
+        let expected_tail = TruncatedTail {
+            line: 2,
+            raw: "{\"id\":\"partial".into(),
+            reason: "eof".into(),
+        };
+        let log = Arc::new(CrashTailEventLog {
+            events: vec![Event::new(
+                EventSource::Scheduler,
+                EventKind::JobQueued {
+                    job_id: id,
+                    kind: "computer.click".into(),
+                    payload: json!({"x": 1}),
+                },
+            )],
+            tail: expected_tail.clone(),
+        });
+
+        let (manager, tail) =
+            JobManager::recover_with_mode(log, RecoveryMode::RecoverCrashTail).unwrap();
+
+        assert_eq!(tail, Some(expected_tail));
+        let record = manager.get(id).unwrap();
+        assert_eq!(record.kind, "computer.click");
+        assert_eq!(record.status, JobStatus::Queued);
+    }
+
+    #[test]
+    fn crash_tail_recovery_still_rejects_semantic_corruption() {
+        // The physical log is "recoverable" (a store might report a torn
+        // tail), but the salvaged prefix itself is semantically illegal —
+        // RecoverCrashTail only widens what counts as an acceptable
+        // *physical* log, it never disables state-machine validation.
+        let id = Uuid::new_v4();
+        let log = Arc::new(CrashTailEventLog {
+            events: vec![Event::new(
+                EventSource::Scheduler,
+                EventKind::JobStarted { job_id: id }, // orphan: no JobQueued
+            )],
+            tail: TruncatedTail {
+                line: 2,
+                raw: "junk".into(),
+                reason: "eof".into(),
+            },
+        });
+
+        let err = expect_err(JobManager::recover_with_mode(
+            log,
+            RecoveryMode::RecoverCrashTail,
+        ));
+        assert!(matches!(
+            err,
+            JobManagerError::CorruptHistory(CorruptHistoryError::OrphanEvent { .. })
+        ));
     }
 }

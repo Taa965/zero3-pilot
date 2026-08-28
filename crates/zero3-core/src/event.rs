@@ -115,6 +115,27 @@ pub enum LogLevel {
     Error,
 }
 
+/// A physically incomplete final record — the shape a crash mid-write
+/// leaves behind — reported explicitly rather than silently dropped or
+/// silently treated as if it never happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TruncatedTail {
+    pub line: usize,
+    pub raw: String,
+    pub reason: String,
+}
+
+/// The result of a crash-tolerant replay: every event that parsed
+/// cleanly, plus (only when the physical end of the log is an
+/// incomplete/unterminated record) `truncated_tail` instead of a hard
+/// failure. Corruption anywhere else in the log is never folded into
+/// this — see `EventLog::replay_recoverable`.
+#[derive(Debug)]
+pub struct RecoverableReplay {
+    pub events: Vec<Event>,
+    pub truncated_tail: Option<TruncatedTail>,
+}
+
 /// Append-only sink for events. A first implementation can be a local JSONL
 /// file; later ones (SQLite, remote control plane) satisfy the same trait.
 ///
@@ -123,5 +144,26 @@ pub enum LogLevel {
 /// serving as a real source of truth, just a write-only sink.
 pub trait EventLog: Send + Sync {
     fn append(&self, event: Event) -> anyhow::Result<()>;
+
+    /// Strict: any corrupt/incomplete record anywhere in the log
+    /// (including a physically-unterminated last one) is fatal.
     fn replay(&self) -> anyhow::Result<Vec<Event>>;
+
+    /// Tolerant of a *physically incomplete last record only* — i.e. a
+    /// crash caught the writer mid-`write`. Corruption anywhere else is
+    /// still always fatal, and the tail issue is surfaced via
+    /// `truncated_tail`, never silently dropped.
+    ///
+    /// Default: delegates to the strict `replay()` and reports no tail
+    /// issue — a log implementation that can't actually distinguish "torn
+    /// tail" from "real corruption" (or that's inherently atomic, e.g. a
+    /// transactional store) has nothing meaningful to add here. Override
+    /// this only when the implementation can make that distinction for
+    /// real, as `zero3-store::EventStore` does.
+    fn replay_recoverable(&self) -> anyhow::Result<RecoverableReplay> {
+        Ok(RecoverableReplay {
+            events: self.replay()?,
+            truncated_tail: None,
+        })
+    }
 }

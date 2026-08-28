@@ -107,28 +107,56 @@ accepted — see the `cannot_cancel_a_terminal_job` test.
 
 `EventKind::JobQueued` carries `kind`/`payload`, and `JobCompleted`
 carries `output`, so the event stream is a complete source of truth, not
-just a count of transitions. `JobManager::recover(event_log)` (or
-`from_events(&events, event_log)` if the caller already has a replayed
-slice) rebuilds every field of every job —
-`id`/`kind`/`payload`/`status`/`output`/`error`/`session_id`/
-`created_at`/`updated_at` — purely from the log. `created_at`/`updated_at`
-are copied from each event's own `Event.at`, not a second independent
-`Utc::now()` call, so a record built live and one rebuilt from the log
-agree to the nanosecond rather than merely being close (a real bug caught
-by a failure-injection test during this hardening pass — see the fix
-commit). `crates/zero3-scheduler/tests/event_store_integration.rs`
-proves this against a real `EventStore` file: manager A creates jobs
-across every terminal outcome, is dropped, and manager B recovers from
-the reopened file with every `JobRecord` field matching manager A's
-original, not just event counts.
+just a count of transitions. `created_at`/`updated_at` are copied from
+each event's own `Event.at`, not a second independent `Utc::now()` call,
+so a record built live and one rebuilt from the log agree to the
+nanosecond rather than merely being close (a real bug caught by a
+failure-injection test during the first hardening pass).
 
-The event log itself distinguishes a crash mid-write from real
-corruption: `EventStore::replay()` is fatal on *any* corrupt line;
-`replay_recoverable()` additionally tolerates a corrupt/incomplete **last**
-line (what a crash mid-`write_all` leaves behind) and reports it as
-`truncated_tail` instead of losing every event before it — a corrupt line
-anywhere else is still always a hard error, in both modes, never silently
-skipped.
+**Recovery is strict by default, and "strict" means semantic, not just
+physical.** `JobManager::from_events`/`recover` replay every event through
+the exact same state-machine rules the live methods enforce — an orphan
+transition (no prior `JobQueued`), a duplicate `JobQueued`, or an event
+illegal for the job's current status (e.g. `JobCompleted` without a prior
+`JobStarted`, `JobCancelled` from a terminal state) is
+`Err(JobManagerError::CorruptHistory(..))`, never silently skipped or
+ignored — see `crates/zero3-scheduler/src/lib.rs`'s
+`*_is_corrupt_history` tests. When the log genuinely is intact,
+`from_events`/`recover` rebuild every field of every job —
+`id`/`kind`/`payload`/`status`/`output`/`error`/`session_id`/
+`created_at`/`updated_at` — purely from it;
+`crates/zero3-scheduler/tests/event_store_integration.rs` proves this
+against a real `EventStore` file: manager A creates jobs across every
+terminal outcome, is dropped, and manager B recovers from the reopened
+file with every `JobRecord` field matching manager A's original.
+
+The event log distinguishes a physically crash-torn tail from real
+corruption, and the distinction is **physical, not positional**:
+`EventStore::replay_recoverable()` only treats the very last record as a
+possible crash tail when the *file itself* doesn't end in `\n` — a
+newline-terminated last line that fails to parse is a complete write of
+bad content, not a crash tail, and is still fatal (an earlier version of
+this got that wrong, treating any invalid last non-empty line as
+salvageable regardless of termination; fixed and covered by
+`recoverable_replay_treats_a_terminated_invalid_last_line_as_fatal_not_a_tail`).
+Corruption anywhere before the last line is always fatal in both
+`replay()` and `replay_recoverable()`; nothing is silently skipped.
+
+That tolerance is wired into `JobManager` as an explicit opt-in, never a
+default: `RecoveryMode::Strict` (what plain `recover()` uses) rejects any
+log that isn't physically intact to the last byte;
+`RecoveryMode::RecoverCrashTail`
+(`JobManager::recover_with_mode(log, RecoveryMode::RecoverCrashTail)`)
+tolerates a physically torn tail and recovers everything before it — but
+always returns the `Option<TruncatedTail>` diagnostic alongside the
+manager, and still runs the exact same semantic state-machine validation
+described above (a physically-salvageable log with a semantically illegal
+prefix is still rejected).
+`crash_tail_recovery_salvages_durable_jobs_and_reports_exactly_one_torn_tail`
+exercises this end to end against a real `EventStore` file: durable jobs
+survive a simulated crash mid-write, strict recovery rejects the file
+outright, and crash-tail recovery salvages every durable job
+field-for-field while surfacing exactly one tail diagnostic.
 
 ## Subagent registry
 
@@ -156,7 +184,7 @@ brief.
 |---|---|
 | Event schema, job/subagent/plugin traits, permission model | Real, tested (incl. security-boundary tests for permission escalation and job-state rejection) |
 | Event Store | Real: append-only JSONL, `fsync`'d, replay + session/job filtering, survives a restart |
-| Job Manager | Real: full state machine, durable-first (failure-injection tested), recoverable from the log via `recover`/`from_events` |
+| Job Manager | Real: full state machine, durable-first (failure-injection tested), strict-by-default recovery with an explicit crash-tail opt-in (`RecoveryMode`) — semantic corruption in the log is always rejected, never salvaged silently |
 | Provider Registry | Real: register/list/select-by-capability/health-check for any `Provider` |
 | Computer provider | `OpenComputerUseAdapter` real, verified-real MCP/JSON-RPC protocol (not assumed — checked against upstream source), tested against a protocol-compliant fake binary; a genuine real-binary smoke test and `WindowsUiaProvider`/vision fallback not yet built |
 | Browser provider | Trait + `Unimplemented*` stub only |
