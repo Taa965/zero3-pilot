@@ -3,7 +3,7 @@ name = "zero3-providers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Provider registry (Computer, Browser): registration, health checks, capability discovery/selection, plus an Open Computer Use adapter."
+description = "Provider registry and real Computer/Browser backends for Zero3 Pilot."
 
 [dependencies]
 zero3-core = { path = "../zero3-core" }
@@ -12,6 +12,10 @@ serde_json.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
 tokio = { workspace = true, features = ["process", "io-util", "sync", "time"] }
+chromiumoxide = "0.9.1"
+futures = "0.3"
+base64 = "0.22"
+tempfile = "3"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["process", "io-util", "sync", "rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["process", "io-util", "sync", "rt-multi-thread", "macros", "time", "net"] }
