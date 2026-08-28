@@ -95,7 +95,7 @@ async fn login(weixin: &WeixinClawBotClient) -> anyhow::Result<()> {
     let current = weixin.status().await;
     if current.connected {
         println!("微信 ClawBot 已连接：{}", status_label(&current));
-        println!("如需换绑，请先运行 zero3-pilot-weixin disconnect。")
+        println!("如需换绑，请先运行 zero3-pilot-weixin disconnect。");
         return Ok(());
     }
 
@@ -122,7 +122,7 @@ async fn login(weixin: &WeixinClawBotClient) -> anyhow::Result<()> {
                 verify_code = Some(line.trim().to_string());
             }
             WeixinLoginState::Connected | WeixinLoginState::AlreadyConnected => {
-                println!("连接完成。现在可运行 zero3-pilot-weixin run。")
+                println!("连接完成。现在可运行 zero3-pilot-weixin run。");
                 return Ok(());
             }
             WeixinLoginState::Expired | WeixinLoginState::VerifyCodeBlocked => {
