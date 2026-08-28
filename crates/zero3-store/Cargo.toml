@@ -1,19 +1,17 @@
 [package]
-name = "zero3-scheduler"
+name = "zero3-store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Job Manager v1: queued/running/succeeded/failed/cancelled job state machine, durably event-logged."
+description = "Append-only, persistent event store (v1) for zero3-core::event::Event, with replay and session/job correlation."
 
 [dependencies]
 zero3-core = { path = "../zero3-core" }
 serde.workspace = true
 serde_json.workspace = true
-chrono.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-zero3-store = { path = "../zero3-store" }
 tempfile = "3"

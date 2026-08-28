@@ -1,0 +1,15 @@
+[package]
+name = "zero3-subagents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Subagent registry: a unified provider contract over Codex/Claude/Hermes workers."
+
+[dependencies]
+zero3-core = { path = "../zero3-core" }
+serde_json.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

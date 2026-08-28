@@ -2,8 +2,10 @@
 resolver = "2"
 members = [
     "crates/zero3-core",
+    "crates/zero3-store",
     "crates/zero3-providers",
     "crates/zero3-scheduler",
+    "crates/zero3-subagents",
     "crates/zero3-memory",
     "apps/web",
 ]

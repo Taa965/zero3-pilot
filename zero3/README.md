@@ -8,13 +8,13 @@ code and design notes actually live, kept stable so the map in
 
 | Module | Status | Lives in |
 |---|---|---|
-| `events` | seam defined | [`crates/zero3-core/src/event.rs`](../crates/zero3-core/src/event.rs) |
-| `subagent` | seam defined | [`crates/zero3-core/src/subagent.rs`](../crates/zero3-core/src/subagent.rs) |
+| `events` | seam + Event Store v1 (append-only, replay) | [`crates/zero3-core/src/event.rs`](../crates/zero3-core/src/event.rs), [`crates/zero3-store`](../crates/zero3-store) |
+| `scheduler` (jobs) | Job Manager v1 (full state machine, event-logged) | [`crates/zero3-scheduler`](../crates/zero3-scheduler) |
+| `subagent` | registry + Codex/Claude/Hermes placeholder workers | [`crates/zero3-core/src/subagent.rs`](../crates/zero3-core/src/subagent.rs), [`crates/zero3-subagents`](../crates/zero3-subagents) |
 | `plugins` | seam defined | [`crates/zero3-core/src/plugin.rs`](../crates/zero3-core/src/plugin.rs) |
-| `scheduler` | in-memory placeholder | [`crates/zero3-scheduler`](../crates/zero3-scheduler) |
 | `memory` | trait-only placeholder | [`crates/zero3-memory`](../crates/zero3-memory) |
-| `providers` (computer/browser) | seam + unimplemented stub | [`crates/zero3-providers`](../crates/zero3-providers) |
-| `computer` | not yet integrated — see `docs/ARCHITECTURE.md` §Computer Use | [`crates/zero3-providers/src/computer.rs`](../crates/zero3-providers/src/computer.rs) |
+| `providers` (computer/browser) | registry + Open Computer Use adapter | [`crates/zero3-providers`](../crates/zero3-providers) |
+| `computer` | `OpenComputerUseAdapter` real; native/vision-fallback not started — see `docs/ARCHITECTURE.md` §Computer Use | [`crates/zero3-providers/src/open_computer_use.rs`](../crates/zero3-providers/src/open_computer_use.rs) |
 | `browser` | not yet integrated | [`crates/zero3-providers/src/browser.rs`](../crates/zero3-providers/src/browser.rs) |
 | `automation` | not started | — |
 

@@ -47,3 +47,69 @@ impl PolicyEngine for DefaultPolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(required_level: PermissionLevel, reversible: bool) -> ActionRequest {
+        ActionRequest {
+            actor: "test-provider".into(),
+            action: "do-thing".into(),
+            required_level,
+            reversible,
+        }
+    }
+
+    #[test]
+    fn sufficient_grant_always_allows_regardless_of_reversibility() {
+        let policy = DefaultPolicy;
+        assert_eq!(
+            policy.evaluate(
+                PermissionLevel::Standard,
+                &request(PermissionLevel::Standard, false)
+            ),
+            Decision::Allow
+        );
+        assert_eq!(
+            policy.evaluate(
+                PermissionLevel::FullControl,
+                &request(PermissionLevel::Elevated, true)
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn insufficient_grant_on_irreversible_action_is_denied_not_escalated() {
+        // A provider must never be able to talk its way into an
+        // irreversible action just by asking — an under-privileged caller
+        // is flatly denied, not offered an approval path.
+        let policy = DefaultPolicy;
+        let decision = policy.evaluate(
+            PermissionLevel::ReadOnly,
+            &request(PermissionLevel::Elevated, false),
+        );
+        assert_eq!(decision, Decision::Deny);
+    }
+
+    #[test]
+    fn insufficient_grant_on_reversible_action_requires_approval_not_silent_allow() {
+        // Under-privileged + reversible must escalate to a human, never
+        // silently proceed — this is the seam a provider is not allowed
+        // to bypass by self-approving.
+        let policy = DefaultPolicy;
+        let decision = policy.evaluate(
+            PermissionLevel::ReadOnly,
+            &request(PermissionLevel::Standard, true),
+        );
+        assert_eq!(decision, Decision::RequireApproval);
+    }
+
+    #[test]
+    fn permission_levels_form_the_expected_strict_order() {
+        assert!(PermissionLevel::ReadOnly < PermissionLevel::Standard);
+        assert!(PermissionLevel::Standard < PermissionLevel::Elevated);
+        assert!(PermissionLevel::Elevated < PermissionLevel::FullControl);
+    }
+}

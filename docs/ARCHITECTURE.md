@@ -1,4 +1,4 @@
-# Architecture (Phase 1)
+# Architecture (Phase 1 + Phase 2 in progress)
 
 Zero3 Pilot is a personal computer agent platform built on the open-source
 Codex runtime — not "a Codex fork with some extra tools." See
@@ -9,9 +9,11 @@ Codex runtime — not "a Codex fork with some extra tools." See
 zero3-pilot/
 ├─ upstream/codex/      # git submodule, pinned to openai/codex — untouched
 ├─ crates/               # Rust workspace: the actual extension code
-│  ├─ zero3-core/        # event log, job, subagent, plugin, permission seams
-│  ├─ zero3-providers/   # ComputerProvider / BrowserProvider traits + stubs
-│  ├─ zero3-scheduler/   # job queue (in-memory placeholder)
+│  ├─ zero3-core/        # event schema, job/subagent/plugin traits, permission seam
+│  ├─ zero3-store/       # Event Store v1: append-only JSONL, replay, session/job correlation
+│  ├─ zero3-scheduler/   # Job Manager v1: queued/running/succeeded/failed/cancelled
+│  ├─ zero3-providers/   # ProviderRegistry + ComputerProvider/BrowserProvider + OpenComputerUseAdapter
+│  ├─ zero3-subagents/   # SubagentRegistry over Codex/Claude/Hermes (all placeholder workers so far)
 │  └─ zero3-memory/      # MemoryStore trait (placeholder)
 ├─ apps/
 │  ├─ web/               # control server; ships GET /health
@@ -26,26 +28,78 @@ zero3-pilot/
 
 ## Provider model
 
-`ComputerProvider` and `BrowserProvider` (in `crates/zero3-providers`) are
-traits, not concrete backends. Phase 1 ships only an `Unimplemented*`
-placeholder for each so the workspace compiles and the seam is real before
-any backend is wired in.
+`ComputerProvider` and `BrowserProvider` (in `crates/zero3-providers`) both
+extend a shared `Provider` supertrait (`name`, `capabilities`,
+`health_check`), so `ProviderRegistry<T>` works identically for either
+kind: register, list, `select(capability)` (first match by name, `None` if
+nobody qualifies), `health_check`/`health_check_all`. Each trait still has
+its own `Unimplemented*` placeholder that fails loudly (never a silent
+`Ok`) so the seam is exercised before a real backend is registered.
 
-Planned first backend for Computer Use: integrate with
+First real Computer Use backend: `OpenComputerUseAdapter`, integrating with
 [`iFurySt/open-codex-computer-use`](https://github.com/iFurySt/open-codex-computer-use)
-rather than reimplementing Windows UI Automation from scratch — it already
-has a Go runtime + PowerShell UIA bridge for Windows and MCP wiring for
-Codex/Claude/Hermes. The trait boundary means it can later be swapped for a
-native `WindowsUiaProvider` or a vision-model fallback without touching
-callers.
+rather than reimplementing Windows UI Automation from scratch. It speaks a
+minimal line-delimited JSON protocol over a configured child process's
+stdio (one `ComputerAction` in, one `ComputerActionResult` out), so it
+already works end-to-end against a test double
+(`src/bin/fake_ocu.rs`/`fake_ocu_hang.rs`, exercised in
+`tests/open_computer_use.rs`) and just needs the real OCU binary's path
+once it's installed — no code change. `health_check` reuses the same
+`execute` path (a `Screenshot` call) rather than a separate contract. A
+timeout (`with_timeout`, default 10s) plus `kill_on_drop` on the child
+process guarantee a hung backend fails the call instead of leaking a
+process or blocking forever.
 
 ```
 Codex
   ↓ MCP / plugin
-Open Computer Use   <-- crates/zero3-providers::ComputerProvider impl (planned)
+OpenComputerUseAdapter   <-- crates/zero3-providers::ComputerProvider impl
+  ↓ line-delimited JSON over stdio
+Open Computer Use (iFurySt) binary
   ↓
 Windows UI Automation
 ```
+
+Still to come: a native `WindowsUiaProvider` and a vision-model fallback
+provider, registered alongside `OpenComputerUseAdapter` in the same
+registry so callers can `select()` by capability without caring which one
+answers.
+
+## Event Store + Job Manager
+
+`zero3-store::EventStore` is the append-only, persistent, replayable log:
+every write goes to the end of a JSONL file and is `fsync`'d before the
+call returns, so a crash can only ever lose the last unflushed record. A
+fresh `EventStore::open` on the same path sees everything a previous
+process wrote — `replay()`, `replay_session(id)`, and `replay_job(id)`
+reconstruct history in original order.
+
+`zero3-scheduler::JobManager` is the state machine on top of it:
+`queued -> running -> {succeeded, failed}`, or `{queued, running} ->
+cancelled`. Every transition is recorded through an injected
+`Arc<dyn EventLog>` (normally an `EventStore`) *before* the in-memory
+status changes, so the durable log and the in-memory view can't drift out
+of sync on a partial failure. An invalid transition (e.g. cancelling a job
+that already succeeded) is rejected with `JobManagerError::InvalidTransition`
+rather than silently accepted — see
+`crates/zero3-scheduler/src/lib.rs`'s `cannot_cancel_a_terminal_job` test.
+
+`JobManager` v1 does not yet rebuild its in-memory index from
+`EventStore::replay` on startup — that boundary is intentional and
+documented by `event_store_integration.rs`'s
+`job_history_is_durable_across_a_restart` test (the *log* survives a
+restart; the *live* `JobManager` doesn't yet reconstruct itself from it).
+That's the natural next increment once something needs it.
+
+## Subagent registry
+
+`zero3-subagents::SubagentRegistry` registers `Arc<dyn SubagentWorker>` by
+`worker.name()` and dispatches by name (`registry.dispatch("codex",
+task)`), so a caller never depends on which concrete backend runs a task.
+`CodexWorker`/`ClaudeWorker`/`HermesWorker` are registered under the
+contract today as `Unimplemented`-style placeholders (return a clear "not
+wired up" error, never a silent no-op) — the contract is uniform now, the
+backends land later.
 
 ## Permission model
 
@@ -57,18 +111,22 @@ reversible, else deny). No provider is permitted to self-approve; this is
 the seam that later becomes the "统一 approval / policy 层" from the project
 brief.
 
-## What's a placeholder vs. real in Phase 1
+## What's a placeholder vs. real
 
-| Piece | Phase 1 state |
+| Piece | State |
 |---|---|
-| Event schema, job/subagent/plugin traits, permission model | Real (compiles, has a test) |
-| Scheduler | Real in-memory queue, no persistence, no cron |
+| Event schema, job/subagent/plugin traits, permission model | Real, tested (incl. security-boundary tests for permission escalation and job-state rejection) |
+| Event Store | Real: append-only JSONL, `fsync`'d, replay + session/job filtering, survives a restart |
+| Job Manager | Real: full queued/running/succeeded/failed/cancelled state machine, event-logged; does not yet rebuild its index from replay on startup |
+| Provider Registry | Real: register/list/select-by-capability/health-check for any `Provider` |
+| Computer provider | `OpenComputerUseAdapter` real (subprocess protocol, tested against a fake binary); real OCU binary integration and `WindowsUiaProvider`/vision fallback not yet built |
+| Browser provider | Trait + `Unimplemented*` stub only |
+| Subagent registry | Real (register/list/dispatch by name); Codex/Claude/Hermes workers are placeholders |
 | Memory | Trait only, no backend |
-| Computer / Browser providers | Trait + `Unimplemented*` stub only |
-| `apps/web` `/health` | Real, used by deployment verification once a host exists |
+| `apps/web` `/health` | Real, verified by deployment (exact-SHA match, not just 200) |
 | `apps/desktop` | Not started |
 | `mcp/`, `skills/` | Empty, directories reserved |
-| Deployment to a real host | Deliberately deferred — see `docs/DEPLOYMENT.md` |
+| Deployment | Live on the shared AWS Lightsail host, isolated as `zero3pilot` — see `docs/DEPLOYMENT.md` |
 
 ## Ideas absorbed from prior art (not yet implemented)
 
