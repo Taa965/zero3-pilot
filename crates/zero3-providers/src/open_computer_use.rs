@@ -87,10 +87,6 @@ impl OpenComputerUseAdapter {
         self
     }
 
-    /// Closes the session cleanly: closes stdin so the server's read loop
-    /// sees EOF and exits on its own, waits up to `SHUTDOWN_GRACE_PERIOD`
-    /// for that, and force-kills it if it hasn't exited by then — never
-    /// blocks the caller for the full RPC `call_timeout`.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         let mut guard = self.session.lock().await;
         if let Some(mut session) = guard.take() {
@@ -127,9 +123,6 @@ impl OpenComputerUseAdapter {
         Ok(serde_json::from_str(line.trim())?)
     }
 
-    /// Spawns `<executable> mcp` and performs the `initialize` ->
-    /// `notifications/initialized` handshake if there's no live session
-    /// yet. A no-op if one is already established.
     async fn ensure_session(&self, guard: &mut Option<McpSession>) -> anyhow::Result<()> {
         if guard.is_some() {
             return Ok(());
@@ -195,10 +188,6 @@ impl OpenComputerUseAdapter {
         Ok(())
     }
 
-    /// Sends one JSON-RPC request and waits for the response with the
-    /// matching `id`. On any failure (spawn, handshake, timeout, I/O) the
-    /// session is torn down so the *next* call starts clean instead of
-    /// reusing a connection left in an unknown state.
     async fn rpc_call(&self, method: &str, params: Value) -> anyhow::Result<Value> {
         let mut guard = self.session.lock().await;
 
@@ -213,9 +202,6 @@ impl OpenComputerUseAdapter {
                 Self::write_message(&mut session.stdin, &request).await?;
                 loop {
                     let message = Self::read_message(&mut session.reader).await?;
-                    // Skip any notification/message that isn't the reply
-                    // to this specific request, rather than assuming the
-                    // first line back is always ours.
                     if message.get("id").and_then(Value::as_i64) == Some(id) {
                         return Ok::<Value, anyhow::Error>(message);
                     }
@@ -234,7 +220,7 @@ impl OpenComputerUseAdapter {
         let response = match result {
             Ok(response) => response,
             Err(e) => {
-                *guard = None; // don't reuse a session left mid-request
+                *guard = None;
                 return Err(e);
             }
         };
@@ -251,10 +237,6 @@ impl OpenComputerUseAdapter {
         })
     }
 
-    /// The backend's own, live-queried tool list (via `tools/list`) — as
-    /// opposed to `capabilities()`, which is the static subset this
-    /// adapter currently knows how to *call*. Comparing the two is how a
-    /// caller notices the upstream tool surface changed.
     pub async fn list_remote_tools(&self) -> anyhow::Result<Vec<String>> {
         let result = self.rpc_call("tools/list", json!({})).await?;
         let tools = result
@@ -296,10 +278,6 @@ impl Provider for OpenComputerUseAdapter {
         "open-computer-use"
     }
 
-    /// The subset of the real upstream tool surface this adapter
-    /// currently maps `ComputerAction` onto (see module docs) — named
-    /// after the real MCP tool names, not made-up tags, so this list is
-    /// directly comparable to `list_remote_tools`'s output.
     fn capabilities(&self) -> Vec<String> {
         vec![
             "list_apps".into(),
@@ -333,9 +311,7 @@ impl ComputerProvider for OpenComputerUseAdapter {
                     "text_limit": DEFAULT_SNAPSHOT_TEXT_LIMIT
                 }),
             ),
-            ComputerAction::Click { app, x, y } => {
-                ("click", json!({ "app": app, "x": x, "y": y }))
-            }
+            ComputerAction::Click { app, x, y } => ("click", json!({ "app": app, "x": x, "y": y })),
             ComputerAction::Type { app, text } => {
                 ("type_text", json!({ "app": app, "text": text }))
             }
