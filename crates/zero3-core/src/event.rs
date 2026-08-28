@@ -41,10 +41,10 @@ impl Event {
     /// match on every `EventKind::Job*` variant themselves.
     pub fn job_id(&self) -> Option<Uuid> {
         match &self.kind {
-            EventKind::JobQueued { job_id }
+            EventKind::JobQueued { job_id, .. }
             | EventKind::JobStarted { job_id }
             | EventKind::JobProgress { job_id, .. }
-            | EventKind::JobCompleted { job_id }
+            | EventKind::JobCompleted { job_id, .. }
             | EventKind::JobFailed { job_id, .. }
             | EventKind::JobCancelled { job_id } => Some(*job_id),
             _ => None,
@@ -64,16 +64,47 @@ pub enum EventSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EventKind {
-    JobQueued { job_id: Uuid },
-    JobStarted { job_id: Uuid },
-    JobProgress { job_id: Uuid, message: String },
-    JobCompleted { job_id: Uuid },
-    JobFailed { job_id: Uuid, reason: String },
-    JobCancelled { job_id: Uuid },
-    ApprovalRequested { action: String, scope: String },
-    ApprovalGranted { action: String },
-    ApprovalDenied { action: String },
-    Log { level: LogLevel, message: String },
+    /// The event stream is the source of truth for job recovery, so this
+    /// carries everything a `JobManager::recover` needs to reconstruct the
+    /// job that doesn't come from the `Event` envelope itself
+    /// (`session_id`, `at`) or from a later event (`output`, `error`).
+    JobQueued {
+        job_id: Uuid,
+        kind: String,
+        payload: serde_json::Value,
+    },
+    JobStarted {
+        job_id: Uuid,
+    },
+    JobProgress {
+        job_id: Uuid,
+        message: String,
+    },
+    JobCompleted {
+        job_id: Uuid,
+        output: serde_json::Value,
+    },
+    JobFailed {
+        job_id: Uuid,
+        reason: String,
+    },
+    JobCancelled {
+        job_id: Uuid,
+    },
+    ApprovalRequested {
+        action: String,
+        scope: String,
+    },
+    ApprovalGranted {
+        action: String,
+    },
+    ApprovalDenied {
+        action: String,
+    },
+    Log {
+        level: LogLevel,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +117,11 @@ pub enum LogLevel {
 
 /// Append-only sink for events. A first implementation can be a local JSONL
 /// file; later ones (SQLite, remote control plane) satisfy the same trait.
+///
+/// `replay` is part of the contract, not an extra: a log a caller can't
+/// read back (e.g. to rebuild `JobManager` state after a restart) isn't
+/// serving as a real source of truth, just a write-only sink.
 pub trait EventLog: Send + Sync {
     fn append(&self, event: Event) -> anyhow::Result<()>;
+    fn replay(&self) -> anyhow::Result<Vec<Event>>;
 }

@@ -1,26 +1,76 @@
+//! Adapter for `iFurySt/open-codex-computer-use`.
+//!
+//! **Verified against upstream source, not assumed.** As of
+//! `iFurySt/open-codex-computer-use@main` (checked via the GitHub API,
+//! commit reachable from `main` at the time this was written):
+//!
+//! - Every platform runtime (`apps/OpenComputerUseWindows/main.go`,
+//!   the Linux runtime, and the macOS
+//!   `packages/OpenComputerUseKit/Sources/OpenComputerUseKit/MCPServer.swift`)
+//!   is invoked as `<binary> mcp` and then speaks **standard MCP over
+//!   stdio**: JSON-RPC 2.0 messages, one per line, `initialize` ->
+//!   `notifications/initialized` -> `tools/list` / `tools/call`. This is
+//!   *not* a custom line-delimited action/result protocol — an earlier
+//!   version of this adapter assumed one and was wrong; this rewrite
+//!   fixes that (see `plugins/open-computer-use/scripts/launch-open-computer-use.sh`,
+//!   which execs `<binary> mcp`, and `apps/OpenComputerUseWindows/main.go`'s
+//!   `runMCP`/`handleMCPRequest`, which decode/encode JSON-RPC on
+//!   stdin/stdout with `json.NewDecoder`/`json.NewEncoder`).
+//! - The real tool surface (`apps/OpenComputerUseWindows/main.go`'s
+//!   `toolDefinitions()`) is `click`, `drag`, `get_app_state`,
+//!   `list_apps`, `perform_secondary_action`, `press_key`, `scroll`,
+//!   `set_value`, `type_text` — every one of them (except `list_apps`)
+//!   requires an `app` argument (app name or bundle identifier). This
+//!   adapter maps the four `ComputerAction` variants it currently
+//!   supports onto four of those real tools; `drag`/`scroll`/`set_value`/
+//!   `perform_secondary_action`/`list_apps` aren't reachable through
+//!   `ComputerAction` yet — a `ComputerAction` surface gap, not a
+//!   protocol one.
+//!
+//! A JSON-RPC session is stateful (the `initialize` handshake happens
+//! once), so unlike a stateless request/response adapter this one keeps a
+//! **persistent child process** across calls, spawned lazily on first use
+//! and torn down on `shutdown()` or `kill_on_drop` if the adapter itself
+//! is dropped.
+
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::timeout;
 
 use crate::computer::{ComputerAction, ComputerActionResult, ComputerProvider};
 use crate::provider::Provider;
 
-/// Adapter for `iFurySt/open-codex-computer-use`, Phase 1's chosen
-/// integration instead of reimplementing Windows Computer Use from
-/// scratch (see docs/ARCHITECTURE.md). Speaks a minimal line-delimited
-/// JSON protocol over the child process's stdio: one `ComputerAction` in
-/// on stdin, one `ComputerActionResult` out on stdout. Points at a
-/// configurable executable rather than a hard-coded path, so the same
-/// adapter runs against the real OCU binary once installed, or against a
-/// test double (`src/bin/fake_ocu.rs`) in tests.
+const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
+
+/// How long `shutdown()` waits for the child to exit on its own after
+/// closing stdin before force-killing it. Deliberately short and
+/// independent of `call_timeout` (which governs RPC round-trips, not
+/// process teardown) — closing a pipe's write end doesn't reliably
+/// deliver a fast EOF-driven exit on every platform (observed: a child
+/// that exits in ~200ms given the same EOF over a plain shell pipe can
+/// take tokio's Windows `Child::wait()` the full RPC timeout to notice),
+/// so shutdown falls back to an explicit `kill()` well before that.
+const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(1);
+
+struct McpSession {
+    child: Child,
+    stdin: ChildStdin,
+    reader: BufReader<ChildStdout>,
+}
+
 pub struct OpenComputerUseAdapter {
     executable: PathBuf,
     call_timeout: Duration,
+    session: AsyncMutex<Option<McpSession>>,
+    next_id: AtomicI64,
 }
 
 impl OpenComputerUseAdapter {
@@ -28,6 +78,8 @@ impl OpenComputerUseAdapter {
         Self {
             executable: executable.into(),
             call_timeout: Duration::from_secs(10),
+            session: AsyncMutex::new(None),
+            next_id: AtomicI64::new(1),
         }
     }
 
@@ -36,16 +88,59 @@ impl OpenComputerUseAdapter {
         self
     }
 
-    async fn call(&self, action: &ComputerAction) -> anyhow::Result<ComputerActionResult> {
-        let mut request = serde_json::to_string(action)?;
-        request.push('\n');
+    /// Closes the session cleanly: closes stdin so the server's read loop
+    /// sees EOF and exits on its own, waits up to `SHUTDOWN_GRACE_PERIOD`
+    /// for that, and force-kills it if it hasn't exited by then — never
+    /// blocks the caller for the full RPC `call_timeout`.
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
+        let mut guard = self.session.lock().await;
+        if let Some(mut session) = guard.take() {
+            let _ = session.stdin.shutdown().await;
+            if timeout(SHUTDOWN_GRACE_PERIOD, session.child.wait())
+                .await
+                .is_err()
+            {
+                let _ = session.child.kill().await;
+                let _ = session.child.wait().await;
+            }
+        }
+        Ok(())
+    }
+
+    fn next_id(&self) -> i64 {
+        self.next_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    async fn write_message(stdin: &mut ChildStdin, value: &Value) -> anyhow::Result<()> {
+        let mut line = serde_json::to_string(value)?;
+        line.push('\n');
+        stdin.write_all(line.as_bytes()).await?;
+        stdin.flush().await?;
+        Ok(())
+    }
+
+    async fn read_message(reader: &mut BufReader<ChildStdout>) -> anyhow::Result<Value> {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            anyhow::bail!("open-computer-use adapter closed stdout (process exited)");
+        }
+        Ok(serde_json::from_str(line.trim())?)
+    }
+
+    /// Spawns `<executable> mcp` and performs the `initialize` ->
+    /// `notifications/initialized` handshake if there's no live session
+    /// yet. A no-op if one is already established.
+    async fn ensure_session(&self, guard: &mut Option<McpSession>) -> anyhow::Result<()> {
+        if guard.is_some() {
+            return Ok(());
+        }
 
         let mut child = Command::new(&self.executable)
+            .arg("mcp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // If we bail out early (timeout, I/O error), don't leak an
-            // orphaned backend process still running in the background.
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| {
@@ -55,33 +150,144 @@ impl OpenComputerUseAdapter {
                 )
             })?;
 
-        let mut stdin = child.stdin.take().expect("stdin was piped");
+        let stdin = child.stdin.take().expect("stdin was piped");
         let stdout = child.stdout.take().expect("stdout was piped");
-        let mut reader = BufReader::new(stdout);
-
-        let call = async {
-            stdin.write_all(request.as_bytes()).await?;
-            stdin.shutdown().await?;
-            let mut line = String::new();
-            reader.read_line(&mut line).await?;
-            Ok::<String, std::io::Error>(line)
+        let mut session = McpSession {
+            child,
+            stdin,
+            reader: BufReader::new(stdout),
         };
 
-        let line = timeout(self.call_timeout, call).await.map_err(|_| {
+        let handshake = async {
+            let init_id = self.next_id();
+            let request = json!({
+                "jsonrpc": "2.0",
+                "id": init_id,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": { "name": "zero3-pilot", "version": env!("CARGO_PKG_VERSION") },
+                },
+            });
+            Self::write_message(&mut session.stdin, &request).await?;
+            let response = Self::read_message(&mut session.reader).await?;
+            if let Some(error) = response.get("error") {
+                anyhow::bail!("open-computer-use adapter rejected initialize: {error}");
+            }
+
+            let notification = json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            });
+            Self::write_message(&mut session.stdin, &notification).await?;
+            Ok::<McpSession, anyhow::Error>(session)
+        };
+
+        let session = timeout(self.call_timeout, handshake).await.map_err(|_| {
             anyhow::anyhow!(
-                "open-computer-use adapter timed out after {:?}",
+                "open-computer-use adapter timed out after {:?} during MCP handshake",
                 self.call_timeout
             )
         })??;
 
-        let _ = child.wait().await;
+        *guard = Some(session);
+        Ok(())
+    }
 
-        if line.trim().is_empty() {
-            anyhow::bail!("open-computer-use adapter returned no output");
+    /// Sends one JSON-RPC request and waits for the response with the
+    /// matching `id`. On any failure (spawn, handshake, timeout, I/O) the
+    /// session is torn down so the *next* call starts clean instead of
+    /// reusing a connection left in an unknown state.
+    async fn rpc_call(&self, method: &str, params: Value) -> anyhow::Result<Value> {
+        let mut guard = self.session.lock().await;
+
+        let result = async {
+            self.ensure_session(&mut guard).await?;
+            let session = guard.as_mut().expect("ensure_session established one");
+
+            let id = self.next_id();
+            let request = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+
+            let call = async {
+                Self::write_message(&mut session.stdin, &request).await?;
+                loop {
+                    let message = Self::read_message(&mut session.reader).await?;
+                    // Skip any notification/message that isn't the reply
+                    // to this specific request, rather than assuming the
+                    // first line back is always ours.
+                    if message.get("id").and_then(Value::as_i64) == Some(id) {
+                        return Ok::<Value, anyhow::Error>(message);
+                    }
+                }
+            };
+
+            timeout(self.call_timeout, call).await.map_err(|_| {
+                anyhow::anyhow!(
+                    "open-computer-use adapter timed out after {:?} waiting for '{method}'",
+                    self.call_timeout
+                )
+            })?
         }
-        let result: ComputerActionResult = serde_json::from_str(line.trim())
-            .map_err(|e| anyhow::anyhow!("open-computer-use adapter returned invalid JSON: {e}"))?;
-        Ok(result)
+        .await;
+
+        let response = match result {
+            Ok(response) => response,
+            Err(e) => {
+                *guard = None; // don't reuse a session left mid-request
+                return Err(e);
+            }
+        };
+
+        if let Some(error) = response.get("error") {
+            anyhow::bail!(
+                "open-computer-use adapter returned a JSON-RPC error for '{method}': {error}"
+            );
+        }
+        response.get("result").cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "open-computer-use adapter response for '{method}' had neither result nor error"
+            )
+        })
+    }
+
+    /// The backend's own, live-queried tool list (via `tools/list`) — as
+    /// opposed to `capabilities()`, which is the static subset this
+    /// adapter currently knows how to *call*. Comparing the two is how a
+    /// caller notices the upstream tool surface changed.
+    pub async fn list_remote_tools(&self) -> anyhow::Result<Vec<String>> {
+        let result = self.rpc_call("tools/list", json!({})).await?;
+        let tools = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok(tools
+            .into_iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str).map(str::to_string))
+            .collect())
+    }
+
+    async fn call_tool(
+        &self,
+        name: &str,
+        arguments: Value,
+    ) -> anyhow::Result<ComputerActionResult> {
+        let result = self
+            .rpc_call(
+                "tools/call",
+                json!({ "name": name, "arguments": arguments }),
+            )
+            .await?;
+        let is_error = result
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        Ok(ComputerActionResult {
+            ok: !is_error,
+            detail: result,
+        })
     }
 }
 
@@ -91,31 +297,41 @@ impl Provider for OpenComputerUseAdapter {
         "open-computer-use"
     }
 
+    /// The subset of the real upstream tool surface this adapter
+    /// currently maps `ComputerAction` onto (see module docs) — named
+    /// after the real MCP tool names, not made-up tags, so this list is
+    /// directly comparable to `list_remote_tools`'s output.
     fn capabilities(&self) -> Vec<String> {
         vec![
-            "screenshot".into(),
+            "get_app_state".into(),
             "click".into(),
-            "type".into(),
-            "key_press".into(),
+            "type_text".into(),
+            "press_key".into(),
         ]
     }
 
     async fn health_check(&self) -> anyhow::Result<()> {
-        let result = self.call(&ComputerAction::Screenshot).await?;
-        if result.ok {
-            Ok(())
-        } else {
-            anyhow::bail!(
-                "open-computer-use health check reported not-ok: {:?}",
-                result.detail
-            )
+        let tools = self.list_remote_tools().await?;
+        if tools.is_empty() {
+            anyhow::bail!("open-computer-use reported zero tools");
         }
+        Ok(())
     }
 }
 
 #[async_trait]
 impl ComputerProvider for OpenComputerUseAdapter {
     async fn execute(&self, action: ComputerAction) -> anyhow::Result<ComputerActionResult> {
-        self.call(&action).await
+        let (name, arguments) = match action {
+            ComputerAction::Screenshot { app } => ("get_app_state", json!({ "app": app })),
+            ComputerAction::Click { app, x, y } => ("click", json!({ "app": app, "x": x, "y": y })),
+            ComputerAction::Type { app, text } => {
+                ("type_text", json!({ "app": app, "text": text }))
+            }
+            ComputerAction::KeyPress { app, key } => {
+                ("press_key", json!({ "app": app, "key": key }))
+            }
+        };
+        self.call_tool(name, arguments).await
     }
 }

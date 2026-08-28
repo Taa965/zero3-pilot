@@ -3,12 +3,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::provider::Provider;
 
+/// `app` (a running app's name or bundle identifier) is required on every
+/// variant because it's a required argument on every corresponding real
+/// `iFurySt/open-codex-computer-use` MCP tool
+/// (`click`/`type_text`/`press_key`/`get_app_state` all require it) — see
+/// `OpenComputerUseAdapter` and `docs/ARCHITECTURE.md` §Computer Use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ComputerAction {
-    Screenshot,
-    Click { x: i32, y: i32 },
-    Type { text: String },
-    KeyPress { key: String },
+    /// Maps to the real `get_app_state` tool (there is no separate
+    /// "screenshot" tool upstream) — closest analog to "what does the
+    /// screen look like right now."
+    Screenshot {
+        app: String,
+    },
+    Click {
+        app: String,
+        x: i32,
+        y: i32,
+    },
+    Type {
+        app: String,
+        text: String,
+    },
+    KeyPress {
+        app: String,
+        key: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,9 +79,18 @@ mod tests {
     #[tokio::test]
     async fn unimplemented_provider_never_reports_success() {
         let provider = UnimplementedComputerProvider;
-        assert!(provider.execute(ComputerAction::Screenshot).await.is_err());
         assert!(provider
-            .execute(ComputerAction::Click { x: 0, y: 0 })
+            .execute(ComputerAction::Screenshot {
+                app: "Finder".into()
+            })
+            .await
+            .is_err());
+        assert!(provider
+            .execute(ComputerAction::Click {
+                app: "Finder".into(),
+                x: 0,
+                y: 0
+            })
             .await
             .is_err());
         assert!(provider.health_check().await.is_err());

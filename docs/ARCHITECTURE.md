@@ -38,24 +38,39 @@ its own `Unimplemented*` placeholder that fails loudly (never a silent
 
 First real Computer Use backend: `OpenComputerUseAdapter`, integrating with
 [`iFurySt/open-codex-computer-use`](https://github.com/iFurySt/open-codex-computer-use)
-rather than reimplementing Windows UI Automation from scratch. It speaks a
-minimal line-delimited JSON protocol over a configured child process's
-stdio (one `ComputerAction` in, one `ComputerActionResult` out), so it
-already works end-to-end against a test double
-(`src/bin/fake_ocu.rs`/`fake_ocu_hang.rs`, exercised in
-`tests/open_computer_use.rs`) and just needs the real OCU binary's path
-once it's installed — no code change. `health_check` reuses the same
-`execute` path (a `Screenshot` call) rather than a separate contract. A
-timeout (`with_timeout`, default 10s) plus `kill_on_drop` on the child
-process guarantee a hung backend fails the call instead of leaking a
-process or blocking forever.
+rather than reimplementing Windows UI Automation from scratch. **Verified
+against upstream source, not assumed** (see
+`crates/zero3-providers/src/open_computer_use.rs`'s module docs for the
+exact files checked): every platform runtime is invoked as `<binary> mcp`
+and speaks **standard MCP over stdio** — JSON-RPC 2.0, one message per
+line, `initialize` -> `notifications/initialized` -> `tools/list` /
+`tools/call`. An earlier version of this adapter assumed a custom
+line-delimited action/result protocol instead; that was wrong and has
+been replaced. The real tool surface requires an `app` argument (app name
+or bundle id) on every action-performing tool, which is why
+`ComputerAction`'s variants all carry `app: String` now.
+
+Because a JSON-RPC session is stateful (the handshake happens once), the
+adapter keeps a **persistent child process** across calls — spawned
+lazily, matched request/response by JSON-RPC `id`, and torn down cleanly
+by `shutdown()` (closes stdin, waits briefly, force-kills as a fallback —
+`Child::wait()` on Windows was observed *not* reacting promptly to a
+closed stdin pipe even though the same binary exits in ~200ms given the
+same EOF over a plain shell pipe, hence the short bounded grace period
+rather than trusting a graceful exit indefinitely) or `kill_on_drop` if
+the adapter itself is dropped. Tested end-to-end against a compiled
+protocol-compliant test double (`src/bin/fake_ocu.rs`/`fake_ocu_hang.rs`,
+exercised in `tests/open_computer_use.rs`): process starts, handshake
+succeeds, capabilities enumerate via a real `tools/list` round-trip, each
+`ComputerAction` maps to the correct real tool + arguments, shutdown is
+clean, and a hung backend times out rather than blocking forever.
 
 ```
 Codex
   ↓ MCP / plugin
 OpenComputerUseAdapter   <-- crates/zero3-providers::ComputerProvider impl
-  ↓ line-delimited JSON over stdio
-Open Computer Use (iFurySt) binary
+  ↓ MCP over stdio (JSON-RPC 2.0)
+open-computer-use <binary> mcp
   ↓
 Windows UI Automation
 ```
@@ -76,20 +91,44 @@ reconstruct history in original order.
 
 `zero3-scheduler::JobManager` is the state machine on top of it:
 `queued -> running -> {succeeded, failed}`, or `{queued, running} ->
-cancelled`. Every transition is recorded through an injected
-`Arc<dyn EventLog>` (normally an `EventStore`) *before* the in-memory
-status changes, so the durable log and the in-memory view can't drift out
-of sync on a partial failure. An invalid transition (e.g. cancelling a job
-that already succeeded) is rejected with `JobManagerError::InvalidTransition`
-rather than silently accepted — see
-`crates/zero3-scheduler/src/lib.rs`'s `cannot_cancel_a_terminal_job` test.
+cancelled`. **Durable-first, enforced under one lock hold**: every
+mutating call (`create`/`start`/`complete`/`fail`/`cancel`) validates the
+transition, appends the event, and *only after `EventLog::append`
+returns `Ok`* mutates the in-memory `JobRecord` — all under the same
+`jobs` mutex acquisition, so there's no window where a concurrent reader
+could observe a state change that later turns out not to have been
+logged. If the log write fails, `status`/`output`/`error`/`updated_at`
+are left exactly as they were; see the `*_does_not_advance_*_when_the_log_write_fails`
+failure-injection tests (`crates/zero3-scheduler/src/lib.rs`) that
+inject a log that always errors and assert nothing in the record moved.
+An invalid transition (e.g. cancelling a job that already succeeded) is
+rejected with `JobManagerError::InvalidTransition` rather than silently
+accepted — see the `cannot_cancel_a_terminal_job` test.
 
-`JobManager` v1 does not yet rebuild its in-memory index from
-`EventStore::replay` on startup — that boundary is intentional and
-documented by `event_store_integration.rs`'s
-`job_history_is_durable_across_a_restart` test (the *log* survives a
-restart; the *live* `JobManager` doesn't yet reconstruct itself from it).
-That's the natural next increment once something needs it.
+`EventKind::JobQueued` carries `kind`/`payload`, and `JobCompleted`
+carries `output`, so the event stream is a complete source of truth, not
+just a count of transitions. `JobManager::recover(event_log)` (or
+`from_events(&events, event_log)` if the caller already has a replayed
+slice) rebuilds every field of every job —
+`id`/`kind`/`payload`/`status`/`output`/`error`/`session_id`/
+`created_at`/`updated_at` — purely from the log. `created_at`/`updated_at`
+are copied from each event's own `Event.at`, not a second independent
+`Utc::now()` call, so a record built live and one rebuilt from the log
+agree to the nanosecond rather than merely being close (a real bug caught
+by a failure-injection test during this hardening pass — see the fix
+commit). `crates/zero3-scheduler/tests/event_store_integration.rs`
+proves this against a real `EventStore` file: manager A creates jobs
+across every terminal outcome, is dropped, and manager B recovers from
+the reopened file with every `JobRecord` field matching manager A's
+original, not just event counts.
+
+The event log itself distinguishes a crash mid-write from real
+corruption: `EventStore::replay()` is fatal on *any* corrupt line;
+`replay_recoverable()` additionally tolerates a corrupt/incomplete **last**
+line (what a crash mid-`write_all` leaves behind) and reports it as
+`truncated_tail` instead of losing every event before it — a corrupt line
+anywhere else is still always a hard error, in both modes, never silently
+skipped.
 
 ## Subagent registry
 
@@ -117,9 +156,9 @@ brief.
 |---|---|
 | Event schema, job/subagent/plugin traits, permission model | Real, tested (incl. security-boundary tests for permission escalation and job-state rejection) |
 | Event Store | Real: append-only JSONL, `fsync`'d, replay + session/job filtering, survives a restart |
-| Job Manager | Real: full queued/running/succeeded/failed/cancelled state machine, event-logged; does not yet rebuild its index from replay on startup |
+| Job Manager | Real: full state machine, durable-first (failure-injection tested), recoverable from the log via `recover`/`from_events` |
 | Provider Registry | Real: register/list/select-by-capability/health-check for any `Provider` |
-| Computer provider | `OpenComputerUseAdapter` real (subprocess protocol, tested against a fake binary); real OCU binary integration and `WindowsUiaProvider`/vision fallback not yet built |
+| Computer provider | `OpenComputerUseAdapter` real, verified-real MCP/JSON-RPC protocol (not assumed — checked against upstream source), tested against a protocol-compliant fake binary; a genuine real-binary smoke test and `WindowsUiaProvider`/vision fallback not yet built |
 | Browser provider | Trait + `Unimplemented*` stub only |
 | Subagent registry | Real (register/list/dispatch by name); Codex/Claude/Hermes workers are placeholders |
 | Memory | Trait only, no backend |
