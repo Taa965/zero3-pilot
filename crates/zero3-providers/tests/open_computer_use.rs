@@ -27,7 +27,13 @@ async fn capabilities_enumerate_against_the_live_backend() {
     let adapter = OpenComputerUseAdapter::new(bin);
 
     let remote_tools = adapter.list_remote_tools().await.unwrap();
-    for expected in ["list_apps", "click", "type_text", "press_key", "get_app_state"] {
+    for expected in [
+        "list_apps",
+        "click",
+        "type_text",
+        "press_key",
+        "get_app_state",
+    ] {
         assert!(remote_tools.contains(&expected.to_string()));
     }
 
