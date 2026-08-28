@@ -1,210 +1,170 @@
-# Architecture (Phase 1 + Phase 2 in progress)
+# Zero3 Pilot Architecture
 
-Zero3 Pilot is a personal computer agent platform built on the open-source
-Codex runtime — not "a Codex fork with some extra tools." See
-[`docs/UPSTREAM.md`](UPSTREAM.md) for how it stays syncable with
-`openai/codex`.
+Zero3 Pilot is a local-first personal computer agent built around the upstream open-source Codex runtime. Upstream Codex stays pinned and untouched under `upstream/codex`; Zero3 Pilot adds its own provider, persistence, scheduler, subagent, memory, local Node, desktop, and deployment layers around it.
 
+## Product shape
+
+```text
+Windows Desktop (zero3-pilot.exe)
+        |
+        | localhost / native WebView2
+        v
+Local Pilot Node (zero3-pilot-node.exe, 127.0.0.1:8790)
+        |
+        +-- JobManager + append-only EventStore
+        +-- PersistentScheduler (SQLite)
+        +-- Personal/Operational Memory (SQLite)
+        +-- Codex / Claude / Hermes workers
+        +-- BrowserProvider -> Chromium CDP
+        +-- ComputerProvider -> Open Computer Use MCP -> Windows UIA
+        +-- shared approval / permission policy
+
+Cloud control surface (zero3-web)
+        |
+        +-- deployed independently on AWS
+        +-- exact-SHA release health verification
 ```
+
+The local Node is the runtime authority for personal-computer operations. The desktop shell is a native Windows host for the local UI; it reuses an already healthy Node when one exists, otherwise starts its sibling `zero3-pilot-node.exe` and only owns/terminates that child.
+
+## Repository layout
+
+```text
 zero3-pilot/
-├─ upstream/codex/      # git submodule, pinned to openai/codex — untouched
-├─ crates/               # Rust workspace: the actual extension code
-│  ├─ zero3-core/        # event schema, job/subagent/plugin traits, permission seam
-│  ├─ zero3-store/       # Event Store v1: append-only JSONL, replay, session/job correlation
-│  ├─ zero3-scheduler/   # Job Manager v1: queued/running/succeeded/failed/cancelled
-│  ├─ zero3-providers/   # ProviderRegistry + ComputerProvider/BrowserProvider + OpenComputerUseAdapter
-│  ├─ zero3-subagents/   # SubagentRegistry over Codex/Claude/Hermes (all placeholder workers so far)
-│  └─ zero3-memory/      # MemoryStore trait (placeholder)
+├─ upstream/codex/
+│  └─ pinned upstream openai/codex submodule; Zero3 code does not patch it
+├─ crates/
+│  ├─ zero3-core/
+│  │  ├─ event / job / subagent / plugin contracts
+│  │  └─ shared permission and approval seam
+│  ├─ zero3-store/
+│  │  └─ fsync'd append-only JSONL event store with strict/recoverable replay
+│  ├─ zero3-scheduler/
+│  │  ├─ durable-first JobManager state machine
+│  │  └─ SQLite persistent schedules
+│  ├─ zero3-providers/
+│  │  ├─ provider registry
+│  │  ├─ real Chromium CDP BrowserProvider
+│  │  └─ real Open Computer Use MCP ComputerProvider
+│  ├─ zero3-subagents/
+│  │  └─ real bounded CLI adapters for Codex / Claude / Hermes
+│  └─ zero3-memory/
+│     └─ scoped SQLite operational/personal memory with approval gate
 ├─ apps/
-│  ├─ web/               # control server; ships GET /health
-│  └─ desktop/           # desktop shell — not started
-├─ zero3/                # conceptual module map -> crate locations (README)
-├─ mcp/                  # Zero3's own MCP servers (none yet)
-├─ skills/                # packaged task instructions (none yet)
-├─ scripts/               # dev tooling (dev-check.sh mirrors CI)
-├─ deployment/            # systemd/nginx templates + atomic deploy.sh (not wired to a host yet)
-└─ docs/
+│  ├─ node/
+│  │  ├─ loopback-only local runtime API
+│  │  └─ integrated local control UI
+│  ├─ desktop/
+│  │  └─ Windows Tao + Wry/WebView2 shell
+│  └─ web/
+│     └─ cloud control/health server used by strict deployment verification
+├─ deployment/
+│  └─ isolated atomic AWS deployment for zero3-web
+└─ .github/workflows/
+   ├─ ci.yml
+   └─ deploy.yml
 ```
 
-## Provider model
+## Runtime invariants
 
-`ComputerProvider` and `BrowserProvider` (in `crates/zero3-providers`) both
-extend a shared `Provider` supertrait (`name`, `capabilities`,
-`health_check`), so `ProviderRegistry<T>` works identically for either
-kind: register, list, `select(capability)` (first match by name, `None` if
-nobody qualifies), `health_check`/`health_check_all`. Each trait still has
-its own `Unimplemented*` placeholder that fails loudly (never a silent
-`Ok`) so the seam is exercised before a real backend is registered.
+### Event Store and jobs
 
-First real Computer Use backend: `OpenComputerUseAdapter`, integrating with
-[`iFurySt/open-codex-computer-use`](https://github.com/iFurySt/open-codex-computer-use)
-rather than reimplementing Windows UI Automation from scratch. **Verified
-against upstream source, not assumed** (see
-`crates/zero3-providers/src/open_computer_use.rs`'s module docs for the
-exact files checked): every platform runtime is invoked as `<binary> mcp`
-and speaks **standard MCP over stdio** — JSON-RPC 2.0, one message per
-line, `initialize` -> `notifications/initialized` -> `tools/list` /
-`tools/call`. An earlier version of this adapter assumed a custom
-line-delimited action/result protocol instead; that was wrong and has
-been replaced. The real tool surface requires an `app` argument (app name
-or bundle id) on every action-performing tool, which is why
-`ComputerAction`'s variants all carry `app: String` now.
+`zero3-store::EventStore` is append-only JSONL. Durable writes are flushed and synchronized before success is returned. Strict replay rejects malformed history. Recoverable replay only tolerates a physically torn final record and always surfaces a `TruncatedTail` diagnostic.
 
-Because a JSON-RPC session is stateful (the handshake happens once), the
-adapter keeps a **persistent child process** across calls — spawned
-lazily, matched request/response by JSON-RPC `id`, and torn down cleanly
-by `shutdown()` (closes stdin, waits briefly, force-kills as a fallback —
-`Child::wait()` on Windows was observed *not* reacting promptly to a
-closed stdin pipe even though the same binary exits in ~200ms given the
-same EOF over a plain shell pipe, hence the short bounded grace period
-rather than trusting a graceful exit indefinitely) or `kill_on_drop` if
-the adapter itself is dropped. Tested end-to-end against a compiled
-protocol-compliant test double (`src/bin/fake_ocu.rs`/`fake_ocu_hang.rs`,
-exercised in `tests/open_computer_use.rs`): process starts, handshake
-succeeds, capabilities enumerate via a real `tools/list` round-trip, each
-`ComputerAction` maps to the correct real tool + arguments, shutdown is
-clean, and a hung backend times out rather than blocking forever.
+`zero3-scheduler::JobManager` is durable-first: state transitions are recorded before the in-memory `JobRecord` advances. Replay applies the same legal state transitions as live execution; orphan events, duplicate queue events, and illegal transitions are corruption rather than silently ignored data.
 
-```
-Codex
-  ↓ MCP / plugin
-OpenComputerUseAdapter   <-- crates/zero3-providers::ComputerProvider impl
-  ↓ MCP over stdio (JSON-RPC 2.0)
-open-computer-use <binary> mcp
-  ↓
-Windows UI Automation
-```
+### Persistent scheduler
 
-Still to come: a native `WindowsUiaProvider` and a vision-model fallback
-provider, registered alongside `OpenComputerUseAdapter` in the same
-registry so callers can `select()` by capability without caring which one
-answers.
+`PersistentScheduler` stores schedules in SQLite/WAL. It supports one-shot, fixed interval, and daily UTC schedules. Due occurrences enqueue normal durable jobs. The stable `(schedule_id, scheduled_for)` pair is carried in the payload so downstream execution can deduplicate at-least-once delivery.
 
-## Event Store + Job Manager
+### Memory
 
-`zero3-store::EventStore` is the append-only, persistent, replayable log:
-every write goes to the end of a JSONL file and is `fsync`'d before the
-call returns, so a crash can only ever lose the last unflushed record. A
-fresh `EventStore::open` on the same path sees everything a previous
-process wrote — `replay()`, `replay_session(id)`, and `replay_job(id)`
-reconstruct history in original order.
+`SqliteMemoryStore` persists scoped operational and personal records. Operational memory may be written by the runtime. Personal memory is rejected at the storage boundary unless the record carries explicit approval. Scopes are global, session, or thread.
 
-`zero3-scheduler::JobManager` is the state machine on top of it:
-`queued -> running -> {succeeded, failed}`, or `{queued, running} ->
-cancelled`. **Durable-first, enforced under one lock hold**: every
-mutating call (`create`/`start`/`complete`/`fail`/`cancel`) validates the
-transition, appends the event, and *only after `EventLog::append`
-returns `Ok`* mutates the in-memory `JobRecord` — all under the same
-`jobs` mutex acquisition, so there's no window where a concurrent reader
-could observe a state change that later turns out not to have been
-logged. If the log write fails, `status`/`output`/`error`/`updated_at`
-are left exactly as they were; see the `*_does_not_advance_*_when_the_log_write_fails`
-failure-injection tests (`crates/zero3-scheduler/src/lib.rs`) that
-inject a log that always errors and assert nothing in the record moved.
-An invalid transition (e.g. cancelling a job that already succeeded) is
-rejected with `JobManagerError::InvalidTransition` rather than silently
-accepted — see the `cannot_cancel_a_terminal_job` test.
+## Providers
 
-`EventKind::JobQueued` carries `kind`/`payload`, and `JobCompleted`
-carries `output`, so the event stream is a complete source of truth, not
-just a count of transitions. `created_at`/`updated_at` are copied from
-each event's own `Event.at`, not a second independent `Utc::now()` call,
-so a record built live and one rebuilt from the log agree to the
-nanosecond rather than merely being close (a real bug caught by a
-failure-injection test during the first hardening pass).
+### Browser
 
-**Recovery is strict by default, and "strict" means semantic, not just
-physical.** `JobManager::from_events`/`recover` replay every event through
-the exact same state-machine rules the live methods enforce — an orphan
-transition (no prior `JobQueued`), a duplicate `JobQueued`, or an event
-illegal for the job's current status (e.g. `JobCompleted` without a prior
-`JobStarted`, `JobCancelled` from a terminal state) is
-`Err(JobManagerError::CorruptHistory(..))`, never silently skipped or
-ignored — see `crates/zero3-scheduler/src/lib.rs`'s
-`*_is_corrupt_history` tests. When the log genuinely is intact,
-`from_events`/`recover` rebuild every field of every job —
-`id`/`kind`/`payload`/`status`/`output`/`error`/`session_id`/
-`created_at`/`updated_at` — purely from it;
-`crates/zero3-scheduler/tests/event_store_integration.rs` proves this
-against a real `EventStore` file: manager A creates jobs across every
-terminal outcome, is dropped, and manager B recovers from the reopened
-file with every `JobRecord` field matching manager A's original.
+`CdpBrowserProvider` uses `chromiumoxide` and keeps CDP types behind the provider contract. Managed mode launches Chromium with an isolated temporary profile; attach mode connects to an explicitly supplied CDP endpoint and does not kill the user's browser on close.
 
-The event log distinguishes a physically crash-torn tail from real
-corruption, and the distinction is **physical, not positional**:
-`EventStore::replay_recoverable()` only treats the very last record as a
-possible crash tail when the *file itself* doesn't end in `\n` — a
-newline-terminated last line that fails to parse is a complete write of
-bad content, not a crash tail, and is still fatal (an earlier version of
-this got that wrong, treating any invalid last non-empty line as
-salvageable regardless of termination; fixed and covered by
-`recoverable_replay_treats_a_terminated_invalid_last_line_as_fatal_not_a_tail`).
-Corruption anywhere before the last line is always fatal in both
-`replay()` and `replay_recoverable()`; nothing is silently skipped.
+Supported actions include launch/connect/close, tabs, open/navigate, semantic snapshot/query, click/type/key/scroll/wait, screenshot, and evaluate. Semantic element refs are preferred over coordinate automation. CI runs a real installed Chromium smoke test.
 
-That tolerance is wired into `JobManager` as an explicit opt-in, never a
-default: `RecoveryMode::Strict` (what plain `recover()` uses) rejects any
-log that isn't physically intact to the last byte;
-`RecoveryMode::RecoverCrashTail`
-(`JobManager::recover_with_mode(log, RecoveryMode::RecoverCrashTail)`)
-tolerates a physically torn tail and recovers everything before it — but
-always returns the `Option<TruncatedTail>` diagnostic alongside the
-manager, and still runs the exact same semantic state-machine validation
-described above (a physically-salvageable log with a semantically illegal
-prefix is still rejected).
-`crash_tail_recovery_salvages_durable_jobs_and_reports_exactly_one_torn_tail`
-exercises this end to end against a real `EventStore` file: durable jobs
-survive a simulated crash mid-write, strict recovery rejects the file
-outright, and crash-tail recovery salvages every durable job
-field-for-field while surfacing exactly one tail diagnostic.
+### Computer use
 
-## Subagent registry
+`OpenComputerUseAdapter` integrates the current `open-computer-use` runtime through standard MCP JSON-RPC over stdio. It performs initialize -> initialized -> tools/list / tools/call on a persistent child process and has bounded shutdown/kill fallback.
 
-`zero3-subagents::SubagentRegistry` registers `Arc<dyn SubagentWorker>` by
-`worker.name()` and dispatches by name (`registry.dispatch("codex",
-task)`), so a caller never depends on which concrete backend runs a task.
-`CodexWorker`/`ClaudeWorker`/`HermesWorker` are registered under the
-contract today as `Unimplemented`-style placeholders (return a clear "not
-wired up" error, never a silent no-op) — the contract is uniform now, the
-backends land later.
+`ComputerAction` uses the transport contract `{"action": "snake_case", ...}`. `list_apps` and app-state reads are read-only; click/type/key actions are side effects and pass through the shared policy gate. CI installs the real OCU package on Windows, opens real Notepad, performs the MCP handshake, and executes a UIA smoke test.
+
+## Subagents
+
+`SubagentRegistry` dispatches workers by stable name. The concrete workers are thin bounded process adapters and do not embed duplicate agent runtimes:
+
+- Codex: `codex exec --json`
+- Claude: `claude -p --output-format json`
+- Hermes: `hermes -z`
+
+Each adapter owns cwd/env/timeout/exit-code handling and bounded stdout/stderr capture. Missing executables and non-zero exits fail loudly.
+
+## Local Pilot Node
+
+`apps/node` binds to loopback only (default `127.0.0.1:8790`). It is the local integration point for:
+
+- health/status
+- background jobs and results
+- Codex/Claude/Hermes submissions
+- browser actions
+- computer actions
+- persistent schedules
+- memory CRUD/search
+
+Browser-origin checks block drive-by web pages from issuing localhost mutations. Native/CLI local clients without an Origin header remain supported. Side-effecting browser/computer/subagent/scheduler operations are evaluated by the shared `DefaultPolicy`; a provider cannot self-approve.
+
+The embedded UI exposes runtime status, agents, jobs, browser automation, computer control including `list_apps`, scheduler automation, and scoped memory.
+
+## Windows desktop
+
+`apps/desktop` builds `zero3-pilot.exe` with the Windows GUI subsystem. It creates a Tao window and a real Wry/WebView2 instance pointed at the local Node.
+
+Startup behavior:
+
+1. Probe local Node health.
+2. If healthy, reuse it.
+3. Otherwise resolve/start sibling `zero3-pilot-node.exe`.
+4. Wait for health before creating the UI.
+5. On exit, terminate only a Node child the desktop itself started.
+
+CI builds the real Windows Node/Desktop, starts the Node, verifies `/health` and `/api/v1/status`, creates the real WebView2 desktop, waits for the smoke timer to close it, and checks the GUI process exit code.
 
 ## Permission model
 
-`crates/zero3-core::permission` defines four levels — `ReadOnly`,
-`Standard`, `Elevated`, `FullControl` — and a `PolicyEngine` trait every
-provider must route side-effecting actions through
-(`DefaultPolicy`: allow if granted ≥ required, else require approval if
-reversible, else deny). No provider is permitted to self-approve; this is
-the seam that later becomes the "统一 approval / policy 层" from the project
-brief.
+`zero3-core::permission` defines `ReadOnly < Standard < Elevated < FullControl`. `DefaultPolicy` allows sufficient grants, requires explicit approval for reversible operations above the current grant, and denies under-granted irreversible operations. Providers and the local Node share this seam rather than implementing independent approval rules.
 
-## What's a placeholder vs. real
+## Cloud deployment boundary
 
-| Piece | State |
-|---|---|
-| Event schema, job/subagent/plugin traits, permission model | Real, tested (incl. security-boundary tests for permission escalation and job-state rejection) |
-| Event Store | Real: append-only JSONL, `fsync`'d, replay + session/job filtering, survives a restart |
-| Job Manager | Real: full state machine, durable-first (failure-injection tested), strict-by-default recovery with an explicit crash-tail opt-in (`RecoveryMode`) — semantic corruption in the log is always rejected, never salvaged silently |
-| Provider Registry | Real: register/list/select-by-capability/health-check for any `Provider` |
-| Computer provider | `OpenComputerUseAdapter` real, verified-real MCP/JSON-RPC protocol (not assumed — checked against upstream source), tested against a protocol-compliant fake binary; a genuine real-binary smoke test and `WindowsUiaProvider`/vision fallback not yet built |
-| Browser provider | Trait + `Unimplemented*` stub only |
-| Subagent registry | Real (register/list/dispatch by name); Codex/Claude/Hermes workers are placeholders |
-| Memory | Trait only, no backend |
-| `apps/web` `/health` | Real, verified by deployment (exact-SHA match, not just 200) |
-| `apps/desktop` | Not started |
-| `mcp/`, `skills/` | Empty, directories reserved |
-| Deployment | Live on the shared AWS Lightsail host, isolated as `zero3pilot` — see `docs/DEPLOYMENT.md` |
+`apps/web` remains a separate server-side control/health surface. It is deployed on the shared AWS host under the dedicated `zero3pilot` service account and isolated filesystem/service paths. It does not grant the local desktop runtime remote shell authority.
 
-## Ideas absorbed from prior art (not yet implemented)
+Pushes to `main` use one strict workflow chain:
 
-- **DeepSeek Harness**: capability-seam plugin lifecycle, event log,
-  background jobs, subagent provider, profiles — re-expressed as Rust
-  traits in `zero3-core` rather than embedding its Node/Cordis runtime.
-- **xCodex**: hooks, background terminals, subagent roadmap, MCP loading —
-  reference for how `mcp/` and a future `hooks/` should be shaped.
-- **OpenCodex** (verify license before reusing any code — flagged AGPL,
-  unconfirmed): app server / web gateway / desktop shell / remote access
-  layering informs `apps/web` + `apps/desktop` split.
-- **iPolloWork**: multi-engine workspace, unified plugin/skill/scheduler
-  boundaries — informs keeping `zero3-scheduler` and plugin loading decoupled
-  from any one backend (Codex/DSH/Claude/Hermes).
+```text
+test (fmt + clippy + build + workspace tests)
+  -> release build
+  -> atomic deploy exact GITHUB_SHA
+  -> external localhost health check whose git_sha must equal that SHA
+```
+
+A failed upstream job cannot reach deploy. Releases are exact-SHA and rollback-capable.
+
+## CI evidence
+
+PR CI contains four independent gates:
+
+1. Linux `fmt / clippy -D warnings / build / workspace tests`.
+2. Real Chromium BrowserProvider smoke.
+3. Real Windows Open Computer Use + Notepad/UIA smoke.
+4. Windows product smoke: Node build/start/API plus native Wry/WebView2 desktop creation and clean exit.
+
+The purpose of the platform-specific smoke tests is to prevent a cross-platform compile from being mistaken for proof that browser/UI automation or the Windows desktop actually works.
+
+## Upstream policy
+
+Zero3 Pilot absorbs useful architecture ideas from other projects but keeps `openai/codex` upstream clean. New personal-assistant capabilities live in Zero3-owned crates/apps and communicate through explicit seams rather than modifying the Codex source tree or introducing a second agent runtime.

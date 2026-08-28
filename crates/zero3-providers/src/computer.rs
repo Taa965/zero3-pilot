@@ -6,6 +6,7 @@ use crate::provider::Provider;
 /// `app` (a running app's name or bundle identifier) is required by the
 /// app-scoped upstream tools. `ListApps` intentionally has no app argument.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
 pub enum ComputerAction {
     /// Maps to the real `list_apps` MCP tool and provides a cheap native
     /// runtime/session probe before app-scoped UI Automation operations.
@@ -71,6 +72,20 @@ impl ComputerProvider for UnimplementedComputerProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn computer_action_uses_stable_tagged_snake_case_json() {
+        assert_eq!(
+            serde_json::to_value(ComputerAction::ListApps).unwrap(),
+            serde_json::json!({"action": "list_apps"})
+        );
+        let parsed: ComputerAction = serde_json::from_value(serde_json::json!({
+            "action": "screenshot",
+            "app": "Notepad"
+        }))
+        .unwrap();
+        assert!(matches!(parsed, ComputerAction::Screenshot { app } if app == "Notepad"));
+    }
 
     /// Security boundary: an unwired provider must never report a
     /// side-effecting action as having succeeded. A silent `Ok` here

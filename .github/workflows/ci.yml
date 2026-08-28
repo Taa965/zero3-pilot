@@ -81,3 +81,52 @@ jobs:
           Get-Process notepad -ErrorAction Stop | Select-Object -First 1 | Format-List Id,ProcessName,SessionId
       - name: Real Windows OCU MCP handshake and UIA smoke
         run: cargo test -p zero3-providers --test open_computer_use_real -- --ignored --nocapture
+
+  windows-product-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build local Node and native desktop
+        run: cargo build -p zero3-node -p zero3-desktop
+      - name: Start real local Node and verify API
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:ZERO3_PILOT_DATA_DIR = Join-Path $env:RUNNER_TEMP 'zero3-pilot-product-smoke'
+          $env:ZERO3_PILOT_NODE_PORT = '8790'
+          New-Item -ItemType Directory -Force -Path $env:ZERO3_PILOT_DATA_DIR | Out-Null
+          $nodePath = (Resolve-Path 'target\debug\zero3-pilot-node.exe').Path
+          $node = Start-Process -FilePath $nodePath -PassThru
+          "ZERO3_PRODUCT_NODE_PID=$($node.Id)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $healthy = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8790/health' -TimeoutSec 1
+              if ($health.status -eq 'ok') { $healthy = $true; break }
+            } catch {}
+            Start-Sleep -Milliseconds 250
+          }
+          if (-not $healthy) { throw 'zero3-pilot-node did not become healthy' }
+          $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8790/api/v1/status' -TimeoutSec 2
+          if ($status.status -ne 'ok') { throw 'node status API did not return ok' }
+          if ($status.agents.Count -lt 3) { throw 'node did not register all three subagents' }
+      - name: Create a real WebView2 desktop and exit cleanly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:ZERO3_PILOT_NODE_PORT = '8790'
+          $env:ZERO3_DESKTOP_SMOKE_MS = '2000'
+          $desktopPath = (Resolve-Path 'target\debug\zero3-pilot.exe').Path
+          $desktop = Start-Process -FilePath $desktopPath -PassThru -Wait
+          if ($desktop.ExitCode -ne 0) { throw "zero3-pilot desktop exited with $($desktop.ExitCode)" }
+      - name: Stop product smoke Node
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:ZERO3_PRODUCT_NODE_PID) {
+            Stop-Process -Id ([int]$env:ZERO3_PRODUCT_NODE_PID) -Force -ErrorAction SilentlyContinue
+          }
