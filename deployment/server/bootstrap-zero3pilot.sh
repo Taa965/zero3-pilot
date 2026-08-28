@@ -24,8 +24,14 @@ if ! getent group zero3pilot >/dev/null; then
     groupadd --system zero3pilot
 fi
 if ! id -u zero3pilot >/dev/null 2>&1; then
+    # /bin/bash, not nologin: sshd needs to invoke the account's shell to
+    # run non-interactive deploy commands over SSH. This doesn't widen its
+    # privileges — access is still gated by the single authorized_keys
+    # entry and the one narrowly-scoped sudo rule below.
     useradd --system --gid zero3pilot --home-dir /home/zero3pilot \
-        --create-home --shell /usr/sbin/nologin zero3pilot
+        --create-home --shell /bin/bash zero3pilot
+else
+    usermod --shell /bin/bash zero3pilot
 fi
 
 echo "[2/8] directories"
