@@ -57,6 +57,7 @@ fn main() {
                     "id": id,
                     "result": {
                         "tools": [
+                            {"name": "list_apps"},
                             {"name": "get_app_state"},
                             {"name": "click"},
                             {"name": "type_text"},
@@ -75,6 +76,7 @@ fn main() {
                         "result": {
                             "content": [{"type": "text", "text": "ok"}],
                             "isError": false,
+                            "echoedTool": params.get("name").cloned().unwrap_or(Value::Null),
                             "echoedArguments": params.get("arguments").cloned().unwrap_or(Value::Null),
                         }
                     }),

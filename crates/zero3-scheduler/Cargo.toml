@@ -3,7 +3,7 @@ name = "zero3-scheduler"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Job Manager v1: queued/running/succeeded/failed/cancelled job state machine, durably event-logged."
+description = "Durable Job Manager plus persistent local SQLite recurring scheduler."
 
 [dependencies]
 zero3-core = { path = "../zero3-core" }
@@ -13,6 +13,7 @@ chrono.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [dev-dependencies]
 zero3-store = { path = "../zero3-store" }

@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: false # upstream/codex is large; not needed to build zero3-* crates
+          submodules: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -33,3 +33,51 @@ jobs:
 
       - name: test
         run: cargo test --workspace
+
+  real-browser-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Resolve installed Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHROME="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -n "$CHROME"
+          "$CHROME" --version
+          echo "ZERO3_CHROME_PATH=$CHROME" >> "$GITHUB_ENV"
+      - name: Real Chromium semantic BrowserProvider smoke
+        run: cargo test -p zero3-providers --test browser_real -- --ignored --nocapture
+
+  real-windows-ocu-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: Swatinem/rust-cache@v2
+      - name: Install current Open Computer Use
+        shell: pwsh
+        run: |
+          npm install --global open-computer-use
+          $cmd = (Get-Command open-computer-use.cmd).Source
+          if (-not $cmd) { throw 'open-computer-use.cmd was not installed' }
+          & $cmd --help
+          "ZERO3_OCU_BIN=$cmd" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ZERO3_OCU_APP=Notepad" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Open real Notepad window
+        shell: pwsh
+        run: |
+          Start-Process notepad.exe
+          Start-Sleep -Seconds 3
+          Get-Process notepad -ErrorAction Stop | Select-Object -First 1 | Format-List Id,ProcessName,SessionId
+      - name: Real Windows OCU MCP handshake and UIA smoke
+        run: cargo test -p zero3-providers --test open_computer_use_real -- --ignored --nocapture

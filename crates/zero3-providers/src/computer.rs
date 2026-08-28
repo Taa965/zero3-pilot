@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::provider::Provider;
 
-/// `app` (a running app's name or bundle identifier) is required on every
-/// variant because it's a required argument on every corresponding real
-/// `iFurySt/open-codex-computer-use` MCP tool
-/// (`click`/`type_text`/`press_key`/`get_app_state` all require it) — see
-/// `OpenComputerUseAdapter` and `docs/ARCHITECTURE.md` §Computer Use.
+/// `app` (a running app's name or bundle identifier) is required by the
+/// app-scoped upstream tools. `ListApps` intentionally has no app argument.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ComputerAction {
+    /// Maps to the real `list_apps` MCP tool and provides a cheap native
+    /// runtime/session probe before app-scoped UI Automation operations.
+    ListApps,
     /// Maps to the real `get_app_state` tool (there is no separate
     /// "screenshot" tool upstream) — closest analog to "what does the
     /// screen look like right now."
@@ -85,6 +85,7 @@ mod tests {
             })
             .await
             .is_err());
+        assert!(provider.execute(ComputerAction::ListApps).await.is_err());
         assert!(provider
             .execute(ComputerAction::Click {
                 app: "Finder".into(),
