@@ -6,6 +6,7 @@ use crate::provider::Provider;
 /// `app` (a running app's name or bundle identifier) is required by the
 /// app-scoped upstream tools. `ListApps` intentionally has no app argument.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
 pub enum ComputerAction {
     /// Maps to the real `list_apps` MCP tool and provides a cheap native
     /// runtime/session probe before app-scoped UI Automation operations.
