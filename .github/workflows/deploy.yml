@@ -78,7 +78,7 @@ jobs:
           exit "$rc"
 
       - name: Clean up staging dir
-        if: always()
+        if: false # temporarily disabled for debugging — see commit history
         run: |
           ssh -i ~/.ssh/zero3pilot_deploy -p "${{ secrets.DEPLOY_PORT }}" \
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
