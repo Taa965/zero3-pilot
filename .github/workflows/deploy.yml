@@ -62,12 +62,16 @@ jobs:
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/tmp/zero3-pilot-deploy-${{ github.sha }}/"
 
       - name: Run atomic deploy on target host
+        env:
+          REMOTE_CMD: >-
+            DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}'
+            GIT_SHA='${{ github.sha }}'
+            BUILD_ARTIFACT=/tmp/zero3-pilot-deploy-${{ github.sha }}/zero3-web
+            bash /tmp/zero3-pilot-deploy-${{ github.sha }}/deploy.sh
         run: |
           ssh -i ~/.ssh/zero3pilot_deploy -p "${{ secrets.DEPLOY_PORT }}" \
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-            "DEPLOY_PATH='${{ secrets.DEPLOY_PATH }}' GIT_SHA='${{ github.sha }}' \
-             BUILD_ARTIFACT=/tmp/zero3-pilot-deploy-${{ github.sha }}/zero3-web \
-             bash /tmp/zero3-pilot-deploy-${{ github.sha }}/deploy.sh"
+            "$REMOTE_CMD"
 
       - name: Clean up staging dir
         if: always()
