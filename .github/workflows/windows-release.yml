@@ -1,0 +1,54 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release desktop bundle
+        run: cargo build --release -p zero3-node -p zero3-weixin -p zero3-desktop
+      - name: Resolve Inno Setup compiler
+        shell: pwsh
+        run: |
+          $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          }
+          if (-not $iscc) {
+            $candidate = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+            if (Test-Path $candidate) { $iscc = Get-Item $candidate }
+          }
+          if (-not $iscc) { throw 'Inno Setup compiler not found' }
+          $path = if ($iscc.Source) { $iscc.Source } else { $iscc.FullName }
+          "ZERO3_ISCC=$path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & $env:ZERO3_ISCC 'installer\Zero3Pilot.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+          if (-not (Test-Path 'dist\Zero3Pilot-Setup.exe')) { throw 'installer artifact missing' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zero3Pilot-Setup-${{ github.sha }}
+          path: dist/Zero3Pilot-Setup.exe
+          if-no-files-found: error
+      - name: Publish tagged GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Zero3Pilot-Setup.exe
+          generate_release_notes: true
