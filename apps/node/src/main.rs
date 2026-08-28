@@ -5,7 +5,6 @@
 //! Side-effecting browser/computer/subagent requests are routed through the
 //! shared `zero3-core` policy seam before execution.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -26,9 +25,7 @@ use zero3_core::permission::{
     ActionRequest, Decision, DefaultPolicy, PermissionLevel, PolicyEngine,
 };
 use zero3_core::subagent::SubagentTask;
-use zero3_memory::{
-    MemoryClass, MemoryRecord, MemoryScope, MemoryStore, SqliteMemoryStore,
-};
+use zero3_memory::{MemoryClass, MemoryRecord, MemoryScope, MemoryStore, SqliteMemoryStore};
 use zero3_providers::browser::{BrowserAction, BrowserProvider, CdpBrowserProvider};
 use zero3_providers::computer::{ComputerAction, ComputerProvider};
 use zero3_providers::open_computer_use::OpenComputerUseAdapter;
@@ -36,9 +33,7 @@ use zero3_providers::Provider;
 use zero3_scheduler::persistent::{PersistentScheduler, ScheduleSpec, ScheduledTask};
 use zero3_scheduler::{JobManager, JobRecord, RecoveryMode};
 use zero3_store::EventStore;
-use zero3_subagents::workers::{
-    ClaudeWorker, CliWorkerConfig, CodexWorker, HermesWorker,
-};
+use zero3_subagents::workers::{ClaudeWorker, CliWorkerConfig, CodexWorker, HermesWorker};
 use zero3_subagents::SubagentRegistry;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -236,7 +231,11 @@ fn enforce_origin(headers: &HeaderMap, state: &AppState) -> Result<(), ApiError>
     let origin = origin
         .to_str()
         .map_err(|_| ApiError::forbidden("invalid Origin header"))?;
-    if state.allowed_origins.iter().any(|allowed| allowed == origin) {
+    if state
+        .allowed_origins
+        .iter()
+        .any(|allowed| allowed == origin)
+    {
         Ok(())
     } else {
         Err(ApiError::forbidden(format!(
@@ -262,12 +261,12 @@ fn browser_policy(action: &BrowserAction) -> (&'static str, PermissionLevel, boo
 
 fn computer_policy(action: &ComputerAction) -> (&'static str, PermissionLevel, bool) {
     match action {
-        ComputerAction::Screenshot { .. } => ("computer.read", PermissionLevel::ReadOnly, true),
+        ComputerAction::ListApps | ComputerAction::Screenshot { .. } => {
+            ("computer.read", PermissionLevel::ReadOnly, true)
+        }
         ComputerAction::Click { .. }
         | ComputerAction::Type { .. }
-        | ComputerAction::KeyPress { .. } => {
-            ("computer.write", PermissionLevel::Elevated, true)
-        }
+        | ComputerAction::KeyPress { .. } => ("computer.write", PermissionLevel::Elevated, true),
     }
 }
 
@@ -314,64 +313,70 @@ async fn execute_job(state: Arc<AppState>, job_id: Uuid) {
 
     let payload = unwrap_scheduled_payload(&record.payload);
     let result: anyhow::Result<Value> = match record.kind.as_str() {
-        "subagent" => async {
-            let request: AgentRunRequest = serde_json::from_value(payload)?;
-            action_gate(
-                request.approval.granted_level,
-                request.approval.approved,
-                "subagent",
-                "dispatch",
-                PermissionLevel::Elevated,
-                true,
-            )
-            .map_err(|error| anyhow::anyhow!(error.message))?;
-            let result = state
-                .agents
-                .dispatch(
-                    &request.backend,
-                    SubagentTask {
-                        goal: request.goal,
-                        context: request.context,
-                    },
+        "subagent" => {
+            async {
+                let request: AgentRunRequest = serde_json::from_value(payload)?;
+                action_gate(
+                    request.approval.granted_level,
+                    request.approval.approved,
+                    "subagent",
+                    "dispatch",
+                    PermissionLevel::Elevated,
+                    true,
                 )
-                .await?;
-            Ok(serde_json::to_value(result)?)
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+                let result = state
+                    .agents
+                    .dispatch(
+                        &request.backend,
+                        SubagentTask {
+                            goal: request.goal,
+                            context: request.context,
+                        },
+                    )
+                    .await?;
+                Ok(serde_json::to_value(result)?)
+            }
+            .await
         }
-        .await,
-        "browser" => async {
-            let request: BrowserRunRequest = serde_json::from_value(payload)?;
-            let (action, level, reversible) = browser_policy(&request.action);
-            action_gate(
-                request.approval.granted_level,
-                request.approval.approved,
-                "browser",
-                action,
-                level,
-                reversible,
-            )
-            .map_err(|error| anyhow::anyhow!(error.message))?;
-            Ok(serde_json::to_value(
-                state.browser.execute(request.action).await?,
-            )?)
+        "browser" => {
+            async {
+                let request: BrowserRunRequest = serde_json::from_value(payload)?;
+                let (action, level, reversible) = browser_policy(&request.action);
+                action_gate(
+                    request.approval.granted_level,
+                    request.approval.approved,
+                    "browser",
+                    action,
+                    level,
+                    reversible,
+                )
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+                Ok(serde_json::to_value(
+                    state.browser.execute(request.action).await?,
+                )?)
+            }
+            .await
         }
-        .await,
-        "computer" => async {
-            let request: ComputerRunRequest = serde_json::from_value(payload)?;
-            let (action, level, reversible) = computer_policy(&request.action);
-            action_gate(
-                request.approval.granted_level,
-                request.approval.approved,
-                "computer",
-                action,
-                level,
-                reversible,
-            )
-            .map_err(|error| anyhow::anyhow!(error.message))?;
-            Ok(serde_json::to_value(
-                state.computer.execute(request.action).await?,
-            )?)
+        "computer" => {
+            async {
+                let request: ComputerRunRequest = serde_json::from_value(payload)?;
+                let (action, level, reversible) = computer_policy(&request.action);
+                action_gate(
+                    request.approval.granted_level,
+                    request.approval.approved,
+                    "computer",
+                    action,
+                    level,
+                    reversible,
+                )
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+                Ok(serde_json::to_value(
+                    state.computer.execute(request.action).await?,
+                )?)
+            }
+            .await
         }
-        .await,
         other => Err(anyhow::anyhow!("unsupported local job kind {other:?}")),
     };
 
@@ -560,11 +565,7 @@ async fn submit_computer(
 async fn list_schedules(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<ScheduledTask>>, ApiError> {
-    state
-        .scheduler
-        .list()
-        .map(Json)
-        .map_err(ApiError::internal)
+    state.scheduler.list().map(Json).map_err(ApiError::internal)
 }
 
 async fn create_schedule(
@@ -581,7 +582,10 @@ async fn create_schedule(
         PermissionLevel::Elevated,
         true,
     )?;
-    if !matches!(request.job_kind.as_str(), "subagent" | "browser" | "computer") {
+    if !matches!(
+        request.job_kind.as_str(),
+        "subagent" | "browser" | "computer"
+    ) {
         return Err(ApiError::bad_request(
             "schedule job_kind must be subagent, browser, or computer",
         ));
@@ -633,7 +637,11 @@ async fn list_memory(
     Query(query): Query<MemoryQuery>,
 ) -> Result<Json<Vec<MemoryRecord>>, ApiError> {
     let scope = scope_from_query(&query)?;
-    let records = match query.query.as_deref().filter(|value| !value.trim().is_empty()) {
+    let records = match query
+        .query
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         Some(text) => state.memory.search(text, scope.as_ref()),
         None => state.memory.list(scope.as_ref()),
     }
@@ -648,12 +656,9 @@ async fn put_memory(
 ) -> Result<StatusCode, ApiError> {
     enforce_origin(&headers, &state)?;
     let record = match request.class {
-        MemoryClass::Operational => MemoryRecord::operational(
-            request.key,
-            request.value,
-            request.scope,
-            request.source,
-        ),
+        MemoryClass::Operational => {
+            MemoryRecord::operational(request.key, request.value, request.scope, request.source)
+        }
         MemoryClass::Personal => MemoryRecord::personal(
             request.key,
             request.value,
@@ -701,7 +706,10 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/jobs/agent", post(submit_agent))
         .route("/api/v1/jobs/browser", post(submit_browser))
         .route("/api/v1/jobs/computer", post(submit_computer))
-        .route("/api/v1/schedules", get(list_schedules).post(create_schedule))
+        .route(
+            "/api/v1/schedules",
+            get(list_schedules).post(create_schedule),
+        )
         .route(
             "/api/v1/schedules/:id",
             patch(set_schedule_enabled).delete(delete_schedule),
@@ -738,10 +746,8 @@ fn env_executable(name: &str, fallback: &str) -> PathBuf {
 fn build_state(data_dir: &FsPath, port: u16) -> anyhow::Result<Arc<AppState>> {
     std::fs::create_dir_all(data_dir)?;
     let event_store = Arc::new(EventStore::open(data_dir.join("events.jsonl"))?);
-    let (jobs, truncated_tail) = JobManager::recover_with_mode(
-        event_store,
-        RecoveryMode::RecoverCrashTail,
-    )?;
+    let (jobs, truncated_tail) =
+        JobManager::recover_with_mode(event_store, RecoveryMode::RecoverCrashTail)?;
     let scheduler = PersistentScheduler::open(data_dir.join("scheduler.sqlite"))?;
     let memory = SqliteMemoryStore::open(data_dir.join("memory.sqlite"))?;
 
@@ -820,7 +826,12 @@ mod tests {
 
         let health = app
             .clone()
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(health.status(), StatusCode::OK);
