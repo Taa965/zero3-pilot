@@ -69,9 +69,13 @@ jobs:
             BUILD_ARTIFACT=/tmp/zero3-pilot-deploy-${{ github.sha }}/zero3-web
             bash /tmp/zero3-pilot-deploy-${{ github.sha }}/deploy.sh
         run: |
-          ssh -i ~/.ssh/zero3pilot_deploy -p "${{ secrets.DEPLOY_PORT }}" \
+          set +e
+          ssh -vvv -i ~/.ssh/zero3pilot_deploy -p "${{ secrets.DEPLOY_PORT }}" \
             "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
             "$REMOTE_CMD"
+          rc=$?
+          echo "SSH_EXIT_CODE=$rc"
+          exit "$rc"
 
       - name: Clean up staging dir
         if: always()
