@@ -1,0 +1,12 @@
+{
+  "name": "@zero3/desktop-orchestrator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare": "node ./scripts/prepare-upstream.mjs",
+    "dev": "node ./scripts/run.mjs dev",
+    "typecheck": "node ./scripts/run.mjs typecheck",
+    "dist:win": "node ./scripts/run.mjs dist:win",
+    "reset": "node ./scripts/reset-upstream.mjs"
+  }
+}
