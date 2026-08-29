@@ -22,6 +22,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Codex-core architecture guard
+        run: node scripts/check-architecture.mjs
+
       - name: fmt
         run: cargo fmt --all -- --check
 
@@ -34,15 +37,16 @@ jobs:
       - name: test
         run: cargo test --workspace
 
-      - name: Zero3 Desktop v3 orchestrator syntax
+      - name: Zero3 target desktop orchestrator syntax
         run: |
+          node --check scripts/check-architecture.mjs
           node --check apps/zero3-desktop/scripts/config.mjs
           node --check apps/zero3-desktop/scripts/apply-shell-policy.mjs
           node --check apps/zero3-desktop/scripts/apply-chinese-ui.mjs
-          node --check apps/zero3-desktop/scripts/apply-native-bridge.mjs
           node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
           node --check apps/zero3-desktop/scripts/run.mjs
           node --check apps/zero3-desktop/scripts/reset-upstream.mjs
+          test "$(git config -f .gitmodules --get submodule.upstream/codex.path)" = "upstream/codex"
           test "$(git config -f .gitmodules --get submodule.upstream/hermes-agent.path)" = "upstream/hermes-agent"
           test "$(git config -f .gitmodules --get submodule.upstream/deepseek-harness.path)" = "upstream/deepseek-harness"
 
@@ -66,14 +70,18 @@ jobs:
           cache: npm
           cache-dependency-path: upstream/hermes-agent/package-lock.json
 
-      - name: Prepare Zero3 Desktop overlay
+      - name: Prepare Codex-core Zero3 shell overlay
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          node scripts/check-architecture.mjs
           node apps/zero3-desktop/scripts/prepare-upstream.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Zero3 Desktop preparation failed' }
           $stamp = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/public/zero3-upstream.json' | ConvertFrom-Json
           if ($stamp.product -ne 'Zero3 Pilot') { throw 'Zero3 provenance stamp missing product identity' }
+          if ($stamp.coreRuntime -ne 'openai-codex-app-server') { throw 'Codex must remain the target core runtime' }
+          if ($stamp.desktopShell -ne 'hermes-electron-react') { throw 'Hermes must remain the desktop UI shell' }
+          if ($stamp.deepseekRole -ne 'capability-donor') { throw 'DeepSeek must remain a capability donor' }
           if ($stamp.upstream.hermes -ne 'f7c79efbac19ae18e8dee7c79a4e4c0935299b5f') { throw 'Hermes pin mismatch in provenance stamp' }
           if (-not (Test-Path 'upstream/hermes-agent/apps/desktop/public/zero3-pilot.png')) { throw 'Zero3 public brand mark missing' }
           $about = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/settings/about-settings.tsx'
@@ -83,29 +91,24 @@ jobs:
           $languages = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/i18n/languages.ts'
           if ($languages -notmatch "DEFAULT_LOCALE: Locale = 'zh'") { throw 'Zero3 default locale must be Simplified Chinese' }
           $preload = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/preload.ts'
-          if ($preload -notmatch "exposeInMainWorld\('zero3Desktop'") { throw 'Zero3 preload bridge missing' }
-          if ($preload -match "zero3:request|zero3:fetch|zero3:proxy") { throw 'Zero3 preload must not expose a generic request proxy' }
           $main = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/main.ts'
-          if ($main -notmatch 'ZERO3_READ_ROUTES') { throw 'Zero3 main-process allowlist missing' }
-          @('/health','/api/v1/status','/api/v1/jobs','/api/v1/schedules','/api/v1/memory') | ForEach-Object {
-            if ($main -notmatch [regex]::Escape($_)) { throw "Zero3 read allowlist missing route: $_" }
-          }
-          $control = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/settings/zero3-control-settings.tsx'
-          if ($control -notmatch 'Zero3 总控') { throw 'Chinese-first Zero3 control surface missing' }
-          if ($control -notmatch '白名单 IPC') { throw 'Zero3 control surface must describe the native security boundary' }
+          if ($preload -match "zero3:chat|zero3:memory|zero3:schedule|zero3:browser|zero3:agent:dispatch") { throw 'Retired Zero3 Node runtime bridge leaked into target preload' }
+          if ($main -match "ZERO3_READ_ROUTES|zero3:chat:turn|zero3:memory:put|zero3:schedule:create|zero3:browser:") { throw 'Retired Zero3 Node runtime bridge leaked into target Electron main' }
 
       - name: Install Hermes Desktop dependencies
         working-directory: upstream/hermes-agent
         run: npm install --workspace apps/desktop
 
-      - name: Typecheck Zero3-branded Hermes Desktop
+      - name: Typecheck Zero3-branded Hermes UI shell
         working-directory: upstream/hermes-agent
         run: npm --workspace apps/desktop run typecheck
 
-      - name: Build Zero3-branded Hermes Desktop
+      - name: Build Zero3-branded Hermes UI shell
         working-directory: upstream/hermes-agent
         run: npm --workspace apps/desktop run build
 
+  # Legacy/extension provider evidence. These jobs do not define the target
+  # Agent Kernel; they remain until the capabilities are attached to Codex.
   real-browser-smoke:
     runs-on: ubuntu-latest
     steps:
@@ -122,7 +125,7 @@ jobs:
           test -n "$CHROME"
           "$CHROME" --version
           echo "ZERO3_CHROME_PATH=$CHROME" >> "$GITHUB_ENV"
-      - name: Real Chromium semantic BrowserProvider smoke
+      - name: Real Chromium extension-provider smoke
         run: cargo test -p zero3-providers --test browser_real -- --ignored --nocapture
 
   real-windows-ocu-smoke:
@@ -151,9 +154,10 @@ jobs:
           Start-Process notepad.exe
           Start-Sleep -Seconds 3
           Get-Process notepad -ErrorAction Stop | Select-Object -First 1 | Format-List Id,ProcessName,SessionId
-      - name: Real Windows OCU MCP handshake and UIA smoke
+      - name: Real Windows OCU extension-provider smoke
         run: cargo test -p zero3-providers --test open_computer_use_real -- --ignored --nocapture
 
+  # Legacy Node/Wry product evidence retained for migration safety only.
   windows-product-smoke:
     runs-on: windows-latest
     steps:
@@ -162,7 +166,7 @@ jobs:
           submodules: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build local Node, Weixin channel and native desktop
+      - name: Build legacy Node, Weixin channel and Wry desktop
         run: cargo build -p zero3-node -p zero3-weixin -p zero3-desktop
       - name: Weixin channel starts disconnected without credentials
         shell: pwsh
@@ -172,7 +176,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'zero3-pilot-weixin status failed' }
           $status = $out | ConvertFrom-Json
           if ($status.connected -ne $false) { throw 'fresh Weixin channel must start disconnected' }
-      - name: Start real local Node and verify API
+      - name: Start legacy extension Node and verify API
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -190,11 +194,10 @@ jobs:
             } catch {}
             Start-Sleep -Milliseconds 250
           }
-          if (-not $healthy) { throw 'zero3-pilot-node did not become healthy' }
+          if (-not $healthy) { throw 'legacy zero3-pilot-node did not become healthy' }
           $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8790/api/v1/status' -TimeoutSec 2
-          if ($status.status -ne 'ok') { throw 'node status API did not return ok' }
-          if ($status.agents.Count -lt 3) { throw 'node did not register all three subagents' }
-      - name: Create a real WebView2 desktop and exit cleanly
+          if ($status.status -ne 'ok') { throw 'legacy node status API did not return ok' }
+      - name: Create legacy real WebView2 desktop and exit cleanly
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -202,8 +205,8 @@ jobs:
           $env:ZERO3_DESKTOP_SMOKE_MS = '2000'
           $desktopPath = (Resolve-Path 'target\debug\zero3-pilot.exe').Path
           $desktop = Start-Process -FilePath $desktopPath -PassThru -Wait
-          if ($desktop.ExitCode -ne 0) { throw "zero3-pilot desktop exited with $($desktop.ExitCode)" }
-      - name: Stop product smoke Node
+          if ($desktop.ExitCode -ne 0) { throw "legacy zero3-pilot desktop exited with $($desktop.ExitCode)" }
+      - name: Stop legacy extension Node
         if: always()
         shell: pwsh
         run: |
@@ -219,7 +222,7 @@ jobs:
           submodules: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build release desktop bundle
+      - name: Build legacy installer bundle
         run: cargo build --release -p zero3-node -p zero3-weixin -p zero3-desktop
       - name: Resolve Inno Setup compiler
         shell: pwsh
@@ -235,13 +238,13 @@ jobs:
           }
           if (-not $iscc) { throw 'Inno Setup compiler not found' }
           "ZERO3_ISCC=$($iscc.Source ?? $iscc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Build Zero3Pilot-Setup.exe
+      - name: Build legacy Zero3Pilot-Setup.exe
         shell: pwsh
         run: |
           & $env:ZERO3_ISCC 'installer\Zero3Pilot.iss'
           if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
           if (-not (Test-Path 'dist\Zero3Pilot-Setup.exe')) { throw 'installer artifact missing' }
-      - name: Silent install smoke
+      - name: Silent legacy install smoke
         shell: pwsh
         run: |
           $installDir = Join-Path $env:RUNNER_TEMP 'Zero3PilotInstalled'
