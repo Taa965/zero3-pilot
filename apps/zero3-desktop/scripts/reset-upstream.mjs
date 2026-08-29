@@ -18,7 +18,9 @@ const generatedFiles = [
   path.join(hermesDesktopDir, 'public', 'zero3-upstream.json'),
   path.join(hermesDesktopDir, 'public', 'zero3-pilot.png'),
   path.join(hermesDesktopDir, 'src', 'app', 'settings', 'zero3-control-settings.tsx'),
-  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'primary-chat.ts')
+  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'primary-chat.ts'),
+  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'prompt-store.ts'),
+  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'prompt-overlay.tsx')
 ]
 for (const file of generatedFiles) {
   if (fs.existsSync(file)) fs.rmSync(file, { force: true })
