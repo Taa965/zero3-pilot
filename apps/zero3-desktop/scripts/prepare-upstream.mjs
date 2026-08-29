@@ -13,6 +13,8 @@ import {
   upstreamRoot,
   zero3Port
 } from './config.mjs'
+import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
+import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
 const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
 const brandedLocaleFiles = ['ar.ts', 'en.ts', 'ja.ts', 'zh-hant.ts', 'zh.ts']
@@ -68,7 +70,23 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/assets/icon.ico',
     'apps/desktop/assets/icon.png',
     'apps/desktop/public/apple-touch-icon.png',
+    'apps/desktop/src/app/chat/composer/status-stack/index.tsx',
+    'apps/desktop/src/app/command-palette/index.tsx',
+    'apps/desktop/src/app/context-menu/app-context-menu.tsx',
+    'apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts',
+    'apps/desktop/src/app/contrib/wiring.tsx',
+    'apps/desktop/src/app/settings/about-settings.tsx',
+    'apps/desktop/src/app/settings/connections-registry.tsx',
+    'apps/desktop/src/app/settings/index.tsx',
+    'apps/desktop/src/app/settings/providers-settings.tsx',
+    'apps/desktop/src/components/assistant-ui/thread/assistant-message.tsx',
+    'apps/desktop/src/components/boot-failure-overlay.tsx',
+    'apps/desktop/src/components/brand-mark.tsx',
     'apps/desktop/src/components/chat/intro.tsx',
+    'apps/desktop/src/components/onboarding/index.tsx',
+    'apps/desktop/src/i18n/languages.ts',
+    'apps/desktop/src/store/onboarding.ts',
+    'apps/desktop/src/store/updates.ts',
     ...brandedLocaleFiles.map(file => `apps/desktop/src/i18n/${file}`)
   ])
   const unexpected = trackedHermesChanges().filter(file => !allowed.has(file))
@@ -81,12 +99,35 @@ function assertOnlyOverlayChanges() {
   }
 }
 
+function brandLocaleText(source) {
+  // Locale files mix user-facing strings with TypeScript identifiers such as
+  // `startingHermesDesktop`. A global Hermes -> Zero3 replacement corrupts
+  // those identifiers. Only rewrite the portion of a line after its first
+  // string delimiter, which covers locale copy while leaving keys/import names
+  // intact. Multi-line values begin with their delimiter on the continuation
+  // line and are handled the same way.
+  return source
+    .split('\n')
+    .map(line => {
+      const indexes = [line.indexOf("'"), line.indexOf('"'), line.indexOf('`')].filter(index => index >= 0)
+      if (indexes.length === 0) return line
+      const start = Math.min(...indexes)
+      return line.slice(0, start) + line.slice(start).replaceAll('Hermes', 'Zero3 Pilot')
+    })
+    .join('\n')
+}
+
 function applyBrandOverlay() {
   const packagePath = path.join(hermesDesktopDir, 'package.json')
   const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
 
   packageJson.productName = 'Zero3 Pilot'
   packageJson.description = 'Zero3 Pilot desktop shell based on the pinned Hermes Desktop architecture.'
+  packageJson.author = 'Zero3 Pilot'
+  packageJson.repository = {
+    type: 'git',
+    url: 'git+https://github.com/Taa965/zero3-pilot.git'
+  }
   packageJson.build = packageJson.build ?? {}
   packageJson.build.appId = 'ai.zero3.pilot'
   packageJson.build.productName = 'Zero3 Pilot'
@@ -131,12 +172,7 @@ function applyBrandOverlay() {
   for (const file of brandedLocaleFiles) {
     const localePath = path.join(hermesDesktopDir, 'src', 'i18n', file)
     const locale = fs.readFileSync(localePath, 'utf8')
-    const productBranded = locale
-      .replaceAll('Hermes Agent', 'Zero3 Pilot')
-      .replaceAll('HERMES AGENT', 'ZERO3 PILOT')
-      .replaceAll("Hermes couldn't start", "Zero3 Pilot couldn't start")
-      .replaceAll('recommended way to run Hermes', 'recommended way to run Zero3 Pilot')
-    fs.writeFileSync(localePath, productBranded)
+    fs.writeFileSync(localePath, brandLocaleText(locale))
   }
 
   const introPath = path.join(hermesDesktopDir, 'src', 'components', 'chat', 'intro.tsx')
@@ -153,7 +189,8 @@ function applyBrandOverlay() {
     ['zero3-pilot.png', path.join(hermesDesktopDir, 'assets', 'icon.png')],
     ['zero3-pilot.ico', path.join(hermesDesktopDir, 'assets', 'icon.ico')],
     ['zero3-pilot.icns', path.join(hermesDesktopDir, 'assets', 'icon.icns')],
-    ['zero3-pilot.png', path.join(publicDir, 'apple-touch-icon.png')]
+    ['zero3-pilot.png', path.join(publicDir, 'apple-touch-icon.png')],
+    ['zero3-pilot.png', path.join(publicDir, 'zero3-pilot.png')]
   ]
   for (const [sourceName, target] of brandFiles) {
     const source = path.join(brandAssetsDir, sourceName)
@@ -206,11 +243,15 @@ assertPin('Hermes Agent', hermesRoot, pins.hermes)
 assertPin('DeepSeek Harness', deepseekRoot, pins.deepseek)
 assertOnlyOverlayChanges()
 applyBrandOverlay()
+applyZero3ShellPolicy()
+applyZero3ChineseUi()
 installZero3HermesSkill()
 
 console.log('Zero3 Desktop upstream prepared successfully.')
-console.log(`Hermes Desktop: ${pins.hermes}`)
+console.log(`Hermes Desktop source pin: ${pins.hermes}`)
 console.log(`Codex app-server source: ${pins.codex}`)
 console.log(`DeepSeek Harness source: ${pins.deepseek}`)
+console.log('Zero3 shell policy: upstream commercial, diagnostics and self-update surfaces disabled')
+console.log('Zero3 UI policy: Simplified Chinese is the default locale; explicit user language choices remain supported')
 console.log(`Zero3 Hermes home: ${resolveHermesHome()}`)
 console.log(`Zero3 Node endpoint: http://127.0.0.1:${zero3Port}`)
