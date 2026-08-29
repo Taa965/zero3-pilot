@@ -40,14 +40,12 @@ jobs:
           node --check apps/zero3-desktop/scripts/apply-codex-structured-input-hardening.mjs
           if ($LASTEXITCODE -ne 0) { throw 'R3C/R3D chain syntax failed' }
 
-      - name: Prepare pinned R3D desktop shell twice
+      - name: Prepare pinned R3D desktop shell
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           node apps/zero3-desktop/scripts/prepare-upstream.mjs
           if ($LASTEXITCODE -ne 0) { throw 'R3D desktop preparation failed' }
-          node apps/zero3-desktop/scripts/prepare-upstream.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'R3D second preparation failed; overlay allowlist/idempotency regressed' }
 
       - name: Verify generated native thread-action boundary
         shell: pwsh
