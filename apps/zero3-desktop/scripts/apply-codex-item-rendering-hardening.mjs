@@ -124,6 +124,11 @@ export function applyZero3CodexItemRenderingHardening() {
         "    : projectCodexReasoningDelta(messages, id, delta, occurredAt)\n" +
         "}\n\n" +
         "export function projectCodexCommandOutputDelta(messages: ChatMessage[], id: string, delta: string): ChatMessage[] {"
+    },
+    {
+      label: 'pending terminal output preview payload',
+      from: "    { id, name: 'terminal', preview },",
+      to: "    { id, name: 'terminal', args: { output_preview: preview } },"
     }
   ])
 
@@ -166,6 +171,24 @@ export function applyZero3CodexItemRenderingHardening() {
         "            threadId\n" +
         "          )\n" +
         "        }"
+    }
+  ])
+
+  patchFile('src/components/assistant-ui/tool/fallback-model/index.ts', [
+    {
+      label: 'pending terminal output subtitle',
+      from: "    const output = firstStringField(resultRecord, ['output', 'stdout', 'stderr'])",
+      to:
+        "    const output = firstStringField(resultRecord, ['output', 'stdout', 'stderr']) || " +
+        "firstStringField(argsRecord, ['output_preview'])"
+    },
+    {
+      label: 'pending terminal output detail',
+      from: "    const output = firstStringField(resultRecord, ['output', 'stdout', 'stderr'])",
+      to:
+        "    const output =\n" +
+        "      firstStringField(resultRecord, ['output', 'stdout', 'stderr']) ||\n" +
+        "      firstStringField(argsRecord, ['output_preview'])"
     }
   ])
 }
