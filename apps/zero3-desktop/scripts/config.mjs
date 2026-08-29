@@ -17,8 +17,6 @@ export const pins = Object.freeze({
   deepseek: 'cd5ef8148158c3a752a658978873241fdf8e2bbc'
 })
 
-export const zero3Port = Number.parseInt(process.env.ZERO3_PILOT_NODE_PORT ?? '8790', 10)
-
 export function resolveHermesHome() {
   if (process.env.ZERO3_HERMES_HOME) return path.resolve(process.env.ZERO3_HERMES_HOME)
   if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
@@ -27,11 +25,17 @@ export function resolveHermesHome() {
   return path.join(os.homedir(), '.local', 'share', 'zero3-pilot', 'hermes')
 }
 
-export function zero3NodeBinary() {
-  const explicit = process.env.ZERO3_PILOT_NODE_BIN
-  if (explicit) return path.resolve(explicit)
-  const exe = process.platform === 'win32' ? 'zero3-pilot-node.exe' : 'zero3-pilot-node'
-  return path.join(repoRoot, 'target', 'debug', exe)
+export function resolveCodexHome() {
+  if (process.env.ZERO3_CODEX_HOME) return path.resolve(process.env.ZERO3_CODEX_HOME)
+  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+    return path.join(process.env.LOCALAPPDATA, 'Zero3Pilot', 'codex')
+  }
+  return path.join(os.homedir(), '.local', 'share', 'zero3-pilot', 'codex')
+}
+
+export function pinnedCodexBinary() {
+  const exe = process.platform === 'win32' ? 'codex.exe' : 'codex'
+  return path.join(codexRoot, 'codex-rs', 'target', 'debug', exe)
 }
 
 export function commandName(base) {
