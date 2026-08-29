@@ -34,6 +34,15 @@ jobs:
       - name: test
         run: cargo test --workspace
 
+      - name: Zero3 Desktop v3 orchestrator syntax
+        run: |
+          node --check apps/zero3-desktop/scripts/config.mjs
+          node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
+          node --check apps/zero3-desktop/scripts/run.mjs
+          node --check apps/zero3-desktop/scripts/reset-upstream.mjs
+          test "$(git config -f .gitmodules --get submodule.upstream/hermes-agent.path)" = "upstream/hermes-agent"
+          test "$(git config -f .gitmodules --get submodule.upstream/deepseek-harness.path)" = "upstream/deepseek-harness"
+
   real-browser-smoke:
     runs-on: ubuntu-latest
     steps:
@@ -90,7 +99,7 @@ jobs:
           submodules: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build local Node, Weixin channel and native desktop launcher
+      - name: Build local Node, Weixin channel and native desktop
         run: cargo build -p zero3-node -p zero3-weixin -p zero3-desktop
       - name: Weixin channel starts disconnected without credentials
         shell: pwsh
@@ -122,26 +131,15 @@ jobs:
           $status = Invoke-RestMethod -Uri 'http://127.0.0.1:8790/api/v1/status' -TimeoutSec 2
           if ($status.status -ne 'ok') { throw 'node status API did not return ok' }
           if ($status.agents.Count -lt 3) { throw 'node did not register all three subagents' }
-      - name: Capture native Codex desktop handoff and exit cleanly
+      - name: Create a real WebView2 desktop and exit cleanly
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $env:ZERO3_PILOT_NODE_PORT = '8790'
-          $env:ZERO3_DISABLE_CODEX_SKILL_SYNC = '1'
-          $workspace = Join-Path $env:RUNNER_TEMP 'Zero3 Codex Workspace'
-          New-Item -ItemType Directory -Force -Path $workspace | Out-Null
-          $capture = Join-Path $env:RUNNER_TEMP 'zero3-codex-deeplink.txt'
-          $env:ZERO3_CODEX_WORKSPACE = $workspace
-          $env:ZERO3_CODEX_TEST_CAPTURE_URL = $capture
+          $env:ZERO3_DESKTOP_SMOKE_MS = '2000'
           $desktopPath = (Resolve-Path 'target\debug\zero3-pilot.exe').Path
           $desktop = Start-Process -FilePath $desktopPath -PassThru -Wait
-          if ($desktop.ExitCode -ne 0) { throw "zero3-pilot launcher exited with $($desktop.ExitCode)" }
-          if (-not (Test-Path $capture)) { throw 'Codex deep-link capture missing' }
-          $url = (Get-Content -Raw $capture).Trim()
-          $prefix = 'codex://threads/new?path='
-          if (-not $url.StartsWith($prefix)) { throw "unexpected Codex deep link: $url" }
-          $decoded = [System.Uri]::UnescapeDataString($url.Substring($prefix.Length))
-          if ($decoded -ne $workspace) { throw "Codex workspace mismatch: $decoded != $workspace" }
+          if ($desktop.ExitCode -ne 0) { throw "zero3-pilot desktop exited with $($desktop.ExitCode)" }
       - name: Stop product smoke Node
         if: always()
         shell: pwsh
