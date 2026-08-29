@@ -2,29 +2,34 @@
 
 `zero3-pilot` is now a Windows-first **launcher/sidecar bootstrapper**, not a custom desktop shell.
 
-The visible desktop shell is the installed **Codex Desktop** app. Zero3 keeps its own local runtime (`zero3-pilot-node.exe`) on loopback and exposes Zero3-specific capabilities to Codex through workspace skills/plugins and the local Node API.
+The visible desktop shell is the installed **Codex Desktop** app. Zero3 keeps its own local runtime (`zero3-pilot-node.exe`) on loopback and exposes Zero3-specific capabilities to Codex through skills/plugins and the local Node API.
 
 ## Startup flow
 
 1. Reuse a healthy Zero3 Pilot Node on `127.0.0.1:8790`, or start the sibling `zero3-pilot-node.exe`.
-2. Verify that the native Codex Desktop app is installed on Windows.
-3. Open the selected workspace using the native `codex://threads/new?path=...` deep link.
-4. Leave the Zero3 Node running as a background sidecar so jobs, schedules, browser sessions, memory, and agent dispatch can continue independently of the Codex window.
+2. Sync the bundled `zero3-pilot` skill into the user's `~/.agents/skills` directory unless explicitly disabled.
+3. Resolve the workspace from `ZERO3_CODEX_WORKSPACE`, the first launcher argument, or the current working directory.
+4. Verify that the native Codex Desktop app is installed on Windows.
+5. Open the selected workspace using the native `codex://threads/new?path=...` deep link.
+6. Leave the Zero3 Node running as a background sidecar so jobs, schedules, browser sessions, memory, and agent dispatch can continue independently of the Codex window.
 
-This deliberately removes Tao/Wry/WebView2 from the product-shell path. Those dependencies remain in the manifest temporarily so the existing workspace lockfile does not churn in this migration branch; they can be deleted together with the next dependency-lock refresh.
+This deliberately removes Tao/Wry/WebView2 from the product-shell path. Those dependencies remain in the manifest temporarily so the existing workspace lockfile does not churn in this migration branch; they can be deleted together with the next intentional dependency-lock refresh.
 
 ## Environment
 
 - `ZERO3_PILOT_NODE_PORT` — local Node port, default `8790`.
 - `ZERO3_PILOT_NODE_BIN` — explicit path to `zero3-pilot-node.exe`.
-- `ZERO3_CODEX_WORKSPACE` — directory Codex Desktop should open. Defaults to the launcher's current working directory.
+- `ZERO3_CODEX_WORKSPACE` — directory Codex Desktop should open. A first positional launcher argument can also supply the workspace; otherwise the current working directory is used.
+- `ZERO3_DISABLE_CODEX_SKILL_SYNC=1` — do not sync the bundled Zero3 skill into the user's global Codex skill directory.
+
+`ZERO3_CODEX_TEST_CAPTURE_URL` is a CI-only seam. When set to a file path, the launcher writes the generated `codex://` deep link there instead of requiring/invoking a Microsoft Store Codex installation. Production launch paths should not set it.
 
 ## Integration boundary
 
 The Codex Desktop renderer is not copied or forked here. Zero3 integrates at supported/stable seams instead:
 
 - Codex native desktop shell for conversation, projects, diffs, terminal, permissions, and agent UX.
-- Workspace skills/plugins for Zero3 commands and tool discovery.
+- Skills/plugins for Zero3 commands and tool discovery.
 - Zero3 Pilot Node for persistent jobs, schedules, memory, browser/CDP, computer use, and external Agent adapters.
 - Codex/app-server integration can be added behind the same sidecar boundary without returning to a custom WebView shell.
 
