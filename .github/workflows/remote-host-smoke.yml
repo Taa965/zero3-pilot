@@ -1,0 +1,73 @@
+name: Remote Host H0-H3 Smoke
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  remote-host:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize pinned desktop upstreams
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
+          if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Architecture guards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/check-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'base architecture guard failed' }
+          node scripts/check-remote-host-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'remote host architecture guard failed' }
+          node --check apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'remote host overlay syntax failed' }
+
+      - name: Prepare pinned desktop with Remote Host
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node apps/zero3-desktop/scripts/prepare-upstream.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'desktop prepare failed' }
+
+      - name: Verify generated Remote Host boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $main = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/main.ts'
+          if ($main -notmatch 'Zero3RemoteNode') { throw 'generated Electron main does not include Zero3RemoteNode' }
+          if ($main -notmatch 'zero3CodexLocalEventListeners') { throw 'generated main is missing local Codex event fanout' }
+          if ($main -notmatch "thread/start") { throw 'generated main lost Codex Thread transport' }
+          if ($main -notmatch "turn/start") { throw 'generated main lost Codex Turn transport' }
+          if ($main -match 'ZERO3_PILOT_NODE_PORT') { throw 'legacy Zero3 Node runtime leaked into Remote Host path' }
+          if ($main -match "ipcRenderer\.invoke\('zero3:codex:(rpc|proxy)'" ) { throw 'generic Codex Renderer proxy detected' }
+
+          $runner = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/zero3/remote-host/remote-task-runner.ts'
+          if ($runner -notmatch "this\.codex\.request\('thread/start'") { throw 'remote task does not enter Codex Thread runtime' }
+          if ($runner -notmatch "'turn/start'") { throw 'remote task does not enter Codex Turn runtime' }
+          if ($runner -notmatch "sandbox: 'read-only'") { throw 'remote H3 widened default sandbox' }
+
+      - name: Install desktop dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --workspace apps/desktop
+        working-directory: upstream/hermes-agent
+
+      - name: Typecheck pinned desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm --workspace apps/desktop run typecheck
+        working-directory: upstream/hermes-agent
