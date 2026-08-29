@@ -97,6 +97,24 @@ function assertOnlyOverlayChanges() {
   }
 }
 
+function brandLocaleText(source) {
+  // Locale files mix user-facing strings with TypeScript identifiers such as
+  // `startingHermesDesktop`. A global Hermes -> Zero3 replacement corrupts
+  // those identifiers. Only rewrite the portion of a line after its first
+  // string delimiter, which covers locale copy while leaving keys/import names
+  // intact. Multi-line values begin with their delimiter on the continuation
+  // line and are handled the same way.
+  return source
+    .split('\n')
+    .map(line => {
+      const indexes = [line.indexOf("'"), line.indexOf('"'), line.indexOf('`')].filter(index => index >= 0)
+      if (indexes.length === 0) return line
+      const start = Math.min(...indexes)
+      return line.slice(0, start) + line.slice(start).replaceAll('Hermes', 'Zero3 Pilot')
+    })
+    .join('\n')
+}
+
 function applyBrandOverlay() {
   const packagePath = path.join(hermesDesktopDir, 'package.json')
   const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
@@ -152,13 +170,7 @@ function applyBrandOverlay() {
   for (const file of brandedLocaleFiles) {
     const localePath = path.join(hermesDesktopDir, 'src', 'i18n', file)
     const locale = fs.readFileSync(localePath, 'utf8')
-    const productBranded = locale
-      .replaceAll('Hermes Agent', 'Zero3 Pilot')
-      .replaceAll('HERMES AGENT', 'ZERO3 PILOT')
-      .replaceAll("Hermes couldn't start", "Zero3 Pilot couldn't start")
-      .replaceAll('recommended way to run Hermes', 'recommended way to run Zero3 Pilot')
-      .replaceAll('Hermes', 'Zero3 Pilot')
-    fs.writeFileSync(localePath, productBranded)
+    fs.writeFileSync(localePath, brandLocaleText(locale))
   }
 
   const introPath = path.join(hermesDesktopDir, 'src', 'components', 'chat', 'intro.tsx')
