@@ -18,7 +18,7 @@ Exact SHAs live in `scripts/config.mjs`; preparation refuses to continue when a 
 
 `npm run prepare` applies two deterministic overlays to the pinned Hermes Desktop source:
 
-1. **Zero3 product branding** — app identity, wordmark, icons, renderer brand mark, installer metadata, package author/repository metadata and user-facing product copy become Zero3 Pilot.
+1. **Zero3 product branding** — app identity, wordmark, icons, renderer brand mark, installer metadata, package author/repository metadata and user-facing product copy become Zero3 Pilot. Locale branding is string-literal aware so TypeScript identifiers from the pinned upstream are never rewritten.
 2. **Zero3 product policy** — upstream commercial and distribution surfaces that do not belong in Zero3 are disabled while reusable open-source Agent functionality is retained.
 
 The current policy removes these upstream product surfaces from the Zero3 user experience:
