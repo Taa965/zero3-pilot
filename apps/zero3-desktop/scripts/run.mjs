@@ -17,12 +17,16 @@ if (!allowedModes.has(mode)) {
   throw new Error(`Unsupported Zero3 Desktop mode: ${mode}`)
 }
 
+function needsShell(file) {
+  return process.platform === 'win32' && file.toLowerCase().endsWith('.cmd')
+}
+
 function runSync(file, args, options = {}) {
   const result = spawnSync(file, args, {
     cwd: options.cwd ?? repoRoot,
     env: options.env ?? process.env,
     stdio: 'inherit',
-    shell: false
+    shell: options.shell ?? needsShell(file)
   })
   if (result.error) throw result.error
   if (result.status !== 0) {
@@ -80,15 +84,19 @@ async function ensureZero3Node() {
 
 function ensureHermesDependencies(env) {
   if (fs.isDirectory(path.join(hermesRoot, 'node_modules'))) return
-  runSync(commandName('npm'), ['install'], { cwd: hermesRoot, env })
+  runSync(commandName('npm'), ['install', '--workspace', 'apps/desktop'], {
+    cwd: hermesRoot,
+    env
+  })
 }
 
 function runHermesDesktop(script, env) {
-  const child = spawn(commandName('npm'), ['--workspace', 'apps/desktop', 'run', script], {
+  const command = commandName('npm')
+  const child = spawn(command, ['--workspace', 'apps/desktop', 'run', script], {
     cwd: hermesRoot,
     env,
     stdio: 'inherit',
-    shell: false
+    shell: needsShell(command)
   })
   return new Promise((resolve, reject) => {
     child.once('error', reject)
