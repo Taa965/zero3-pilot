@@ -67,7 +67,9 @@ fn print_usage() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let command = std::env::args().nth(1).unwrap_or_else(|| "help".to_string());
+    let command = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "help".to_string());
     let state_path = data_dir().join("weixin-clawbot.json");
     let weixin = WeixinClawBotClient::open(state_path)?;
 
@@ -226,7 +228,9 @@ fn validate_backend(backend: &str) -> anyhow::Result<()> {
     if matches!(backend, "codex" | "claude" | "hermes") {
         Ok(())
     } else {
-        Err(anyhow!("未知 Agent {backend:?}; 仅支持 codex/claude/hermes"))
+        Err(anyhow!(
+            "未知 Agent {backend:?}; 仅支持 codex/claude/hermes"
+        ))
     }
 }
 
@@ -235,7 +239,10 @@ async fn ensure_node_healthy() -> anyhow::Result<()> {
         .await
         .context("连接本地 Zero3 Pilot Node")?;
     if response.status() != StatusCode::OK {
-        return Err(anyhow!("本地 Zero3 Pilot Node 未就绪: {}", response.status()));
+        return Err(anyhow!(
+            "本地 Zero3 Pilot Node 未就绪: {}",
+            response.status()
+        ));
     }
     Ok(())
 }

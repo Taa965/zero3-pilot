@@ -266,7 +266,11 @@ impl WeixinClawBotClient {
 
         match response.status.as_str() {
             "wait" => Ok(login_poll(WeixinLoginState::Waiting, false, "等待扫码")),
-            "scaned" => Ok(login_poll(WeixinLoginState::Scanned, false, "已扫码，等待手机确认")),
+            "scaned" => Ok(login_poll(
+                WeixinLoginState::Scanned,
+                false,
+                "已扫码，等待手机确认",
+            )),
             "need_verifycode" => Ok(login_poll(
                 WeixinLoginState::NeedVerifyCode,
                 false,
@@ -274,7 +278,11 @@ impl WeixinClawBotClient {
             )),
             "expired" => {
                 self.login_sessions.lock().await.remove(session_key);
-                Ok(login_poll(WeixinLoginState::Expired, false, "二维码已过期，请重新生成"))
+                Ok(login_poll(
+                    WeixinLoginState::Expired,
+                    false,
+                    "二维码已过期，请重新生成",
+                ))
             }
             "verify_code_blocked" => Ok(login_poll(
                 WeixinLoginState::VerifyCodeBlocked,
@@ -295,7 +303,11 @@ impl WeixinClawBotClient {
                         value.current_base_url = format!("https://{host}");
                     }
                 }
-                Ok(login_poll(WeixinLoginState::Scanned, false, "已扫码，正在切换微信接入节点"))
+                Ok(login_poll(
+                    WeixinLoginState::Scanned,
+                    false,
+                    "已扫码，正在切换微信接入节点",
+                ))
             }
             "confirmed" => {
                 let credentials = WeixinCredentials {
@@ -343,7 +355,10 @@ impl WeixinClawBotClient {
             .await
             .clone()
             .ok_or_else(|| anyhow!("Weixin ClawBot is not connected"))?;
-        let url = format!("{}/ilink/bot/getupdates", credentials.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/ilink/bot/getupdates",
+            credentials.base_url.trim_end_matches('/')
+        );
         let response = self
             .http
             .post(url)
@@ -392,7 +407,10 @@ impl WeixinClawBotClient {
             .await
             .clone()
             .ok_or_else(|| anyhow!("Weixin ClawBot is not connected"))?;
-        let url = format!("{}/ilink/bot/sendmessage", credentials.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/ilink/bot/sendmessage",
+            credentials.base_url.trim_end_matches('/')
+        );
         let response = self
             .http
             .post(url)
@@ -414,7 +432,10 @@ impl WeixinClawBotClient {
             .context("send Weixin ClawBot message")?
             .error_for_status()
             .context("Weixin sendmessage returned an HTTP error")?;
-        let body = response.json::<Value>().await.context("decode Weixin send response")?;
+        let body = response
+            .json::<Value>()
+            .await
+            .context("decode Weixin send response")?;
         if body.get("ret").and_then(Value::as_i64).unwrap_or(0) != 0 {
             return Err(anyhow!("Weixin sendmessage failed: {body}"));
         }
@@ -444,7 +465,10 @@ fn common_headers() -> anyhow::Result<HeaderMap> {
 
 fn auth_headers(token: Option<&str>) -> anyhow::Result<HeaderMap> {
     let mut headers = common_headers()?;
-    headers.insert("AuthorizationType", HeaderValue::from_static("ilink_bot_token"));
+    headers.insert(
+        "AuthorizationType",
+        HeaderValue::from_static("ilink_bot_token"),
+    );
     let uin = Uuid::new_v4().as_u128() as u32;
     let encoded = base64::engine::general_purpose::STANDARD.encode(uin.to_string());
     headers.insert(
@@ -480,10 +504,20 @@ fn persist_credentials(path: &Path, credentials: &WeixinCredentials) -> anyhow::
     {
         use std::io::Write;
         let mut file = std::fs::File::create(&temp).context("create temporary Weixin state")?;
-        file.write_all(&bytes).context("write temporary Weixin state")?;
+        file.write_all(&bytes)
+            .context("write temporary Weixin state")?;
         file.sync_all().context("sync temporary Weixin state")?;
     }
-    std::fs::rename(&temp, path).context("atomically replace Weixin state")?;
+    match std::fs::rename(&temp, path) {
+        Ok(()) => {}
+        Err(_error) if cfg!(windows) => {
+            if path.exists() {
+                std::fs::remove_file(path).context("replace existing Weixin state on Windows")?;
+            }
+            std::fs::rename(&temp, path).context("finish replacing Weixin state on Windows")?;
+        }
+        Err(error) => return Err(error).context("atomically replace Weixin state"),
+    }
     Ok(())
 }
 
@@ -530,6 +564,11 @@ mod tests {
             get_updates_buf: "buf".into(),
         };
         persist_credentials(&path, &credentials).unwrap();
-        assert_eq!(load_credentials(&path).unwrap().unwrap().bot_token, "secret");
+        let mut updated = credentials.clone();
+        updated.get_updates_buf = "buf2".into();
+        persist_credentials(&path, &updated).unwrap();
+        let loaded = load_credentials(&path).unwrap().unwrap();
+        assert_eq!(loaded.bot_token, "secret");
+        assert_eq!(loaded.get_updates_buf, "buf2");
     }
 }
