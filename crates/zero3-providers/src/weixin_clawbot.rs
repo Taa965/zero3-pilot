@@ -290,7 +290,13 @@ impl WeixinClawBotClient {
                 "配对码多次错误，请稍后重新连接",
             )),
             "binded_redirect" => {
+                let has_credentials = self.credentials.lock().await.is_some();
                 self.login_sessions.lock().await.remove(session_key);
+                if !has_credentials {
+                    return Err(anyhow!(
+                        "Weixin reports this bot is already bound, but local credentials are missing; reconnect after clearing the existing Weixin binding"
+                    ));
+                }
                 Ok(login_poll(
                     WeixinLoginState::AlreadyConnected,
                     true,
