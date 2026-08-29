@@ -37,7 +37,7 @@ for (const required of [
   'boundary.soleUserInTurn',
   'boundary.hasImageInput',
   'revertBeforeTurn({ threadId, beforeTurnId: boundary.turnId })',
-  "onEdit: edited => void (codexPrimaryChat.enabled ? codexPrimaryChat.editMessage(edited) : editMessage(edited))",
+  'codexPrimaryChat.enabled ? codexPrimaryChat.editMessage(edited) : editMessage(edited)',
   "provenance.historyPhase = 'R3F-codex-authoritative-history'"
 ]) {
   requireText(history, required, `R3F authoritative history is missing required behavior: ${required}`)
