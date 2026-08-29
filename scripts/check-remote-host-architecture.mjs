@@ -22,6 +22,7 @@ const remoteProtocol = read('apps/zero3-desktop/host-runtime/remote-types.ts')
 const prepare = read('apps/zero3-desktop/scripts/prepare-upstream.mjs')
 const overlay = read('apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs')
 const taskRunner = read('apps/zero3-desktop/host-runtime/remote-task-runner.ts')
+const mappingStore = read('apps/zero3-desktop/host-runtime/remote-mapping-store.ts')
 const remoteNode = read('apps/zero3-desktop/host-runtime/remote-node.ts')
 const remoteClient = read('apps/zero3-desktop/host-runtime/remote-client.ts')
 const remoteConfig = read('apps/zero3-desktop/host-runtime/remote-config.ts')
@@ -43,6 +44,14 @@ requireText(taskRunner, 'this.codex.readThread(', 'Remote task completion must b
 requireText(taskRunner, "approvalPolicy: 'on-request'", 'Remote tasks must retain on-request approvals.')
 requireText(taskRunner, "sandbox: 'read-only'", 'H3 must not silently widen the existing default sandbox.')
 requireText(taskRunner, 'zero3RemoteWorkspaceAllowed', 'Remote task workspaces must be locally allow-listed.')
+requireText(taskRunner, 'this.mappings.get(task.task_id)', 'Remote task idempotency must consult durable task mapping state.')
+requireText(taskRunner, 'await this.mappings.put(mapping)', 'Remote Codex Thread/Turn mappings must be persisted before later retries.')
+requireText(taskRunner, 'task_id is already bound to a different execution_id', 'task_id collisions must fail closed.')
+requireText(taskRunner, 'target.base_ref requires a future Codex-authoritative Git preflight', 'Unsupported base_ref checks must fail closed rather than be guessed.')
+requireText(taskRunner, 'execution.require_clean_worktree requires a future Codex-authoritative Git preflight', 'Unsupported clean-worktree checks must fail closed rather than bypass Codex.')
+requireText(mappingStore, 'task-mappings.json', 'Durable task mapping state must remain an explicit host-owned artifact.',)
+requireText(mappingStore, 'fs.rename(temporary, this.file)', 'Task mapping updates must replace durable state atomically after writing a temporary file.')
+requireText(remoteNode, "terminalState = error instanceof Zero3RemoteTaskBlockedError ? 'blocked' : 'failed'", 'Fail-closed preflight rejections must report blocked, not execution failure.')
 requireText(remoteNode, 'this.client.lease(25)', 'Remote Host must use outbound task lease transport.')
 requireText(remoteNode, 'this.client.renew(taskId, lease)', 'Remote Host must renew the active task lease while Codex runs.')
 requireText(remoteNode, 'this.client.close()', 'Remote Host shutdown must cancel outstanding control-plane requests.')
@@ -50,21 +59,24 @@ requireText(remoteClient, 'authorization', 'Remote Host control-plane requests m
 requireText(remoteClient, 'AbortController', 'Remote Host requests must be bounded/cancellable.')
 requireText(remoteClient, 'MAX_REQUEST_BYTES', 'Remote Host outbound payloads must be bounded.')
 requireText(remoteConfig, "parsed.protocol !== 'https:'", 'Remote Host production control plane must require HTTPS.')
+requireText(remoteConfig, 'ZERO3_REMOTE_HOST_MAPPING_STATE_FILE', 'Remote Host mapping-state path must be explicit and locally configurable.')
 requireText(overlay, 'Zero3RemoteNode', 'Desktop overlay must install the Remote Host runtime.')
+requireText(overlay, "'remote-mapping-store.ts'", 'Desktop overlay must ship the durable task mapping store.')
 requireText(overlay, "startThread: params => zero3CodexAppServer.request('thread/start', params)", 'Remote Host must adapt to the existing Codex app-server Thread boundary.')
 requireText(overlay, "startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs)", 'Remote Host must adapt to the existing Codex app-server Turn boundary.')
 requireText(overlay, "readThread: params => zero3CodexAppServer.request('thread/read', params)", 'Remote Host must observe the existing Codex Thread boundary.')
 requireText(prepare, 'applyZero3RemoteHostRuntime()', 'Desktop prepare must apply the Remote Host runtime overlay.')
 
-for (const source of [taskRunner, remoteNode, remoteClient]) {
+for (const source of [taskRunner, mappingStore, remoteNode, remoteClient]) {
   for (const forbidden of ['ZERO3_PILOT_NODE_PORT', 'requestGateway(', 'zero3:chat:turn', 'hermes serve']) {
     forbidText(source, forbidden, `Remote Host must not regain legacy/Hermes runtime authority: ${forbidden}`)
   }
 }
 
-for (const forbidden of ['child_process.exec(', 'child_process.spawn(', 'execFile(', 'powershell.exe', 'cmd.exe /c']) {
-  forbidText(taskRunner, forbidden, `Remote Task Runner must not implement a direct remote shell: ${forbidden}`)
-  forbidText(remoteNode, forbidden, `Remote Node must not implement a direct remote shell: ${forbidden}`)
+for (const forbidden of ['child_process', 'exec(', 'spawn(', 'execFile(', 'powershell.exe', 'cmd.exe /c', 'simple-git']) {
+  forbidText(taskRunner, forbidden, `Remote Task Runner must not implement a direct remote shell/Git bypass: ${forbidden}`)
+  forbidText(mappingStore, forbidden, `Remote mapping state must not execute commands: ${forbidden}`)
+  forbidText(remoteNode, forbidden, `Remote Node must not implement a direct remote shell/Git bypass: ${forbidden}`)
 }
 
 for (const forbidden of ["ipcRenderer.invoke('zero3:codex:rpc'", "ipcRenderer.invoke('zero3:codex:proxy'"]) {
@@ -75,4 +87,4 @@ forbidText(taskRunner, 'request(method:', 'Remote Task Runner must not receive a
 forbidText(taskRunner, 'onEvent(', 'H3 uses authoritative Thread reads rather than patching the shared Codex event broadcaster.')
 forbidText(overlay, 'zero3CodexLocalEventListeners', 'Remote Host must not mutate the shared Codex transport event broadcaster.')
 
-console.log('Zero3 Remote Host architecture guard passed: outbound control plane -> typed Remote Task -> narrow existing Zero3CodexAppServer Thread/Turn/read adapter -> pinned Codex runtime, with bounded/cancellable transport and lease renewal.')
+console.log('Zero3 Remote Host architecture guard passed: outbound control plane -> durable task identity -> narrow existing Zero3CodexAppServer Thread/Turn/read adapter -> pinned Codex runtime, with fail-closed Git preconditions and no shell/Git bypass.')
