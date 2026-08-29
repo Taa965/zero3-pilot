@@ -160,6 +160,8 @@ struct ScheduleCreateRequest {
 #[derive(Debug, Deserialize)]
 struct ScheduleEnabledRequest {
     enabled: bool,
+    #[serde(flatten)]
+    approval: ApprovalContext,
 }
 
 #[derive(Debug, Deserialize)]
@@ -609,6 +611,19 @@ async fn set_schedule_enabled(
     Json(request): Json<ScheduleEnabledRequest>,
 ) -> Result<Json<Value>, ApiError> {
     enforce_origin(&headers, &state)?;
+    let (action, required_level) = if request.enabled {
+        ("enable", PermissionLevel::Elevated)
+    } else {
+        ("disable", PermissionLevel::Standard)
+    };
+    action_gate(
+        request.approval.granted_level,
+        request.approval.approved,
+        "scheduler",
+        action,
+        required_level,
+        true,
+    )?;
     let changed = state
         .scheduler
         .set_enabled(id, request.enabled)
@@ -623,8 +638,17 @@ async fn delete_schedule(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
+    Query(approval): Query<ApprovalContext>,
 ) -> Result<StatusCode, ApiError> {
     enforce_origin(&headers, &state)?;
+    action_gate(
+        approval.granted_level,
+        approval.approved,
+        "scheduler",
+        "delete",
+        PermissionLevel::FullControl,
+        false,
+    )?;
     if state.scheduler.delete(id).map_err(ApiError::internal)? {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -813,6 +837,7 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use axum::body::Body;
     use axum::http::Request;
+    use chrono::Duration as ChronoDuration;
     use tempfile::tempdir;
     use tower::ServiceExt;
 
@@ -883,5 +908,114 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("origin", "https://evil.example".parse().unwrap());
         assert!(enforce_origin(&headers, &state).is_err());
+    }
+
+    #[tokio::test]
+    async fn schedule_enable_requires_approval_but_disable_is_allowed_at_standard() {
+        let dir = tempdir().unwrap();
+        let state = build_state(dir.path(), 8790).unwrap();
+        let id = state
+            .scheduler
+            .schedule(
+                "subagent",
+                json!({"backend":"codex","goal":"test","context":{},"granted_level":"Standard","approved":true}),
+                ScheduleSpec::Once,
+                Utc::now() + ChronoDuration::minutes(10),
+            )
+            .unwrap();
+        let app = router(state);
+
+        let disable = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/schedules/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"enabled":false,"granted_level":"Standard","approved":false}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(disable.status(), StatusCode::OK);
+
+        let enable_without_approval = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/schedules/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"enabled":true,"granted_level":"Standard","approved":false}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            enable_without_approval.status(),
+            StatusCode::PRECONDITION_REQUIRED
+        );
+
+        let enable_with_approval = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/v1/schedules/{id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"enabled":true,"granted_level":"Standard","approved":true}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(enable_with_approval.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn schedule_delete_requires_full_control() {
+        let dir = tempdir().unwrap();
+        let state = build_state(dir.path(), 8790).unwrap();
+        let id = state
+            .scheduler
+            .schedule(
+                "subagent",
+                json!({"backend":"codex","goal":"test","context":{},"granted_level":"Standard","approved":true}),
+                ScheduleSpec::Once,
+                Utc::now() + ChronoDuration::minutes(10),
+            )
+            .unwrap();
+        let app = router(state);
+
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/schedules/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+        let allowed = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!(
+                        "/api/v1/schedules/{id}?granted_level=FullControl&approved=true"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::NO_CONTENT);
     }
 }
