@@ -121,7 +121,7 @@ There is no Renderer-controlled arbitrary `method + params` JSON-RPC tunnel. Add
 
 ### R2A primary-chat boundary
 
-The primary visible chat now uses `apps/zero3-desktop/scripts/apply-codex-primary-chat.mjs` to preserve the Hermes-derived UI while changing its runtime contract:
+The primary visible chat uses `apps/zero3-desktop/scripts/apply-codex-primary-chat.mjs` to preserve the Hermes-derived UI while changing its runtime contract:
 
 ```text
 Hermes ChatView / Composer / Sidebar
@@ -151,9 +151,23 @@ The R2A mapping is:
 
 Codex Threads/Turns/Items are projected into the Hermes `SessionInfo` and `ChatMessage` stores strictly as presentation adapters. Those stores do not define runtime authority on the migrated path.
 
-R2A deliberately uses `approvalPolicy=never` with `sandbox=read-only`. This is a temporary safety mode: native Codex approval/input UI is not mapped yet, so the product must neither hang on an invisible approval request nor gain workspace-write capability without a visible decision surface. Unexpected server-originated requests are denied fail-closed.
+R2A does not silently route missing operations back into Hermes Runtime. Attachments, edit/rewind/regenerate/branch, native archive/delete, steering, rich tool/file/reasoning rendering and multi-pane Codex parity remain explicit migration work. See [`CODEX_PRIMARY_CHAT_R2.md`](CODEX_PRIMARY_CHAT_R2.md).
 
-R2A does not silently route missing operations back into Hermes Runtime. Attachments, edit/rewind/regenerate/branch, native archive/delete, steering, rich tool/file/reasoning rendering, approval/input UI and multi-pane Codex parity remain explicit migration work. See [`CODEX_PRIMARY_CHAT_R2.md`](CODEX_PRIMARY_CHAT_R2.md).
+### R2B native approval and input boundary
+
+R2B adds `apps/zero3-desktop/scripts/apply-codex-prompts.mjs` plus queue/state hardening. Selected app-server server requests are converted into Zero3-owned UI prompts and answered through the already typed `respondToServerRequest` surface:
+
+```text
+item/commandExecution/requestApproval -> approval dialog -> accept / acceptForSession / decline
+item/fileChange/requestApproval       -> approval dialog -> accept / acceptForSession / decline
+item/tool/requestUserInput             -> input dialog    -> native answers map
+```
+
+The primary chat now uses `approvalPolicy=on-request` while keeping the **default sandbox** at `read-only`. `read-only` does not override an explicit Codex escalation the user approves; it means Zero3 has not made `workspace-write` the default sandbox. Persistent exec-policy/network-policy amendments, permission-profile escalation, MCP elicitation, dynamic tool callbacks, auth refresh/attestation and legacy approval methods remain fail-closed until they receive dedicated reviewed UX.
+
+Prompt requests are queued per Thread rather than stored in a single shared slot. Blocking Codex approvals/input are projected into the shell's existing awaiting-input state so composer gating, Stop/Esc and session status remain coherent. Stop, terminal turn completion and runtime errors reject/clear any unresolved request IDs, preventing orphaned app-server callbacks in Electron main.
+
+Secret `request_user_input` values remain component-local and are returned directly to the matching server request rather than being persisted in Zero3 presentation stores.
 
 ### Core binary ownership
 
@@ -172,7 +186,7 @@ The Hermes-derived shell still has unported surfaces whose boot/data dependencie
 
 Rules during the remaining migration:
 
-- main chat conversation semantics are Codex-owned;
+- main chat conversation semantics and R2B approval/input requests are Codex-owned;
 - no new Zero3 runtime feature may be added to Hermes runtime;
 - no desktop product feature may use Zero3 Node as primary state/runtime authority;
 - old Node bridge overlay files remain unapplied;
@@ -252,25 +266,33 @@ Legacy naming for External Agent Collaboration adapters. Codex/Claude/Hermes are
 - typed Thread / Turn / interrupt Renderer API;
 - no arbitrary JSON-RPC proxy.
 
-### R2A — current: primary chat cut
+### R2A — complete: primary chat cut
 
 - Hermes main session UI -> Codex Thread;
 - composer -> `turn/start`;
 - streaming assistant UI -> Codex Item notifications/deltas;
 - Stop -> `turn/interrupt`;
 - durable session restore -> `thread/list/read/resume`;
-- compatibility types remain presentation-only;
-- primary chat is read-only until approval UI lands.
+- compatibility types remain presentation-only.
 
-### R2B / R3 — feature parity and execution UX
+### R2B — current: native approval/input prompts
+
+- command-execution approval -> Zero3 dialog -> Codex server response;
+- file-change approval -> Zero3 dialog -> Codex server response;
+- `request_user_input` -> native Zero3 multi-question UI;
+- per-Thread prompt queues and shell awaiting-input integration;
+- unsupported server requests remain fail-closed;
+- default sandbox remains `read-only`; `workspace-write` is not the default.
+
+### R3 — execution UX and remaining thread parity
 
 - structured attachments -> Codex UserInput;
 - reasoning / shell / file / MCP / dynamic-tool Item rendering;
-- native approval and elicitation presentation;
-- workspace-write only after approval routing is live;
+- permission-profile and MCP elicitation UX where required;
 - native thread archive/delete/branch/edit/rollback/steer;
 - projects/worktrees and token/cost/status presentation;
-- multi-pane/session-tile Codex parity.
+- multi-pane/session-tile Codex parity;
+- evaluate `workspace-write` as a default only after execution/policy UX is complete.
 
 ### R4 — External Agent Collaboration
 
@@ -292,6 +314,6 @@ Legacy naming for External Agent Collaboration adapters. Codex/Claude/Hermes are
 
 The dedicated Codex Core Smoke builds the exact pinned Codex source and exercises real JSONL protocol flow through `initialize`, `thread/list`, `thread/start` and `turn/start`, including the pinned `text_elements` UserInput field. Credential-free CI may tolerate a model/auth runtime failure only after request deserialization succeeds; invalid-params/unknown-field failures block the release.
 
-CI and the architecture guard require the typed `zero3Codex` boundary, reject generic Codex Renderer proxies, reject legacy Zero3 Node routing from primary chat, and keep the retired Node desktop bridge out of the target shell.
+CI and the architecture guard require the typed `zero3Codex` boundary, reject generic Codex Renderer proxies, reject legacy Zero3 Node routing from primary chat, require the R2B prompt bridge/queue hardening, and keep the retired Node desktop bridge out of the target shell.
 
 Platform smoke tests for legacy/extension components may continue until each path is replaced. Passing a legacy smoke test is evidence that a compatibility component still works; it is not evidence that the component defines the target architecture.
