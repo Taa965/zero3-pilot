@@ -212,7 +212,8 @@ const r3fReturn = String.raw`    deleteThread,
     editMessage,
     enabled,`
 
-const r3fWiring = String.raw`    onEdit: edited => void (codexPrimaryChat.enabled ? codexPrimaryChat.editMessage(edited) : editMessage(edited)),`
+const r3fWiring = String.raw`    onEdit: edited =>
+      codexPrimaryChat.enabled ? codexPrimaryChat.editMessage(edited) : editMessage(edited),`
 
 function recordR3fProvenance() {
   const file = path.join(hermesDesktopDir, 'public', 'zero3-upstream.json')
@@ -229,7 +230,7 @@ export function applyZero3CodexAuthoritativeHistory() {
       to: turnsListValidator
     },
     {
-      label: 'R3F dedicated thread/turns/list IPC',
+      label: 'R3F dedicated thread/turns-list IPC',
       from: "ipcMain.handle('zero3:codex:turn:start', (_event, request: unknown) =>",
       to: turnsListIpc
     }
