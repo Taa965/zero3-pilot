@@ -11,8 +11,9 @@ import type {
 import { ZERO3_REMOTE_TASK_PROTOCOL } from './remote-types'
 
 export type Zero3CodexRuntime = {
-  request(method: string, params: unknown, timeoutMs?: number): Promise<unknown>
-  onEvent(listener: (event: unknown) => void): () => void
+  startThread(params: unknown): Promise<unknown>
+  startTurn(params: unknown, timeoutMs?: number): Promise<unknown>
+  readThread(params: unknown): Promise<unknown>
 }
 
 type RecordValue = Record<string, unknown>
@@ -79,31 +80,30 @@ function taskPrompt(task: Zero3RemoteTask): string {
 
 function idFromResult(value: unknown, label: string): string {
   const root = record(value)
-  const candidate = typeof root.id === 'string' ? root.id : typeof record(root.thread).id === 'string' ? String(record(root.thread).id) : typeof record(root.turn).id === 'string' ? String(record(root.turn).id) : ''
+  const candidate =
+    typeof root.id === 'string'
+      ? root.id
+      : typeof record(root.thread).id === 'string'
+        ? String(record(root.thread).id)
+        : typeof record(root.turn).id === 'string'
+          ? String(record(root.turn).id)
+          : ''
   return requiredString(candidate, label, 512)
 }
 
-function eventMethod(event: unknown): string {
-  const root = record(event)
-  return root.kind === 'notification' && typeof root.method === 'string' ? root.method : ''
+function findTurn(threadRead: unknown, turnId: string): RecordValue | null {
+  const root = record(threadRead)
+  const thread = record(root.thread)
+  const turns = Array.isArray(thread.turns) ? thread.turns : Array.isArray(root.turns) ? root.turns : []
+  for (const raw of turns) {
+    const turn = record(raw)
+    if (turn.id === turnId) return turn
+  }
+  return null
 }
 
-function eventParams(event: unknown): unknown {
-  return record(event).params ?? null
-}
-
-function eventThreadId(event: unknown): string | null {
-  const params = record(eventParams(event))
-  if (typeof params.threadId === 'string') return params.threadId
-  const thread = record(params.thread)
-  return typeof thread.id === 'string' ? thread.id : null
-}
-
-function eventTurnId(event: unknown): string | null {
-  const params = record(eventParams(event))
-  if (typeof params.turnId === 'string') return params.turnId
-  const turn = record(params.turn)
-  return typeof turn.id === 'string' ? turn.id : null
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 export class Zero3RemoteTaskRunner {
@@ -121,7 +121,7 @@ export class Zero3RemoteTaskRunner {
     // H3 deliberately preserves the current Zero3 desktop safety boundary:
     // remote tasks do not silently widen the default sandbox. Codex can issue
     // its normal server-originated approval request if a write/escalation is needed.
-    const threadResult = await this.codex.request('thread/start', {
+    const threadResult = await this.codex.startThread({
       cwd: workspace,
       approvalPolicy: 'on-request',
       sandbox: 'read-only',
@@ -136,57 +136,73 @@ export class Zero3RemoteTaskRunner {
       workspace
     }
     const evidence = new Zero3RemoteEvidenceCollector(mapping)
+    const started = evidence.push('remote.thread.started', threadResult)
+    if (onEvidence) await onEvidence(started.sequence, started.method, started.params)
 
-    let resolveTerminal: ((value: { method: string; params: unknown }) => void) | null = null
-    let rejectTerminal: ((reason: Error) => void) | null = null
-    const terminal = new Promise<{ method: string; params: unknown }>((resolve, reject) => {
-      resolveTerminal = resolve
-      rejectTerminal = reject
-    })
+    const turnResult = await this.codex.startTurn(
+      {
+        threadId,
+        input: [{ type: 'text', text: taskPrompt(task), text_elements: [] }]
+      },
+      30_000
+    )
+    const turnId = idFromResult(turnResult, 'Codex turn id')
+    mapping.turnIds.push(turnId)
+    const turnStarted = evidence.push('remote.turn.started', turnResult)
+    if (onEvidence) await onEvidence(turnStarted.sequence, turnStarted.method, turnStarted.params)
 
-    const unsubscribe = this.codex.onEvent(event => {
-      try {
-        const method = eventMethod(event)
-        if (!method) return
-        const relatedThread = eventThreadId(event)
-        if (relatedThread && relatedThread !== threadId) return
-        const relatedTurn = eventTurnId(event)
-        if (relatedTurn && mapping.turnIds.length > 0 && !mapping.turnIds.includes(relatedTurn)) return
-        const params = eventParams(event)
-        const item = evidence.push(method, params)
-        if (onEvidence) void onEvidence(item.sequence, method, params).catch(() => undefined)
-        if (method === 'turn/completed') resolveTerminal?.({ method, params })
-        if (method === 'turn/failed') resolveTerminal?.({ method, params })
-      } catch (error) {
-        rejectTerminal?.(error instanceof Error ? error : new Error(String(error)))
+    const timeoutMs = (task.execution?.timeout_seconds ?? 3600) * 1000
+    const deadline = Date.now() + timeoutMs
+    let lastStatus = ''
+    let finalThreadRead: unknown = null
+
+    while (Date.now() < deadline) {
+      const snapshot = await this.codex.readThread({ threadId, includeTurns: true })
+      finalThreadRead = snapshot
+      const turn = findTurn(snapshot, turnId)
+      if (!turn) {
+        await delay(750)
+        continue
       }
-    })
 
-    try {
-      const turnResult = await this.codex.request(
-        'turn/start',
-        {
-          threadId,
-          input: [{ type: 'text', text: taskPrompt(task), text_elements: [] }]
-        },
-        (task.execution?.timeout_seconds ?? 3600) * 1000
-      )
-      const turnId = idFromResult(turnResult, 'Codex turn id')
-      mapping.turnIds.push(turnId)
-      const completed = await terminal
-      const completedRecord = record(completed.params)
-      const turnRecord = record(completedRecord.turn)
-      const status = typeof turnRecord.status === 'string' ? turnRecord.status : typeof completedRecord.status === 'string' ? completedRecord.status : ''
-      const succeeded = completed.method === 'turn/completed' && !['failed', 'cancelled', 'interrupted'].includes(status)
-      return {
-        state: succeeded ? ('succeeded' as const) : ('failed' as const),
-        task,
-        mapping,
-        terminal: completed,
-        evidence: evidence.snapshot()
+      const status = typeof turn.status === 'string' ? turn.status : ''
+      if (status && status !== lastStatus) {
+        lastStatus = status
+        const statusEvidence = evidence.push('remote.turn.status', { turnId, status, error: turn.error ?? null })
+        if (onEvidence) await onEvidence(statusEvidence.sequence, statusEvidence.method, statusEvidence.params)
       }
-    } finally {
-      unsubscribe()
+
+      if (status === 'completed') {
+        return {
+          state: 'succeeded' as const,
+          task,
+          mapping,
+          terminal: { turnId, status },
+          evidence: evidence.snapshot(),
+          thread: snapshot
+        }
+      }
+      if (status === 'failed' || status === 'interrupted') {
+        return {
+          state: 'failed' as const,
+          task,
+          mapping,
+          terminal: { turnId, status, error: turn.error ?? null },
+          evidence: evidence.snapshot(),
+          thread: snapshot
+        }
+      }
+
+      await delay(1000)
+    }
+
+    return {
+      state: 'outcome_unknown' as const,
+      task,
+      mapping,
+      terminal: { turnId, status: lastStatus || 'unknown', reason: 'remote task observation timed out' },
+      evidence: evidence.snapshot(),
+      thread: finalThreadRead
     }
   }
 }
