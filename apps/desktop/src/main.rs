@@ -2,7 +2,9 @@
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
-    eprintln!("Zero3 Pilot desktop shell is Windows-first; build zero3-pilot-node for local runtime use on this platform.");
+    eprintln!(
+        "Zero3 Pilot native-shell launcher is Windows-first; use zero3-pilot-node directly on this platform."
+    );
 }
 
 #[cfg(target_os = "windows")]
@@ -20,34 +22,48 @@ mod windows {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use tao::dpi::LogicalSize;
-    use tao::event::{Event, WindowEvent};
-    use tao::event_loop::{ControlFlow, EventLoopBuilder};
-    use tao::window::WindowBuilder;
-    use wry::WebViewBuilder;
-
     const DEFAULT_PORT: u16 = 8790;
     const START_TIMEOUT: Duration = Duration::from_secs(12);
 
-    #[derive(Debug, Clone, Copy)]
-    enum AppEvent {
-        Exit,
+    /// Owns a Node process only until the Codex native shell has been opened.
+    ///
+    /// Once hand-off succeeds the Node intentionally outlives this tiny launcher:
+    /// schedules/background jobs must keep running even when the Codex window is
+    /// closed. If hand-off fails, Drop cleans up the child we just started.
+    struct NodeLease {
+        child: Option<Child>,
+        persist: bool,
     }
 
-    struct OwnedNode(Option<Child>);
-
-    impl OwnedNode {
-        fn stop(&mut self) {
-            if let Some(mut child) = self.0.take() {
-                let _ = child.kill();
-                let _ = child.wait();
+    impl NodeLease {
+        fn empty() -> Self {
+            Self {
+                child: None,
+                persist: false,
             }
+        }
+
+        fn attach(&mut self, child: Child) {
+            self.child = Some(child);
+        }
+
+        fn persist(&mut self) {
+            self.persist = true;
         }
     }
 
-    impl Drop for OwnedNode {
+    impl Drop for NodeLease {
         fn drop(&mut self) {
-            self.stop();
+            if self.persist {
+                // Dropping Child does not terminate the Windows process. Taking
+                // it makes the intent explicit and prevents our failure cleanup.
+                let _ = self.child.take();
+                return;
+            }
+            if let Some(mut child) = self.child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
     }
 
@@ -56,7 +72,7 @@ mod windows {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(DEFAULT_PORT);
-        let mut owned_node = OwnedNode(None);
+        let mut node = NodeLease::empty();
 
         if !node_healthy(port) {
             let binary = resolve_node_binary()?;
@@ -72,44 +88,24 @@ mod windows {
                         binary.display()
                     )
                 })?;
-            owned_node.0 = Some(child);
+            node.attach(child);
             wait_for_node(port)?;
         }
 
-        let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
-        let window = WindowBuilder::new()
-            .with_title("Zero3 Pilot · 你的个人电脑智能体")
-            .with_inner_size(LogicalSize::new(1280.0, 820.0))
-            .with_min_inner_size(LogicalSize::new(920.0, 620.0))
-            .build(&event_loop)?;
-        let url = format!("http://127.0.0.1:{port}/");
-        let _webview = WebViewBuilder::new().with_url(url).build(&window)?;
-
-        if let Some(ms) = env::var("ZERO3_DESKTOP_SMOKE_MS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-        {
-            let proxy = event_loop.create_proxy();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_millis(ms.max(250)));
-                let _ = proxy.send_event(AppEvent::Exit);
-            });
+        if !codex_app_is_installed()? {
+            return Err(
+                "Codex Desktop is not installed. Install the native Codex app, then launch Zero3 Pilot again."
+                    .into(),
+            );
         }
 
-        event_loop.run(move |event, _, control_flow| {
-            *control_flow = ControlFlow::Wait;
-            match event {
-                Event::UserEvent(AppEvent::Exit)
-                | Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    ..
-                } => {
-                    owned_node.stop();
-                    *control_flow = ControlFlow::Exit;
-                }
-                _ => {}
-            }
-        });
+        let workspace = resolve_codex_workspace()?;
+        open_codex_workspace(&workspace)?;
+
+        // Native Codex now owns the visible desktop shell. Zero3 remains a
+        // loopback-only sidecar so skills/plugins and background jobs can use it.
+        node.persist();
+        Ok(())
     }
 
     fn resolve_node_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -125,6 +121,76 @@ mod windows {
             }
         }
         Ok(PathBuf::from("zero3-pilot-node.exe"))
+    }
+
+    fn resolve_codex_workspace() -> Result<PathBuf, Box<dyn std::error::Error>> {
+        if let Some(path) = env::var_os("ZERO3_CODEX_WORKSPACE") {
+            let path = PathBuf::from(path);
+            if !path.is_dir() {
+                return Err(format!(
+                    "ZERO3_CODEX_WORKSPACE is not a directory: {}",
+                    path.display()
+                )
+                .into());
+            }
+            return Ok(path);
+        }
+        Ok(env::current_dir()?)
+    }
+
+    fn codex_app_is_installed() -> Result<bool, Box<dyn std::error::Error>> {
+        // Keep the same stable package identity check used by the upstream
+        // Codex CLI Windows desktop launcher.
+        let output = Command::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(
+                "Get-StartApps | Where-Object AppID -Like 'OpenAI.Codex_*!App' | Select-Object -First 1 -ExpandProperty AppID",
+            )
+            .output()?;
+        if !output.status.success() {
+            return Ok(false);
+        }
+        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    }
+
+    fn open_codex_workspace(workspace: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        let path = workspace.display().to_string();
+        let url = codex_new_thread_url(&path);
+        let status = Command::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg("& { param($target) Start-Process -FilePath $target }")
+            .arg(&url)
+            .status()
+            .map_err(|error| format!("failed to invoke Codex native shell: {error}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("failed to open Codex native shell with status {status}").into())
+        }
+    }
+
+    fn codex_new_thread_url(workspace: &str) -> String {
+        format!(
+            "codex://threads/new?path={}",
+            percent_encode_query_value(workspace)
+        )
+    }
+
+    fn percent_encode_query_value(value: &str) -> String {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let mut encoded = String::with_capacity(value.len());
+        for byte in value.as_bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                encoded.push(*byte as char);
+            } else {
+                encoded.push('%');
+                encoded.push(HEX[(byte >> 4) as usize] as char);
+                encoded.push(HEX[(byte & 0x0f) as usize] as char);
+            }
+        }
+        encoded
     }
 
     fn wait_for_node(port: u16) -> Result<(), Box<dyn std::error::Error>> {
@@ -177,6 +243,19 @@ mod windows {
                 Some(value) => env::set_var("ZERO3_PILOT_NODE_BIN", value),
                 None => env::remove_var("ZERO3_PILOT_NODE_BIN"),
             }
+        }
+
+        #[test]
+        fn codex_workspace_url_is_windows_safe() {
+            assert_eq!(
+                codex_new_thread_url(r"C:\Users\zero3\My Project"),
+                "codex://threads/new?path=C%3A%5CUsers%5Czero3%5CMy%20Project"
+            );
+        }
+
+        #[test]
+        fn query_encoder_handles_utf8() {
+            assert_eq!(percent_encode_query_value("零三"), "%E9%9B%B6%E4%B8%89");
         }
     }
 }
