@@ -58,6 +58,7 @@ export type Zero3RemoteHostConfig = {
   nodeId: string
   allowedWorkspaces: string[]
   developmentAllowHttp: boolean
+  mappingStateFile: string
 }
 
 export type Zero3RemoteHostStatus = {
