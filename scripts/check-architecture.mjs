@@ -26,6 +26,7 @@ const config = read('apps/zero3-desktop/scripts/config.mjs')
 const codexTransport = read('apps/zero3-desktop/scripts/apply-codex-transport.mjs')
 const codexPrimaryChat = read('apps/zero3-desktop/scripts/apply-codex-primary-chat.mjs')
 const codexPrompts = read('apps/zero3-desktop/scripts/apply-codex-prompts.mjs')
+const codexPromptHardening = read('apps/zero3-desktop/scripts/apply-codex-prompt-queue-hardening.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -112,9 +113,19 @@ requireText(
   "deepseekRole: 'capability-donor'",
   'Desktop provenance must identify DeepSeek as capability donor.'
 )
+requireText(
+  prepare,
+  "promptPhase: 'R2B-codex-approval-input'",
+  'Desktop provenance must identify the native Codex prompt migration phase.'
+)
 requireText(prepare, 'applyZero3CodexTransport()', 'Target desktop must apply the typed Codex app-server transport.')
 requireText(prepare, 'applyZero3CodexPrimaryChat()', 'R2 target desktop must apply the Codex primary-chat adapter.')
 requireText(prepare, 'applyZero3CodexPrompts()', 'R2B target desktop must apply the Codex approval/input prompt adapter.')
+requireText(
+  prepare,
+  'applyZero3CodexPromptQueueHardening()',
+  'R2B target desktop must preserve queued prompt requests and awaiting-input shell state.'
+)
 requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the pinned open-source Codex core.')
 requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
 requireText(config, 'resolveCodexHome', 'Zero3 must own an explicit Codex home boundary.')
@@ -158,6 +169,22 @@ for (const required of [
   requireText(codexPrompts, required, `R2B Codex prompt bridge is missing required behavior: ${required}`)
 }
 
+for (const required of [
+  'CodexApprovalRequest[]',
+  'CodexUserInputRequest[]',
+  'queue.some(entry => entry.requestId === request.requestId)',
+  '$activeCodexAwaitingInput',
+  '$codexApprovals.get()[key]?.length',
+  '$codexUserInputs.get()[key]?.some(request => request.isBlocking)',
+  'Codex runtime error ended the pending prompt.'
+]) {
+  requireText(
+    codexPromptHardening,
+    required,
+    `R2B Codex prompt hardening is missing queue/cleanup/awaiting-input behavior: ${required}`
+  )
+}
+
 for (const forbidden of [
   "ipcRenderer.invoke('zero3:codex:rpc'",
   "ipcRenderer.invoke('zero3:codex:request'",
@@ -182,4 +209,4 @@ for (const forbidden of ['acceptWithExecpolicyAmendment', 'applyNetworkPolicyAme
   )
 }
 
-console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / native approval+input prompts / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
+console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native approval+input prompts / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
