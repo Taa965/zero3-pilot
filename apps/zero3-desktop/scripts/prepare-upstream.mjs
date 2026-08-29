@@ -207,7 +207,8 @@ function applyBrandOverlay() {
         coreRuntime: 'openai-codex-app-server',
         desktopShell: 'hermes-electron-react',
         deepseekRole: 'capability-donor',
-        migrationPhase: 'R2A-codex-primary-chat',
+        migrationPhase: 'R1A-codex-app-server-transport',
+        primaryChatPhase: 'R2A-codex-primary-chat',
         upstream: pins
       },
       null,
