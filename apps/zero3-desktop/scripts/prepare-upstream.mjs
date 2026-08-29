@@ -9,18 +9,9 @@ import {
   hermesRoot,
   pins,
   repoRoot,
-  resolveHermesHome,
-  upstreamRoot,
-  zero3Port
+  upstreamRoot
 } from './config.mjs'
-import { applyZero3BrowserBridge } from './apply-browser-bridge.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
-import { applyZero3MemoryBridge } from './apply-memory-bridge.mjs'
-import { applyZero3NativeBridge } from './apply-native-bridge.mjs'
-import { applyZero3NativeChat } from './apply-native-chat.mjs'
-import { applyZero3NativeChatHardening } from './apply-native-chat-hardening.mjs'
-import { applyZero3ScheduleBridge } from './apply-schedule-bridge.mjs'
-import { applyZero3ScheduleLifecycle } from './apply-schedule-lifecycle.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
 const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
@@ -70,6 +61,9 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
+  // R0 intentionally keeps this allowlist broad enough for the existing
+  // branding/product-policy/localization transformations. Runtime bridges to
+  // Zero3 Node are no longer applied by this script.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -103,7 +97,7 @@ function assertOnlyOverlayChanges() {
   const unexpected = trackedHermesChanges().filter(file => !allowed.has(file))
   if (unexpected.length > 0) {
     throw new Error(
-      `Hermes upstream contains tracked changes outside the Zero3 overlay:\n${unexpected
+      `Hermes upstream contains tracked changes outside the Zero3 shell overlay:\n${unexpected
         .map(file => `- ${file}`)
         .join('\n')}\nCommit/stash them or use npm run reset before preparing Zero3 Desktop.`
     )
@@ -111,12 +105,6 @@ function assertOnlyOverlayChanges() {
 }
 
 function brandLocaleText(source) {
-  // Locale files mix user-facing strings with TypeScript identifiers such as
-  // `startingHermesDesktop`. A global Hermes -> Zero3 replacement corrupts
-  // those identifiers. Only rewrite the portion of a line after its first
-  // string delimiter, which covers locale copy while leaving keys/import names
-  // intact. Multi-line values begin with their delimiter on the continuation
-  // line and are handled the same way.
   return source
     .split('\n')
     .map(line => {
@@ -133,7 +121,7 @@ function applyBrandOverlay() {
   const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
 
   packageJson.productName = 'Zero3 Pilot'
-  packageJson.description = 'Zero3 Pilot desktop shell based on the pinned Hermes Desktop architecture.'
+  packageJson.description = 'Zero3 Pilot Codex-core desktop shell based on the pinned Hermes Desktop UI architecture.'
   packageJson.author = 'Zero3 Pilot'
   packageJson.repository = {
     type: 'git',
@@ -165,7 +153,7 @@ function applyBrandOverlay() {
   packageJson.build.win = packageJson.build.win ?? {}
   packageJson.build.win.legalTrademarks = 'Zero3 Pilot'
   packageJson.build.linux = packageJson.build.linux ?? {}
-  packageJson.build.linux.synopsis = 'Zero3 Pilot desktop agent shell.'
+  packageJson.build.linux.synopsis = 'Zero3 Pilot Codex-core desktop agent shell.'
   packageJson.build.nsis = packageJson.build.nsis ?? {}
   packageJson.build.nsis.shortcutName = 'Zero3 Pilot'
   packageJson.build.nsis.uninstallDisplayName = 'Zero3 Pilot'
@@ -208,29 +196,22 @@ function applyBrandOverlay() {
     if (!isFile(source)) throw new Error(`Zero3 brand asset is missing: ${source}`)
     fs.copyFileSync(source, target)
   }
+
   fs.writeFileSync(
     path.join(publicDir, 'zero3-upstream.json'),
     `${JSON.stringify(
       {
         product: 'Zero3 Pilot',
-        desktopArchitecture: 'hermes-electron-react',
-        zero3Node: `http://127.0.0.1:${zero3Port}`,
+        coreRuntime: 'openai-codex-app-server',
+        desktopShell: 'hermes-electron-react',
+        deepseekRole: 'capability-donor',
+        migrationPhase: 'R0-codex-core-reset',
         upstream: pins
       },
       null,
       2
     )}\n`
   )
-}
-
-function installZero3HermesSkill() {
-  const source = path.join(repoRoot, '.agents', 'skills', 'zero3-pilot', 'SKILL.md')
-  if (!isFile(source)) {
-    throw new Error(`Zero3 skill source is missing: ${source}`)
-  }
-  const targetDir = path.join(resolveHermesHome(), 'skills', 'zero3-pilot')
-  fs.mkdirSync(targetDir, { recursive: true })
-  fs.copyFileSync(source, path.join(targetDir, 'SKILL.md'))
 }
 
 fs.mkdirSync(upstreamRoot, { recursive: true })
@@ -256,21 +237,11 @@ assertOnlyOverlayChanges()
 applyBrandOverlay()
 applyZero3ShellPolicy()
 applyZero3ChineseUi()
-applyZero3NativeBridge()
-applyZero3NativeChat()
-applyZero3NativeChatHardening()
-applyZero3MemoryBridge()
-applyZero3ScheduleBridge()
-applyZero3ScheduleLifecycle()
-applyZero3BrowserBridge()
-installZero3HermesSkill()
 
-console.log('Zero3 Desktop upstream prepared successfully.')
-console.log(`Hermes Desktop source pin: ${pins.hermes}`)
-console.log(`Codex app-server source: ${pins.codex}`)
-console.log(`DeepSeek Harness source: ${pins.deepseek}`)
-console.log('Zero3 shell policy: upstream commercial, diagnostics and self-update surfaces disabled')
-console.log('Zero3 UI policy: Simplified Chinese is the default locale; explicit user language choices remain supported')
-console.log('Zero3 native bridge: fixed reads, approved Agent dispatch, hardened native Chat, native-approved Memory writes, Agent schedules, typed schedule pause/resume, and capability-scoped Browser session controls')
-console.log(`Zero3 Hermes home: ${resolveHermesHome()}`)
-console.log(`Zero3 Node endpoint: http://127.0.0.1:${zero3Port}`)
+console.log('Zero3 Desktop R0 shell prepared successfully.')
+console.log(`Codex CORE source pin: ${pins.codex}`)
+console.log(`Hermes UI shell source pin: ${pins.hermes}`)
+console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
+console.log('Zero3 architecture: Codex is the only target Agent Kernel; Hermes is UI shell only.')
+console.log('R0: Zero3 Node chat/memory/schedule/browser overlays are intentionally NOT applied.')
+console.log('Next: R1 introduces the Zero3-owned codex app-server transport.')

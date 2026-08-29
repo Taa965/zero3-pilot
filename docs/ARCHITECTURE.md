@@ -1,170 +1,221 @@
 # Zero3 Pilot Architecture
 
-Zero3 Pilot is a local-first personal computer agent built around the upstream open-source Codex runtime. Upstream Codex stays pinned and untouched under `upstream/codex`; Zero3 Pilot adds its own provider, persistence, scheduler, subagent, memory, local Node, desktop, and deployment layers around it.
+Zero3 Pilot is a Codex-core desktop application. The non-negotiable role contract lives in [`ARCHITECTURE_CONSTITUTION.md`](ARCHITECTURE_CONSTITUTION.md).
 
-## Product shape
-
-```text
-Windows Desktop (zero3-pilot.exe)
-        |
-        | localhost / native WebView2
-        v
-Local Pilot Node (zero3-pilot-node.exe, 127.0.0.1:8790)
-        |
-        +-- JobManager + append-only EventStore
-        +-- PersistentScheduler (SQLite)
-        +-- Personal/Operational Memory (SQLite)
-        +-- Codex / Claude / Hermes workers
-        +-- BrowserProvider -> Chromium CDP
-        +-- ComputerProvider -> Open Computer Use MCP -> Windows UIA
-        +-- shared approval / permission policy
-
-Cloud control surface (zero3-web)
-        |
-        +-- deployed independently on AWS
-        +-- exact-SHA release health verification
-```
-
-The local Node is the runtime authority for personal-computer operations. The desktop shell is a native Windows host for the local UI; it reuses an already healthy Node when one exists, otherwise starts its sibling `zero3-pilot-node.exe` and only owns/terminates that child.
-
-## Repository layout
+## Target product shape
 
 ```text
-zero3-pilot/
-├─ upstream/codex/
-│  └─ pinned upstream openai/codex submodule; Zero3 code does not patch it
-├─ crates/
-│  ├─ zero3-core/
-│  │  ├─ event / job / subagent / plugin contracts
-│  │  └─ shared permission and approval seam
-│  ├─ zero3-store/
-│  │  └─ fsync'd append-only JSONL event store with strict/recoverable replay
-│  ├─ zero3-scheduler/
-│  │  ├─ durable-first JobManager state machine
-│  │  └─ SQLite persistent schedules
-│  ├─ zero3-providers/
-│  │  ├─ provider registry
-│  │  ├─ real Chromium CDP BrowserProvider
-│  │  └─ real Open Computer Use MCP ComputerProvider
-│  ├─ zero3-subagents/
-│  │  └─ real bounded CLI adapters for Codex / Claude / Hermes
-│  └─ zero3-memory/
-│     └─ scoped SQLite operational/personal memory with approval gate
-├─ apps/
-│  ├─ node/
-│  │  ├─ loopback-only local runtime API
-│  │  └─ integrated local control UI
-│  ├─ desktop/
-│  │  └─ Windows Tao + Wry/WebView2 shell
-│  └─ web/
-│     └─ cloud control/health server used by strict deployment verification
-├─ deployment/
-│  └─ isolated atomic AWS deployment for zero3-web
-└─ .github/workflows/
-   ├─ ci.yml
-   └─ deploy.yml
+                    Zero3 Pilot
+                         |
+              Hermes-derived Desktop UI
+              (Electron + React shell)
+                         |
+                  Zero3 UI Adapter
+                         |
+                  codex app-server
+                         |
+          open-source Codex Agent Kernel
+                         |
+          +--------------+--------------+
+          |                             |
+   Zero3 extensions              Multi-Agent Collaboration
+  tools/MCP/hooks/etc.                    |
+          |                    +----------+----------+
+          |                    |          |          |
+ DeepSeek-derived         Codex app   Claude app   Hermes/others
+ capabilities              external     external     external
 ```
 
-## Runtime invariants
+### Runtime authority
 
-### Event Store and jobs
+`upstream/codex` is the source of truth for the primary agent runtime. Zero3 should use Codex app-server's native protocol instead of inventing parallel conversation/job abstractions for the core path.
 
-`zero3-store::EventStore` is append-only JSONL. Durable writes are flushed and synchronized before success is returned. Strict replay rejects malformed history. Recoverable replay only tolerates a physically torn final record and always surfaces a `TruncatedTail` diagnostic.
+Relevant Codex primitives include:
 
-`zero3-scheduler::JobManager` is durable-first: state transitions are recorded before the in-memory `JobRecord` advances. Replay applies the same legal state transitions as live execution; orphan events, duplicate queue events, and illegal transitions are corruption rather than silently ignored data.
+- Thread — durable conversation/session identity
+- Turn — one agent execution turn
+- Item — user message, agent output, reasoning, shell command, file edit, tool activity, etc.
+- streaming notifications — `item/started`, `item/completed`, `item/agentMessage/delta`, turn notifications and tool progress
+- approval and interruption APIs
 
-### Persistent scheduler
+The Zero3 desktop adapter should progressively map Hermes UI concepts onto these primitives.
 
-`PersistentScheduler` stores schedules in SQLite/WAL. It supports one-shot, fixed interval, and daily UTC schedules. Due occurrences enqueue normal durable jobs. The stable `(schedule_id, scheduled_for)` pair is carried in the payload so downstream execution can deduplicate at-least-once delivery.
-
-### Memory
-
-`SqliteMemoryStore` persists scoped operational and personal records. Operational memory may be written by the runtime. Personal memory is rejected at the storage boundary unless the record carries explicit approval. Scopes are global, session, or thread.
-
-## Providers
-
-### Browser
-
-`CdpBrowserProvider` uses `chromiumoxide` and keeps CDP types behind the provider contract. Managed mode launches Chromium with an isolated temporary profile; attach mode connects to an explicitly supplied CDP endpoint and does not kill the user's browser on close.
-
-Supported actions include launch/connect/close, tabs, open/navigate, semantic snapshot/query, click/type/key/scroll/wait, screenshot, and evaluate. Semantic element refs are preferred over coordinate automation. CI runs a real installed Chromium smoke test.
-
-### Computer use
-
-`OpenComputerUseAdapter` integrates the current `open-computer-use` runtime through standard MCP JSON-RPC over stdio. It performs initialize -> initialized -> tools/list / tools/call on a persistent child process and has bounded shutdown/kill fallback.
-
-`ComputerAction` uses the transport contract `{"action": "snake_case", ...}`. `list_apps` and app-state reads are read-only; click/type/key actions are side effects and pass through the shared policy gate. CI installs the real OCU package on Windows, opens real Notepad, performs the MCP handshake, and executes a UIA smoke test.
-
-## Subagents
-
-`SubagentRegistry` dispatches workers by stable name. The concrete workers are thin bounded process adapters and do not embed duplicate agent runtimes:
-
-- Codex: `codex exec --json`
-- Claude: `claude -p --output-format json`
-- Hermes: `hermes -z`
-
-Each adapter owns cwd/env/timeout/exit-code handling and bounded stdout/stderr capture. Missing executables and non-zero exits fail loudly.
-
-## Local Pilot Node
-
-`apps/node` binds to loopback only (default `127.0.0.1:8790`). It is the local integration point for:
-
-- health/status
-- background jobs and results
-- Codex/Claude/Hermes submissions
-- browser actions
-- computer actions
-- persistent schedules
-- memory CRUD/search
-
-Browser-origin checks block drive-by web pages from issuing localhost mutations. Native/CLI local clients without an Origin header remain supported. Side-effecting browser/computer/subagent/scheduler operations are evaluated by the shared `DefaultPolicy`; a provider cannot self-approve.
-
-The embedded UI exposes runtime status, agents, jobs, browser automation, computer control including `list_apps`, scheduler automation, and scoped memory.
-
-## Windows desktop
-
-`apps/desktop` builds `zero3-pilot.exe` with the Windows GUI subsystem. It creates a Tao window and a real Wry/WebView2 instance pointed at the local Node.
-
-Startup behavior:
-
-1. Probe local Node health.
-2. If healthy, reuse it.
-3. Otherwise resolve/start sibling `zero3-pilot-node.exe`.
-4. Wait for health before creating the UI.
-5. On exit, terminate only a Node child the desktop itself started.
-
-CI builds the real Windows Node/Desktop, starts the Node, verifies `/health` and `/api/v1/status`, creates the real WebView2 desktop, waits for the smoke timer to close it, and checks the GUI process exit code.
-
-## Permission model
-
-`zero3-core::permission` defines `ReadOnly < Standard < Elevated < FullControl`. `DefaultPolicy` allows sufficient grants, requires explicit approval for reversible operations above the current grant, and denies under-granted irreversible operations. Providers and the local Node share this seam rather than implementing independent approval rules.
-
-## Cloud deployment boundary
-
-`apps/web` remains a separate server-side control/health surface. It is deployed on the shared AWS host under the dedicated `zero3pilot` service account and isolated filesystem/service paths. It does not grant the local desktop runtime remote shell authority.
-
-Pushes to `main` use one strict workflow chain:
+## Upstream roles
 
 ```text
-test (fmt + clippy + build + workspace tests)
-  -> release build
-  -> atomic deploy exact GITHUB_SHA
-  -> external localhost health check whose git_sha must equal that SHA
+upstream/codex/
+  CORE — authoritative agent runtime and app-server protocol
+
+upstream/hermes-agent/
+  UI SHELL — Electron/React desktop UX source
+
+upstream/deepseek-harness/
+  CAPABILITY DONOR — audited source of ideas/implementations to port
 ```
 
-A failed upstream job cannot reach deploy. Releases are exact-SHA and rollback-capable.
+All three remain pinned for deterministic development, but they are not peers in runtime authority.
 
-## CI evidence
+## Current code audit
 
-PR CI contains four independent gates:
+The repository currently contains an older architecture whose shape is:
 
-1. Linux `fmt / clippy -D warnings / build / workspace tests`.
-2. Real Chromium BrowserProvider smoke.
-3. Real Windows Open Computer Use + Notepad/UIA smoke.
-4. Windows product smoke: Node build/start/API plus native Wry/WebView2 desktop creation and clean exit.
+```text
+legacy Rust/Wry Desktop or Hermes UI overlays
+                    |
+             Zero3 Pilot Node
+                    |
+       +------------+------------+
+       |            |            |
+ CodexWorker   ClaudeWorker  HermesWorker
+       |
+ jobs / scheduler / memory / browser / computer
+```
 
-The purpose of the platform-specific smoke tests is to prevent a cross-platform compile from being mistaken for proof that browser/UI automation or the Windows desktop actually works.
+This implementation is real and CI-tested, but its **role classification is now legacy/extension infrastructure**. It must not continue evolving into the main Agent Kernel.
 
-## Upstream policy
+The most important drift points found in the 2026-08-29 reset audit were:
 
-Zero3 Pilot absorbs useful architecture ideas from other projects but keeps `openai/codex` upstream clean. New personal-assistant capabilities live in Zero3-owned crates/apps and communicate through explicit seams rather than modifying the Codex source tree or introducing a second agent runtime.
+1. `README.md` explicitly said the product was *not* a Codex fork/secondary development and described Zero3-owned contracts as the runtime center.
+2. This architecture document called `zero3-pilot-node` the runtime authority.
+3. `apps/node` registered Codex, Claude and Hermes symmetrically and owned primary job execution.
+4. Hermes Desktop overlays routed chat, memory, schedules and browser controls to Zero3 Node.
+5. The desktop dev launcher automatically built/started Zero3 Node and treated Hermes as one worker behind it.
+6. CI asserted the existence of the Zero3 Node desktop bridge, accidentally making the drift a release requirement.
+
+R0 removes those assumptions from the target desktop path and adds a mechanical architecture guard.
+
+## Desktop architecture
+
+### Target
+
+```text
+Hermes React UI
+    |
+Electron preload / typed Zero3 adapter
+    |
+Electron main Codex client
+    |
+`codex app-server --stdio`
+    |
+open-source Codex
+```
+
+The app-server protocol is bidirectional JSONL over stdio. A Zero3 client must initialize once, then use Codex APIs such as `thread/start`, `thread/resume`, `turn/start`, streaming item notifications and approval/interrupt APIs.
+
+### R0 compatibility state
+
+The pinned Hermes desktop may temporarily start its own Hermes compatibility backend because the upstream UI expects it. In R0 this backend exists only to keep the shell renderable while the Codex transport is implemented.
+
+R0 rules:
+
+- no new Zero3 product feature may be added to Hermes runtime;
+- no new desktop product surface may use Zero3 Node as primary state/runtime authority;
+- old Node bridge overlay files may remain in the repository for migration archaeology but are not applied by `prepare-upstream.mjs`;
+- Zero3 Node is not automatically started by the target desktop launcher.
+
+## Multi-Agent Collaboration
+
+The existing `zero3-subagents` crate and its Codex/Claude/Hermes CLI workers are being reclassified as External Agent Collaboration infrastructure.
+
+Their purpose is not primary execution. Their eventual responsibility is to support actions such as:
+
+- discover external installed agents;
+- inspect running/unfinished work;
+- continue an existing external task;
+- send instructions or review requests;
+- observe execution and collect output;
+- hand off work between external agents;
+- take over unfinished work into Zero3's Codex core.
+
+The current `SubagentWorker` names remain temporarily for compatibility; semantic migration and API renaming happen after the Codex core transport is established.
+
+## Zero3 extensions
+
+Existing Rust components remain valuable, but should attach to Codex rather than replace it:
+
+- scheduler -> Codex tool/MCP/automation extension
+- memory -> Codex/Zero3 project-memory extension
+- BrowserProvider -> Codex tool/MCP provider
+- ComputerProvider -> Codex tool/MCP provider
+- EventStore / job durability -> extension workflow infrastructure, not primary conversation state
+- Weixin channel -> user/channel ingress into Codex core
+
+These components may remain independently testable while migration occurs.
+
+## DeepSeek-Harness integration
+
+DeepSeek-Harness stays pinned as an audit/reference source. A capability enters Zero3 only after deciding where it belongs:
+
+1. Codex core patch when it fundamentally improves the Agent Kernel;
+2. Zero3 tool/MCP/hook/skill when it is an extension;
+3. desktop UI adapter when it is presentation/interaction behavior.
+
+Do not keep DeepSeek-Harness as a default parallel agent runtime merely to avoid porting the capability.
+
+## Legacy components
+
+### `apps/node`
+
+Legacy/extension host. It currently exposes jobs, schedules, memory, browser/computer and external-agent dispatch. It is no longer the target desktop runtime authority.
+
+### `apps/desktop`
+
+Legacy Rust/Tao/Wry desktop. It remains only for rollback/installer history while the Hermes-derived Electron shell migration completes. Do not add new product UI here.
+
+### `crates/zero3-subagents`
+
+Legacy naming for the External Agent Collaboration adapters. Codex/Claude/Hermes are peers only inside this optional collaboration module, not at the product-core level.
+
+## Migration phases
+
+### R0 — architecture reset
+
+- codify the role hierarchy;
+- stop applying Zero3 Node chat/memory/schedule/browser desktop overlays;
+- stop target desktop from auto-starting Zero3 Node;
+- add CI architecture guard;
+- preserve buildable legacy code for controlled migration.
+
+### R1 — Codex app-server client
+
+- spawn/resolve pinned Codex app-server;
+- initialize JSONL transport;
+- typed request/response correlation;
+- notification stream and lifecycle supervision;
+- expose narrow Electron preload API.
+
+### R2 — primary chat
+
+- Hermes session UI -> Codex Thread;
+- composer -> `turn/start`;
+- streaming assistant UI -> Item notifications/deltas;
+- Stop -> `turn/interrupt`;
+- durable session restore -> `thread/list/read/resume`.
+
+### R3 — execution UX
+
+- shell/file/tool items;
+- approval requests;
+- MCP UI;
+- projects and worktrees;
+- token/cost/status presentation.
+
+### R4 — External Agent Collaboration
+
+- formal `ExternalAgent` contract;
+- inspect/continue/handoff/takeover;
+- adapters for installed Codex, Claude, Hermes and future agents.
+
+### R5 — migrate Zero3 extensions
+
+- scheduler, memory, browser/computer, messaging and workflows attach through Codex-native extension seams.
+
+### R6 — DeepSeek capability absorption
+
+- audit, port, benchmark and integrate selected capabilities.
+
+## CI invariant
+
+`node scripts/check-architecture.mjs` is the first architecture gate. It intentionally fails when the target Hermes desktop preparation or launcher reintroduces Zero3 Node as primary desktop core.
+
+Platform smoke tests for legacy/extension components may continue until each path is replaced. Passing a legacy smoke test is evidence that a compatibility component still works; it is not evidence that the component defines the target architecture.

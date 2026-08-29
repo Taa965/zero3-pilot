@@ -1,133 +1,110 @@
-# Zero3 Desktop v3 (Hermes shell migration)
+# Zero3 Desktop — Hermes UI shell over Codex core
 
-This directory is the migration harness for the next Zero3 Pilot desktop architecture.
+This directory owns the target Zero3 desktop migration.
 
-Zero3 uses the pinned open-source Hermes Desktop Electron/React implementation as a GUI foundation while keeping Zero3 Pilot Node as the local control plane. Hermes is an upstream implementation detail, not the product identity or commercial relationship presented to the user. Upstream license/attribution notices remain preserved in source and distribution where required; product-facing branding is Zero3-owned.
+## Role hierarchy
+
+- `upstream/codex` — **core runtime / Agent Kernel**.
+- `upstream/hermes-agent` — **Electron + React UI/UX shell**.
+- `upstream/deepseek-harness` — **capability donor/reference**.
+- installed Codex/Claude/Hermes apps — **External Agent Collaboration targets**, never Zero3's core.
+
+The architecture constitution is [`../../docs/ARCHITECTURE_CONSTITUTION.md`](../../docs/ARCHITECTURE_CONSTITUTION.md).
+
+## Target transport
+
+```text
+Hermes-derived React UI
+        |
+Zero3 typed preload adapter
+        |
+Electron main Codex client
+        |
+codex app-server --stdio
+        |
+open-source Codex
+```
+
+Codex Thread / Turn / Item and app-server notifications must become the authoritative desktop session/execution model.
+
+## R0 architecture reset
+
+Earlier Phase B work routed the Hermes-derived UI through `zero3-pilot-node` for chat, memory, schedules and browser control. That direction is retired.
+
+The files implementing those old overlays may remain temporarily for migration archaeology, but **`prepare-upstream.mjs` must not apply them**:
+
+- `apply-native-bridge.mjs`
+- `apply-native-chat.mjs`
+- `apply-native-chat-hardening.mjs`
+- `apply-memory-bridge.mjs`
+- `apply-schedule-bridge.mjs`
+- `apply-schedule-lifecycle.mjs`
+- `apply-browser-bridge.mjs`
+
+They must not receive new feature work.
+
+R0 keeps only shell-level transformations:
+
+1. product branding;
+2. removal of Hermes-specific commercial/distribution surfaces that do not belong to Zero3;
+3. Chinese-first localization;
+4. provenance/pin validation.
+
+The target desktop launcher no longer builds or starts Zero3 Node.
+
+## Temporary Hermes compatibility backend
+
+The pinned Hermes Desktop currently expects a Hermes backend to boot. Until the Codex app-server transport replaces that dependency, `npm run dev` may prepare/start Hermes' compatibility backend **only to keep the UI shell renderable**.
+
+That compatibility backend is not allowed to own new Zero3 product state, memory, scheduling, browser/computer workflows, or primary conversation semantics.
 
 ## Pinned upstreams
 
-The repository pins three source trees as Git submodules:
-
-- `upstream/hermes-agent` — desktop shell / interaction architecture.
-- `upstream/codex` — open-source Codex CLI and `app-server` integration source.
-- `upstream/deepseek-harness` — DeepSeek Harness engine/plugin/UI reference and future adapter source.
-
-Exact SHAs live in `scripts/config.mjs`; preparation refuses to continue when a checked-out submodule does not match its pin.
-
-## Zero3 shell policy
-
-`npm run prepare` applies four deterministic overlays to the pinned Hermes Desktop source:
-
-1. **Zero3 product branding** — app identity, wordmark, icons, renderer brand mark, installer metadata, package author/repository metadata and user-facing product copy become Zero3 Pilot. Locale branding is string-literal aware so TypeScript identifiers from the pinned upstream are never rewritten.
-2. **Zero3 product policy** — upstream commercial and distribution surfaces that do not belong in Zero3 are disabled while reusable open-source Agent functionality is retained.
-3. **Zero3 Chinese-first UI policy** — Simplified Chinese (`zh`) is the default locale for fresh or unset profiles, while the existing language switcher and explicitly selected supported languages remain available.
-4. **Zero3 native bridge policy** — renderer access to Zero3 Pilot Node goes through a separate typed preload surface and allowlisted Electron-main IPC instead of an arbitrary localhost/network proxy.
-
-The current policy removes these upstream product surfaces from the Zero3 user experience:
-
-- Nous Portal as the featured/default provider.
-- first-run account-login funnel; onboarding starts with API keys and local/custom endpoints instead.
-- the Providers → Accounts login page and its command-palette destination.
-- Billing / subscription / credit navigation and the in-chat billing CTA banner.
-- Nous diagnostic-upload dialog and the error-card upload action; local logs/copy diagnostics remain available.
-- Nous Cloud as a **new** connection type plus the Portal/Discord recovery funnel; generic local/remote/SSH gateway paths remain available.
-- upstream desktop self-update polling, update overlay, command-palette/context-menu update actions and automatic backend-update CTA.
-- upstream product/release/installer links in About. About is now a Zero3-owned page describing the Zero3 release channel and local control plane.
-- the upstream Nous brand image; renderer brand surfaces use the Zero3 Pilot asset generated by the overlay.
-
-Provider authentication mechanics that are useful outside the upstream commercial product (for example API keys, custom OpenAI-compatible endpoints, generic gateway authentication, and compatibility support for already-stored remote configuration) remain available. Existing upstream `cloud`-kind records are readable only for migration/backward compatibility; Zero3 does not offer creation of new Nous Cloud connections. Zero3 can later expose selected OAuth integrations under its own model/Agent settings without restoring upstream commercial UI.
-
-Desktop updates are intentionally **Zero3-owned**. The pinned upstream shell must never silently advance itself to a different Hermes revision. Upstream updates happen only when Zero3 deliberately reviews and changes the pinned SHA, then passes the Zero3 Windows build/typecheck gate again.
-
-## Chinese-first UI
-
-Zero3 Desktop is a Chinese-first application. The pinned Hermes shell already has a typed Simplified Chinese catalog (`src/i18n/zh.ts`) and a persisted language switcher. Zero3 changes the default locale from English to Simplified Chinese rather than forking the whole translation system.
-
-Rules:
-
-- a fresh Zero3 profile defaults to Simplified Chinese;
-- a missing or invalid `display.language` falls back to Simplified Chinese;
-- an explicitly selected supported language is respected and persisted;
-- Zero3-owned product surfaces must include Chinese copy and must not introduce new English-only primary UI;
-- high-visibility upstream raw-English exceptions on Zero3's primary path are patched by `scripts/apply-chinese-ui.mjs`;
-- CI verifies the default locale is `zh`, verifies Chinese Zero3-owned About copy exists, and still runs the complete desktop TypeScript typecheck/build so the translation catalog shape remains valid.
-
-This does not mean technical identifiers, provider/model names, command names, code, logs, file paths, or external tool output are translated. Those stay in their native/technical form where translation would reduce accuracy.
-
-## Phase B native Zero3 bridge
-
-Phase B starts replacing compatibility-only shell integration with a Zero3-owned renderer-to-control-plane boundary.
-
-The first bridge slice is intentionally read-only:
+Exact SHAs live in `scripts/config.mjs` and preparation fails closed on pin mismatch.
 
 ```text
-Zero3 renderer
-    │
-    │ window.zero3Desktop
-    ▼
-Electron preload
-    │
-    │ zero3:read IPC
-    ▼
-Electron main
-    │
-    │ fixed allowlist only
-    ▼
-127.0.0.1:$ZERO3_PILOT_NODE_PORT
-    ├─ /health
-    ├─ /api/v1/status
-    ├─ /api/v1/jobs
-    ├─ /api/v1/schedules
-    └─ /api/v1/memory
+upstream/codex           core
+upstream/hermes-agent    UI shell
+upstream/deepseek-harness capability donor
 ```
-
-There is deliberately no `fetch(url)`, arbitrary path, arbitrary method, or generic localhost proxy exposed to the renderer. `scripts/apply-native-bridge.mjs` patches the pinned shell's main/preload/type declarations and generates the Chinese-first `Zero3 总控` settings surface. That page reports Node health, task/schedule/memory counts, registered Agents, Browser status, and Computer Use status.
-
-Write operations are not part of this first slice. Agent dispatch, Browser/Computer actions, schedule mutations, and memory writes remain behind Zero3 Node's policy/approval seam. Later Phase B slices must expose each write capability as its own typed, allowlisted action rather than widening the read bridge into a generic proxy.
-
-## Current migration stage
-
-The current migration stage does the following:
-
-1. Initialize and verify pinned upstream repositories.
-2. Apply Zero3 branding, product-policy, Chinese-first UI, and native-bridge overlays.
-3. Use an isolated Hermes home under the Zero3 data area instead of mutating the user's normal Hermes profile.
-4. Install the Zero3 Pilot skill into that isolated profile.
-5. Start/reuse `zero3-pilot-node` on loopback before launching desktop development sessions.
-6. Expose the first Zero3-native read-only desktop control surface through narrow Electron IPC.
-7. Keep side-effecting jobs, automation, memory, browser control, computer control, and Agent dispatch behind the Zero3 Node policy boundary.
-
-Hermes still owns the compatibility chat transport at this stage. A later Phase B slice replaces that chat bridge with a direct Zero3 desktop transport while retaining the reusable Electron/React shell architecture.
 
 ## Commands
 
-From this directory:
-
 ```powershell
 npm run prepare
-npm run dev
 npm run typecheck
+npm run dev
 npm run dist:win
 ```
 
-`npm run prepare` initializes upstreams, verifies fixed SHAs, applies the Zero3 overlays, writes the build provenance stamp, and copies `.agents/skills/zero3-pilot/SKILL.md` into the isolated profile.
+`npm run prepare` applies only the R0 shell overlays. `npm run dev` launches the shell compatibility environment; it does not launch Zero3 Node.
 
-`npm run dev` additionally builds/starts the local Zero3 Node when needed and launches the pinned desktop process with:
+Before changes:
 
-- `HERMES_HOME` redirected to Zero3's isolated data directory.
-- `HERMES_DESKTOP_HERMES_ROOT` pinned to `upstream/hermes-agent`.
-- `ZERO3_PILOT_NODE_PORT` forwarded to the desktop/skill environment.
+```powershell
+node ../../scripts/check-architecture.mjs
+```
 
-`npm run reset` resets the Hermes submodule back to the pinned SHA and removes generated Zero3 overlay state, including the generated native-control page. It is destructive to tracked changes inside the Hermes submodule.
+## Next implementation phase: R1
 
-## Safety rule for upstream modifications
+R1 must introduce a Zero3-owned Codex app-server client with:
 
-Do not edit the pinned upstream submodules casually. `prepare-upstream.mjs` maintains an explicit allowlist of files owned by the Zero3 branding/product-policy/localization/native-bridge overlays. Any other tracked upstream change causes preparation to fail instead of silently overwriting developer work.
+- process resolution/lifecycle;
+- JSONL request/response correlation;
+- `initialize` / `initialized` handshake;
+- typed Thread / Turn APIs;
+- notification stream;
+- interruption and approval routing;
+- narrow Electron preload surface.
 
-The product-policy transformations are implemented in `scripts/apply-shell-policy.mjs`; Chinese-first localization policy is implemented in `scripts/apply-chinese-ui.mjs`; Phase B bridge ownership is implemented in `scripts/apply-native-bridge.mjs`. Every tracked replacement is fail-closed: if the pinned upstream source no longer contains the expected structure, preparation stops and requires an explicit review before the upstream pin can move.
+Only after R1 is stable should the main Hermes chat/session UI be moved from its temporary Hermes transport to Codex.
 
-CI runs the actual Windows sequence `prepare → install → typecheck → build`. The desktop gate is the authority for whether a Zero3 overlay still compiles against the exact pinned Hermes revision.
+## Upstream modification policy
 
-## Legacy desktop path
+Hermes source is an upstream UI source tree, not the Zero3 core. All overlays remain deterministic and fail closed when the pinned source changes. Do not implement business/runtime logic directly inside Hermes Agent's Python runtime.
 
-`apps/desktop` is the previous Rust/Tao/Wry desktop path. It remains temporarily for installer compatibility and rollback while the v3 shell proves itself. It is not the target architecture and should not receive new product UI features.
+Codex source changes are allowed only as deliberate Zero3 secondary-development patches with review, tests and clear ownership. Keeping Codex pristine is not more important than keeping Codex authoritative.
+
+## Legacy desktop
+
+`apps/desktop` is the older Rust/Tao/Wry shell. It remains for rollback/history only and is not the target product UI.
