@@ -1,6 +1,10 @@
 import { loadZero3RemoteHostConfig } from './remote-config'
 import { Zero3RemoteClient } from './remote-client'
-import { Zero3RemoteTaskRunner, type Zero3CodexRuntime } from './remote-task-runner'
+import {
+  Zero3RemoteTaskBlockedError,
+  Zero3RemoteTaskRunner,
+  type Zero3CodexRuntime
+} from './remote-task-runner'
 import type { Zero3RemoteHostStatus } from './remote-types'
 
 const HEARTBEAT_INTERVAL_MS = 15_000
@@ -125,9 +129,10 @@ export class Zero3RemoteNode {
             terminalSent = true
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error)
+            const terminalState = error instanceof Zero3RemoteTaskBlockedError ? 'blocked' : 'failed'
             if (!terminalSent && !this.stopped) {
               try {
-                await this.client.terminal(taskId, lease, 'failed', { reason })
+                await this.client.terminal(taskId, lease, terminalState, { reason })
               } catch {
                 // If terminal publication itself fails, keep the local error visible.
                 // The control plane's lease/fencing/reconciliation path must decide
