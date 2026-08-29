@@ -97,6 +97,18 @@ mod windows {
             wait_for_node(port)?;
         }
 
+        install_codex_skill()?;
+        let workspace = resolve_codex_workspace()?;
+
+        // CI cannot rely on a Microsoft Store Codex installation. This narrow
+        // test seam exercises the real launcher up through Node bootstrap,
+        // workspace resolution and deep-link generation, then captures the URL
+        // instead of invoking the registered codex:// protocol handler.
+        if capture_codex_handoff(&workspace)? {
+            node.persist();
+            return Ok(());
+        }
+
         if !codex_app_is_installed()? {
             return Err(
                 "Codex Desktop is not installed. Install the native Codex app, then launch Zero3 Pilot again."
@@ -104,8 +116,6 @@ mod windows {
             );
         }
 
-        install_codex_skill()?;
-        let workspace = resolve_codex_workspace()?;
         open_codex_workspace(&workspace)?;
 
         // Native Codex now owns the visible desktop shell. Zero3 remains a
@@ -169,6 +179,15 @@ mod windows {
         fs::create_dir_all(&skill_dir)?;
         fs::write(skill_file, ZERO3_CODEX_SKILL)?;
         Ok(())
+    }
+
+    fn capture_codex_handoff(workspace: &Path) -> Result<bool, Box<dyn std::error::Error>> {
+        let Some(path) = env::var_os("ZERO3_CODEX_TEST_CAPTURE_URL") else {
+            return Ok(false);
+        };
+        let url = codex_new_thread_url(&workspace.display().to_string());
+        fs::write(PathBuf::from(path), url)?;
+        Ok(true)
     }
 
     fn codex_app_is_installed() -> Result<bool, Box<dyn std::error::Error>> {
