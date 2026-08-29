@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir } from './config.mjs'
+import { applyZero3CodexMoreItems } from './apply-codex-more-items.mjs'
 
 function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
@@ -191,4 +192,6 @@ export function applyZero3CodexItemRenderingHardening() {
         "      firstStringField(argsRecord, ['output_preview'])"
     }
   ])
+
+  applyZero3CodexMoreItems()
 }
