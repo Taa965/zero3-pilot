@@ -2,9 +2,7 @@
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
-    eprintln!(
-        "Zero3 Pilot native-shell launcher is Windows-first; use zero3-pilot-node directly on this platform."
-    );
+    eprintln!("Zero3 Pilot desktop shell is Windows-first; build zero3-pilot-node for local runtime use on this platform.");
 }
 
 #[cfg(target_os = "windows")]
@@ -15,59 +13,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(target_os = "windows")]
 mod windows {
     use std::env;
-    use std::fs;
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
-    use std::os::windows::process::CommandExt;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::{Child, Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use tao::dpi::LogicalSize;
+    use tao::event::{Event, WindowEvent};
+    use tao::event_loop::{ControlFlow, EventLoopBuilder};
+    use tao::window::WindowBuilder;
+    use wry::WebViewBuilder;
+
     const DEFAULT_PORT: u16 = 8790;
     const START_TIMEOUT: Duration = Duration::from_secs(12);
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    const ZERO3_CODEX_SKILL: &str = include_str!("../../../.agents/skills/zero3-pilot/SKILL.md");
 
-    /// Owns a Node process only until the Codex native shell has been opened.
-    ///
-    /// Once hand-off succeeds the Node intentionally outlives this tiny launcher:
-    /// schedules/background jobs must keep running even when the Codex window is
-    /// closed. If hand-off fails, Drop cleans up the child we just started.
-    struct NodeLease {
-        child: Option<Child>,
-        persist: bool,
+    #[derive(Debug, Clone, Copy)]
+    enum AppEvent {
+        Exit,
     }
 
-    impl NodeLease {
-        fn empty() -> Self {
-            Self {
-                child: None,
-                persist: false,
-            }
-        }
+    struct OwnedNode(Option<Child>);
 
-        fn attach(&mut self, child: Child) {
-            self.child = Some(child);
-        }
-
-        fn persist(&mut self) {
-            self.persist = true;
-        }
-    }
-
-    impl Drop for NodeLease {
-        fn drop(&mut self) {
-            if self.persist {
-                // Dropping Child does not terminate the Windows process. Taking
-                // it makes the intent explicit and prevents our failure cleanup.
-                let _ = self.child.take();
-                return;
-            }
-            if let Some(mut child) = self.child.take() {
+    impl OwnedNode {
+        fn stop(&mut self) {
+            if let Some(mut child) = self.0.take() {
                 let _ = child.kill();
                 let _ = child.wait();
             }
+        }
+    }
+
+    impl Drop for OwnedNode {
+        fn drop(&mut self) {
+            self.stop();
         }
     }
 
@@ -76,52 +56,60 @@ mod windows {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(DEFAULT_PORT);
-        let mut node = NodeLease::empty();
+        let mut owned_node = OwnedNode(None);
 
         if !node_healthy(port) {
             let binary = resolve_node_binary()?;
-            let mut command = Command::new(&binary);
-            command
-                .creation_flags(CREATE_NO_WINDOW)
+            let child = Command::new(&binary)
                 .env("ZERO3_PILOT_NODE_PORT", port.to_string())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            let child = command.spawn().map_err(|error| {
-                format!(
-                    "failed to start Zero3 Pilot Node at {}: {error}",
-                    binary.display()
-                )
-            })?;
-            node.attach(child);
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|error| {
+                    format!(
+                        "failed to start Zero3 Pilot Node at {}: {error}",
+                        binary.display()
+                    )
+                })?;
+            owned_node.0 = Some(child);
             wait_for_node(port)?;
         }
 
-        install_codex_skill()?;
-        let workspace = resolve_codex_workspace()?;
+        let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
+        let window = WindowBuilder::new()
+            .with_title("Zero3 Pilot · 你的个人电脑智能体")
+            .with_inner_size(LogicalSize::new(1280.0, 820.0))
+            .with_min_inner_size(LogicalSize::new(920.0, 620.0))
+            .build(&event_loop)?;
+        let url = format!("http://127.0.0.1:{port}/");
+        let _webview = WebViewBuilder::new().with_url(url).build(&window)?;
 
-        // CI cannot rely on a Microsoft Store Codex installation. This narrow
-        // test seam exercises the real launcher up through Node bootstrap,
-        // workspace resolution and deep-link generation, then captures the URL
-        // instead of invoking the registered codex:// protocol handler.
-        if capture_codex_handoff(&workspace)? {
-            node.persist();
-            return Ok(());
+        if let Some(ms) = env::var("ZERO3_DESKTOP_SMOKE_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            let proxy = event_loop.create_proxy();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(ms.max(250)));
+                let _ = proxy.send_event(AppEvent::Exit);
+            });
         }
 
-        if !codex_app_is_installed()? {
-            return Err(
-                "Codex Desktop is not installed. Install the native Codex app, then launch Zero3 Pilot again."
-                    .into(),
-            );
-        }
-
-        open_codex_workspace(&workspace)?;
-
-        // Native Codex now owns the visible desktop shell. Zero3 remains a
-        // loopback-only sidecar so skills/plugins and background jobs can use it.
-        node.persist();
-        Ok(())
+        event_loop.run(move |event, _, control_flow| {
+            *control_flow = ControlFlow::Wait;
+            match event {
+                Event::UserEvent(AppEvent::Exit)
+                | Event::WindowEvent {
+                    event: WindowEvent::CloseRequested,
+                    ..
+                } => {
+                    owned_node.stop();
+                    *control_flow = ControlFlow::Exit;
+                }
+                _ => {}
+            }
+        });
     }
 
     fn resolve_node_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -137,118 +125,6 @@ mod windows {
             }
         }
         Ok(PathBuf::from("zero3-pilot-node.exe"))
-    }
-
-    fn resolve_codex_workspace() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        if let Some(path) = env::var_os("ZERO3_CODEX_WORKSPACE") {
-            return validate_workspace(PathBuf::from(path));
-        }
-        if let Some(path) = env::args_os().nth(1) {
-            return validate_workspace(PathBuf::from(path));
-        }
-        Ok(env::current_dir()?)
-    }
-
-    fn validate_workspace(path: PathBuf) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        if !path.is_dir() {
-            return Err(format!("Codex workspace is not a directory: {}", path.display()).into());
-        }
-        Ok(path)
-    }
-
-    fn install_codex_skill() -> Result<(), Box<dyn std::error::Error>> {
-        if matches!(
-            env::var("ZERO3_DISABLE_CODEX_SKILL_SYNC").as_deref(),
-            Ok("1" | "true" | "TRUE")
-        ) {
-            return Ok(());
-        }
-
-        let user_profile = env::var_os("USERPROFILE")
-            .ok_or("USERPROFILE is unavailable; cannot install the Zero3 Codex skill")?;
-        let skill_dir = PathBuf::from(user_profile)
-            .join(".agents")
-            .join("skills")
-            .join("zero3-pilot");
-        let skill_file = skill_dir.join("SKILL.md");
-
-        if fs::read_to_string(&skill_file).ok().as_deref() == Some(ZERO3_CODEX_SKILL) {
-            return Ok(());
-        }
-
-        fs::create_dir_all(&skill_dir)?;
-        fs::write(skill_file, ZERO3_CODEX_SKILL)?;
-        Ok(())
-    }
-
-    fn capture_codex_handoff(workspace: &Path) -> Result<bool, Box<dyn std::error::Error>> {
-        let Some(path) = env::var_os("ZERO3_CODEX_TEST_CAPTURE_URL") else {
-            return Ok(false);
-        };
-        let url = codex_new_thread_url(&workspace.display().to_string());
-        fs::write(PathBuf::from(path), url)?;
-        Ok(true)
-    }
-
-    fn codex_app_is_installed() -> Result<bool, Box<dyn std::error::Error>> {
-        // Keep the same stable package identity check used by the upstream
-        // Codex CLI Windows desktop launcher.
-        let output = powershell()
-            .arg("-NoProfile")
-            .arg("-Command")
-            .arg(
-                "Get-StartApps | Where-Object AppID -Like 'OpenAI.Codex_*!App' | Select-Object -First 1 -ExpandProperty AppID",
-            )
-            .output()?;
-        if !output.status.success() {
-            return Ok(false);
-        }
-        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
-    }
-
-    fn open_codex_workspace(workspace: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let path = workspace.display().to_string();
-        let url = codex_new_thread_url(&path);
-        let status = powershell()
-            .arg("-NoProfile")
-            .arg("-Command")
-            .arg("& { param($target) Start-Process -FilePath $target }")
-            .arg(&url)
-            .status()
-            .map_err(|error| format!("failed to invoke Codex native shell: {error}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("failed to open Codex native shell with status {status}").into())
-        }
-    }
-
-    fn powershell() -> Command {
-        let mut command = Command::new("powershell.exe");
-        command.creation_flags(CREATE_NO_WINDOW);
-        command
-    }
-
-    fn codex_new_thread_url(workspace: &str) -> String {
-        format!(
-            "codex://threads/new?path={}",
-            percent_encode_query_value(workspace)
-        )
-    }
-
-    fn percent_encode_query_value(value: &str) -> String {
-        const HEX: &[u8; 16] = b"0123456789ABCDEF";
-        let mut encoded = String::with_capacity(value.len());
-        for &byte in value.as_bytes() {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                encoded.push(byte as char);
-            } else {
-                encoded.push('%');
-                encoded.push(HEX[(byte >> 4) as usize] as char);
-                encoded.push(HEX[(byte & 0x0f) as usize] as char);
-            }
-        }
-        encoded
     }
 
     fn wait_for_node(port: u16) -> Result<(), Box<dyn std::error::Error>> {
@@ -301,19 +177,6 @@ mod windows {
                 Some(value) => env::set_var("ZERO3_PILOT_NODE_BIN", value),
                 None => env::remove_var("ZERO3_PILOT_NODE_BIN"),
             }
-        }
-
-        #[test]
-        fn codex_workspace_url_is_windows_safe() {
-            assert_eq!(
-                codex_new_thread_url(r"C:\Users\zero3\My Project"),
-                "codex://threads/new?path=C%3A%5CUsers%5Czero3%5CMy%20Project"
-            );
-        }
-
-        #[test]
-        fn query_encoder_handles_utf8() {
-            assert_eq!(percent_encode_query_value("零三"), "%E9%9B%B6%E4%B8%89");
         }
     }
 }
