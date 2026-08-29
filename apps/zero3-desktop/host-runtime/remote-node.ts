@@ -4,6 +4,7 @@ import { Zero3RemoteTaskRunner, type Zero3CodexRuntime } from './remote-task-run
 import type { Zero3RemoteHostStatus } from './remote-types'
 
 const HEARTBEAT_INTERVAL_MS = 15_000
+const LEASE_RENEW_INTERVAL_MS = 10_000
 const LEASE_RETRY_MIN_MS = 1_000
 const LEASE_RETRY_MAX_MS = 30_000
 
@@ -18,6 +19,7 @@ export class Zero3RemoteNode {
   private stopped = false
   private running: Promise<void> | null = null
   private heartbeatTimer: NodeJS.Timeout | null = null
+  private leaseRenewTimer: NodeJS.Timeout | null = null
   private statusValue: Zero3RemoteHostStatus
 
   constructor(codex: Zero3CodexRuntime) {
@@ -48,7 +50,10 @@ export class Zero3RemoteNode {
   stop(): void {
     this.stopped = true
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    if (this.leaseRenewTimer) clearInterval(this.leaseRenewTimer)
     this.heartbeatTimer = null
+    this.leaseRenewTimer = null
+    this.client.close()
     this.statusValue.connected = false
   }
 
@@ -93,6 +98,17 @@ export class Zero3RemoteNode {
             await this.client.event(taskId, lease, 1, 'host.accepted', {
               node_id: this.config.nodeId
             })
+
+            if (this.leaseRenewTimer) clearInterval(this.leaseRenewTimer)
+            this.leaseRenewTimer = setInterval(() => {
+              void this.client.renew(taskId, lease).catch(error => {
+                // The control plane remains authoritative for lease/fencing.
+                // A renewal failure is surfaced and later event/terminal writes
+                // still carry the same fencing token; stale writers are refused.
+                this.statusValue.lastError = `remote task lease renewal failed: ${error instanceof Error ? error.message : String(error)}`
+              })
+            }, LEASE_RENEW_INTERVAL_MS)
+
             const result = await this.runner.run(lease, async (sequence, method, payload) => {
               await this.client.event(taskId, lease, sequence + 1, `codex.${method}`, payload)
             })
@@ -100,7 +116,7 @@ export class Zero3RemoteNode {
             terminalSent = true
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error)
-            if (!terminalSent) {
+            if (!terminalSent && !this.stopped) {
               try {
                 await this.client.terminal(taskId, lease, 'failed', { reason })
               } catch {
@@ -111,6 +127,8 @@ export class Zero3RemoteNode {
             }
             this.statusValue.lastError = reason
           } finally {
+            if (this.leaseRenewTimer) clearInterval(this.leaseRenewTimer)
+            this.leaseRenewTimer = null
             this.statusValue.activeTaskId = null
           }
         }
@@ -118,7 +136,9 @@ export class Zero3RemoteNode {
         this.statusValue.connected = false
         this.statusValue.lastError = error instanceof Error ? error.message : String(error)
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+        if (this.leaseRenewTimer) clearInterval(this.leaseRenewTimer)
         this.heartbeatTimer = null
+        this.leaseRenewTimer = null
         if (!this.stopped) await delay(retryMs)
         retryMs = Math.min(retryMs * 2, LEASE_RETRY_MAX_MS)
       }
