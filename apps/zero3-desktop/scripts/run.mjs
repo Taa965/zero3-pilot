@@ -67,7 +67,31 @@ async function nodeHealthy() {
   }
 }
 
-async function ensureZero3Node() {
+function hermesVenvPython() {
+  return path.join(
+    hermesRoot,
+    '.venv',
+    process.platform === 'win32' ? 'Scripts' : 'bin',
+    process.platform === 'win32' ? 'python.exe' : 'python'
+  )
+}
+
+function hermesVenvCli() {
+  return path.join(
+    hermesRoot,
+    '.venv',
+    process.platform === 'win32' ? 'Scripts' : 'bin',
+    process.platform === 'win32' ? 'hermes.exe' : 'hermes'
+  )
+}
+
+function resolveHermesWorkerExecutable(env) {
+  if (env.ZERO3_HERMES_BIN) return env.ZERO3_HERMES_BIN
+  const bundled = hermesVenvCli()
+  return isFile(bundled) ? bundled : 'hermes'
+}
+
+async function ensureZero3Node(env) {
   if (await nodeHealthy()) return null
 
   const binary = zero3NodeBinary()
@@ -81,8 +105,9 @@ async function ensureZero3Node() {
   const child = spawn(binary, [], {
     cwd: repoRoot,
     env: {
-      ...process.env,
-      ZERO3_PILOT_NODE_PORT: String(zero3Port)
+      ...env,
+      ZERO3_PILOT_NODE_PORT: String(zero3Port),
+      ZERO3_HERMES_BIN: resolveHermesWorkerExecutable(env)
     },
     stdio: 'inherit',
     windowsHide: true
@@ -104,15 +129,6 @@ function ensureHermesDependencies(env) {
     cwd: hermesRoot,
     env
   })
-}
-
-function hermesVenvPython() {
-  return path.join(
-    hermesRoot,
-    '.venv',
-    process.platform === 'win32' ? 'Scripts' : 'bin',
-    process.platform === 'win32' ? 'python.exe' : 'python'
-  )
 }
 
 function pythonCanStartHermesGateway(python, env) {
@@ -202,7 +218,7 @@ if (mode === 'dev') ensureHermesPythonDependencies(env)
 
 let ownedNode = null
 try {
-  if (mode === 'dev') ownedNode = await ensureZero3Node()
+  if (mode === 'dev') ownedNode = await ensureZero3Node(env)
   await runHermesDesktop(mode, env)
 } finally {
   if (ownedNode && !ownedNode.killed) ownedNode.kill()
