@@ -91,9 +91,14 @@ jobs:
           if ($globalTypes -notmatch 'type Zero3CodexThreadTurnsListRequest = \{ cursor\?: string; threadId: string \}') { throw 'R3F narrow turns-list request type missing' }
           if ($preload -match 'zero3:codex:(rpc|request|proxy)') { throw 'Renderer must not receive a generic Codex JSON-RPC proxy' }
 
-          if ($primary -notmatch 'thread\.read\(\{ threadId, includeTurns: false \}\)') { throw 'R3F metadata read must exclude embedded Turns' }
-          if ($primary -notmatch 'window\.zero3Codex\.thread\.turnsList') { throw 'R3F history does not use native turns pagination' }
-          if ($primary -match 'includeTurns: true') { throw 'R3F generated primary chat still depends on whole-thread includeTurns snapshots' }
+          $boundaryReader = [regex]::Match(
+            $primary,
+            '(?s)const readThreadForBoundary = useCallback\(.*?const resolveMessageBoundary = useCallback'
+          ).Value
+          if (-not $boundaryReader) { throw 'Could not isolate R3F authoritative boundary history reader' }
+          if ($boundaryReader -notmatch 'thread\.read\(\{ threadId, includeTurns: false \}\)') { throw 'R3F boundary metadata read must exclude embedded Turns' }
+          if ($boundaryReader -notmatch 'window\.zero3Codex\.thread\.turnsList') { throw 'R3F boundary history does not use native turns pagination' }
+          if ($boundaryReader -match 'includeTurns: true') { throw 'R3F destructive-history boundary still depends on whole-thread Turn hydration' }
           if ($primary -notmatch "turn\.itemsView !== 'full'") { throw 'R3F does not fail closed on incomplete Turn items' }
           if ($primary -notmatch 'turnIds\.has\(turn\.id\)') { throw 'R3F duplicate Turn guard missing' }
           if ($primary -notmatch 'cursors\.has\(page\.nextCursor\)') { throw 'R3F cursor-loop guard missing' }
