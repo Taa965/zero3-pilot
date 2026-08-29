@@ -1,6 +1,6 @@
 ---
 name: zero3-pilot
-description: Use the local Zero3 Pilot Node for persistent jobs, automation, memory, Codex/Claude/Hermes dispatch, browser CDP, and computer control from inside the native Codex desktop workspace.
+description: Use the local Zero3 Pilot Node for persistent jobs, automation, memory, Codex/Claude/Hermes dispatch, browser CDP, and computer control from Zero3 Desktop or a compatible agent shell.
 ---
 
 # Zero3 Pilot
@@ -9,7 +9,9 @@ Use this skill when the user asks to operate Zero3, run a Zero3 Agent, inspect p
 
 ## Architecture
 
-Codex Desktop is the primary visible shell. Do not recreate a separate desktop UI. Zero3 runs as a loopback-only sidecar at `http://127.0.0.1:8790` by default. The diagnostic dashboard may still exist, but prefer native Codex conversation/project/terminal/diff/permission UX and call the sidecar only for Zero3-specific capabilities.
+Zero3 Pilot Node is the local control plane and remains loopback-only at `http://127.0.0.1:8790` by default. The desktop migration uses the pinned open-source Hermes Desktop Electron/React shell as the primary GUI foundation. Codex and DeepSeek are execution engines/adapters, not the owner of the Zero3 UI.
+
+Do not call the proprietary Codex Desktop/AppX and present it as Zero3's own UI. The pinned `upstream/codex` source is used for open-source Codex CLI/app-server integration. The pinned `upstream/deepseek-harness` source is an additional adapter/UI architecture reference. Hermes Desktop may host the conversation surface during migration, while Zero3-specific actions continue through the Zero3 Node policy boundary.
 
 If `ZERO3_PILOT_NODE_PORT` is explicitly known in the current shell, use that port instead of `8790`.
 
@@ -31,7 +33,7 @@ GET /api/v1/schedules
 GET /api/v1/memory
 ```
 
-Use `Invoke-RestMethod` from PowerShell for local calls. Keep all Zero3 Node traffic on loopback.
+Use the local shell's HTTP client (`Invoke-RestMethod`, `curl`, or equivalent) for loopback calls. Keep all Zero3 Node traffic on loopback unless the user explicitly requests an external action.
 
 ## Mutating operations
 
@@ -75,15 +77,21 @@ Browser and computer payload schemas evolve with the providers. Before construct
 When changing this repository, preserve this boundary:
 
 ```text
-Codex native desktop shell
+Zero3 Desktop
+  Hermes Desktop Electron/React shell (open-source upstream)
         |
-        +-- Zero3 workspace skill/plugin layer
+        +-- Zero3 skill / future native transport adapter
         |
         +-- Zero3 Pilot Node (127.0.0.1)
               +-- jobs / scheduler / memory
-              +-- Codex / Claude / Hermes adapters
+              +-- Codex app-server / CLI adapter
+              +-- Claude adapter
+              +-- Hermes adapter
+              +-- DeepSeek Harness adapter
               +-- browser CDP
               +-- computer use
 ```
 
-Do not reintroduce Tao/Wry as the primary product shell unless the user explicitly reverses the architecture decision.
+The migration is staged. Phase A may still use Hermes' own headless runtime for chat transport while Zero3 actions are provided through this skill and the local Node. Phase B replaces that compatibility bridge with a direct Zero3 desktop transport so the UI is fully owned by Zero3 without losing the Hermes-derived shell architecture.
+
+Do not reintroduce Tao/Wry as the primary product shell and do not invest in Codex TUI as the final desktop GUI unless the user explicitly reverses this architecture decision.
