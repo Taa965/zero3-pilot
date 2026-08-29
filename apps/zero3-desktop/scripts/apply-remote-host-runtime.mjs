@@ -54,34 +54,49 @@ export function applyZero3RemoteHostRuntime() {
 
   patchFile('electron/main.ts', [
     {
-      label: 'Electron app import used to anchor Zero3 Remote Host import',
-      from: "import { app, BrowserWindow",
-      to: "import { Zero3RemoteNode } from './zero3/remote-host/index'\n\nimport { app, BrowserWindow"
+      label: 'end of Electron import block',
+      from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
+      to:
+        "import { Zero3RemoteNode } from './zero3/remote-host/index'\n\n" +
+        "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
     },
     {
       label: 'Zero3 Codex event broadcaster',
       from: "function broadcastZero3CodexEvent(event: Zero3CodexEvent) {\n  for (const window of BrowserWindow.getAllWindows()) {",
-      to: "const zero3CodexLocalEventListeners = new Set<(event: Zero3CodexEvent) => void>()\n\nfunction broadcastZero3CodexEvent(event: Zero3CodexEvent) {\n  for (const listener of zero3CodexLocalEventListeners) {\n    try { listener(event) } catch { /* local observers must not break Codex transport */ }\n  }\n  for (const window of BrowserWindow.getAllWindows()) {"
+      to:
+        "const zero3CodexLocalEventListeners = new Set<(event: Zero3CodexEvent) => void>()\n\n" +
+        "function broadcastZero3CodexEvent(event: Zero3CodexEvent) {\n" +
+        "  for (const listener of zero3CodexLocalEventListeners) {\n" +
+        "    try { listener(event) } catch { /* local observers must not break Codex transport */ }\n" +
+        "  }\n" +
+        "  for (const window of BrowserWindow.getAllWindows()) {"
     },
     {
-      label: 'Zero3CodexAppServer request method',
+      label: 'Zero3CodexAppServer server-response method',
       from: "  async respondToServerRequest(value: unknown) {",
-      to: "  onEvent(listener: (event: Zero3CodexEvent) => void) {\n    zero3CodexLocalEventListeners.add(listener)\n    return () => zero3CodexLocalEventListeners.delete(listener)\n  }\n\n  async respondToServerRequest(value: unknown) {"
+      to:
+        "  onEvent(listener: (event: Zero3CodexEvent) => void) {\n" +
+        "    zero3CodexLocalEventListeners.add(listener)\n" +
+        "    return () => zero3CodexLocalEventListeners.delete(listener)\n" +
+        "  }\n\n" +
+        "  async respondToServerRequest(value: unknown) {"
     },
     {
-      label: 'Zero3 Codex singleton used to anchor Remote Host singleton',
+      label: 'Zero3 Codex singleton',
       from: "const zero3CodexAppServer = new Zero3CodexAppServer()",
-      to: "const zero3CodexAppServer = new Zero3CodexAppServer()\nconst zero3RemoteNode = new Zero3RemoteNode(zero3CodexAppServer)"
+      to:
+        "const zero3CodexAppServer = new Zero3CodexAppServer()\n" +
+        "const zero3RemoteNode = new Zero3RemoteNode(zero3CodexAppServer)\n" +
+        "app.once('ready', () => zero3RemoteNode.start())"
     },
     {
-      label: 'Electron ready hook',
-      from: "app.whenReady().then(async () => {",
-      to: "app.whenReady().then(async () => {\n  zero3RemoteNode.start()"
-    },
-    {
-      label: 'Electron before-quit hook',
-      from: "app.on('before-quit', () => {",
-      to: "app.on('before-quit', () => {\n  zero3RemoteNode.stop()"
+      label: 'typed Codex before-quit hook',
+      from: "app.on('before-quit', () => zero3CodexAppServer.stop())",
+      to:
+        "app.on('before-quit', () => {\n" +
+        "  zero3RemoteNode.stop()\n" +
+        "  zero3CodexAppServer.stop()\n" +
+        "})"
     }
   ])
 }
