@@ -141,7 +141,7 @@ requireText(
 requireText(
   prepare,
   'applyZero3CodexItemRenderingHardening()',
-  'R3A target desktop must preserve summary-over-raw reasoning stream semantics.'
+  'R3A target desktop must preserve summary/file/status protocol semantics.'
 )
 requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the pinned open-source Codex core.')
 requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
@@ -230,12 +230,17 @@ for (const required of [
   'projectCodexReasoningSummaryDelta',
   'resetToSummary',
   'firstSummaryDelta',
-  '!reasoningSummaryItemsRef.current.has(itemId)'
+  '!reasoningSummaryItemsRef.current.has(itemId)',
+  'const kind = record(entry.kind)',
+  'kind.move_path',
+  'Command execution declined.',
+  'File change declined.',
+  'nonEmptyString(record(value).message)'
 ]) {
   requireText(
     codexItemRenderingHardening,
     required,
-    `R3A reasoning hardening is missing summary-stream takeover behavior: ${required}`
+    `R3A Item hardening is missing summary/file/status protocol semantics: ${required}`
   )
 }
 
