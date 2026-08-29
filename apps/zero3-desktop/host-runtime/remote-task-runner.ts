@@ -2,6 +2,7 @@ import path from 'node:path'
 
 import { zero3RemoteWorkspaceAllowed } from './remote-config'
 import { Zero3RemoteEvidenceCollector } from './remote-evidence'
+import { Zero3RemoteMappingStore } from './remote-mapping-store'
 import type {
   Zero3RemoteCodexMapping,
   Zero3RemoteHostConfig,
@@ -17,6 +18,13 @@ export type Zero3CodexRuntime = {
 }
 
 type RecordValue = Record<string, unknown>
+
+export class Zero3RemoteTaskBlockedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'Zero3RemoteTaskBlockedError'
+  }
+}
 
 function record(value: unknown): RecordValue {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as RecordValue) : {}
@@ -43,7 +51,7 @@ function validateTask(task: Zero3RemoteTask): Zero3RemoteTask {
   if (!['read_only', 'standard', 'elevated', 'full_control'].includes(permission)) {
     throw new Error('unsupported remote permission_profile')
   }
-  const maxTurns = execution.max_turns == null ? 8 : Number(execution.max_turns)
+  const maxTurns = execution.max_turns == null ? 1 : Number(execution.max_turns)
   const timeoutSeconds = execution.timeout_seconds == null ? 3600 : Number(execution.timeout_seconds)
   if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 32) throw new Error('execution.max_turns must be an integer from 1 to 32')
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 30 || timeoutSeconds > 8 * 60 * 60) {
@@ -65,7 +73,7 @@ function validateTask(task: Zero3RemoteTask): Zero3RemoteTask {
     execution: {
       max_turns: maxTurns,
       timeout_seconds: timeoutSeconds,
-      require_clean_worktree: execution.require_clean_worktree == null ? true : execution.require_clean_worktree === true
+      require_clean_worktree: execution.require_clean_worktree === true
     }
   }
 }
@@ -75,7 +83,7 @@ function taskPrompt(task: Zero3RemoteTask): string {
   const acceptance = task.acceptance_criteria?.length
     ? task.acceptance_criteria.map(value => `- ${value}`).join('\n')
     : '- verify the requested objective against the real project'
-  return `[ZERO3 REMOTE TASK]\n\nTask ID: ${task.task_id}\nExecution ID: ${task.execution_id}\n\nObjective:\n${task.objective}\n\nConstraints:\n${constraints}\n\nAcceptance Criteria:\n${acceptance}\n\nExecution requirements:\n- Inspect the real repository before modifying it.\n- Preserve Zero3 architecture invariants; open-source Codex remains the only Agent Kernel.\n- Use real project verification rather than assuming generated code works.\n- Do not bypass sandbox or approval policy.\n- Do not claim success until the acceptance criteria have been verified.\n- If an action needs permission outside the granted profile, stop and surface the requirement.\n`
+  return `[ZERO3 REMOTE TASK]\n\nTask ID: ${task.task_id}\nExecution ID: ${task.execution_id}\nPermission intent: ${task.permission_profile ?? 'standard'}\nMaximum host-started Codex Turns: ${task.execution?.max_turns ?? 1}\n\nObjective:\n${task.objective}\n\nConstraints:\n${constraints}\n\nAcceptance Criteria:\n${acceptance}\n\nExecution requirements:\n- Inspect the real repository before modifying it.\n- Preserve Zero3 architecture invariants; open-source Codex remains the only Agent Kernel.\n- Use real project verification rather than assuming generated code works.\n- Do not bypass sandbox or approval policy.\n- Do not claim success until the acceptance criteria have been verified.\n- If an action needs permission outside the granted profile, stop and surface the requirement.\n`
 }
 
 function idFromResult(value: unknown, label: string): string {
@@ -109,54 +117,91 @@ function delay(ms: number): Promise<void> {
 export class Zero3RemoteTaskRunner {
   constructor(
     private readonly config: Zero3RemoteHostConfig,
-    private readonly codex: Zero3CodexRuntime
+    private readonly codex: Zero3CodexRuntime,
+    private readonly mappings = new Zero3RemoteMappingStore(config.mappingStateFile)
   ) {}
 
   async run(lease: Zero3RemoteLease, onEvidence?: (sequence: number, method: string, payload: unknown) => Promise<void>) {
     const task = validateTask(lease.task)
     const allowedWorkspace = zero3RemoteWorkspaceAllowed(this.config, task.target.workspace)
-    if (!allowedWorkspace) throw new Error('remote task workspace is not present in the local allow-list')
+    if (!allowedWorkspace) throw new Zero3RemoteTaskBlockedError('remote task workspace is not present in the local allow-list')
     const workspace = path.resolve(allowedWorkspace)
 
-    // H3 deliberately preserves the current Zero3 desktop safety boundary:
-    // remote tasks do not silently widen the default sandbox. Codex can issue
-    // its normal server-originated approval request if a write/escalation is needed.
-    const threadResult = await this.codex.startThread({
-      cwd: workspace,
-      approvalPolicy: 'on-request',
-      sandbox: 'read-only',
-      ephemeral: false
-    })
-    const threadId = idFromResult(threadResult, 'Codex thread id')
-    const mapping: Zero3RemoteCodexMapping = {
-      taskId: task.task_id,
-      executionId: task.execution_id,
-      threadId,
-      turnIds: [],
-      workspace
+    // H3 has no generic Git or shell escape hatch outside Codex. Until a
+    // host-owned, Codex-authoritative Git preflight exists, explicit conditions
+    // that cannot be proven through the narrow adapter are rejected rather than
+    // silently treated as satisfied.
+    if (task.target.base_ref) {
+      throw new Zero3RemoteTaskBlockedError('target.base_ref requires a future Codex-authoritative Git preflight; H3 will not guess it')
     }
-    const evidence = new Zero3RemoteEvidenceCollector(mapping)
-    const started = evidence.push('remote.thread.started', { threadId, workspace })
-    if (onEvidence) await onEvidence(started.sequence, started.method, started.params)
+    if (task.execution?.require_clean_worktree) {
+      throw new Zero3RemoteTaskBlockedError(
+        'execution.require_clean_worktree requires a future Codex-authoritative Git preflight; H3 will not bypass the kernel to inspect it'
+      )
+    }
 
-    const turnResult = await this.codex.startTurn(
-      {
+    let mapping = await this.mappings.get(task.task_id)
+    if (mapping) {
+      if (mapping.executionId !== task.execution_id) {
+        throw new Zero3RemoteTaskBlockedError('task_id is already bound to a different execution_id')
+      }
+      if (path.resolve(mapping.workspace) !== workspace) {
+        throw new Zero3RemoteTaskBlockedError('task_id is already bound to a different local workspace')
+      }
+      mapping = { ...mapping, turnIds: [...mapping.turnIds] }
+    } else {
+      // H3 deliberately preserves the current Zero3 desktop safety boundary:
+      // remote tasks do not silently widen the default sandbox. Codex can issue
+      // its normal server-originated approval request if a write/escalation is needed.
+      const threadResult = await this.codex.startThread({
+        cwd: workspace,
+        approvalPolicy: 'on-request',
+        sandbox: 'read-only',
+        ephemeral: false
+      })
+      const threadId = idFromResult(threadResult, 'Codex thread id')
+      mapping = {
+        taskId: task.task_id,
+        executionId: task.execution_id,
         threadId,
-        input: [{ type: 'text', text: taskPrompt(task), text_elements: [] }]
-      },
-      30_000
-    )
-    const turnId = idFromResult(turnResult, 'Codex turn id')
-    mapping.turnIds.push(turnId)
-    const turnStarted = evidence.push('remote.turn.started', { threadId, turnId })
-    if (onEvidence) await onEvidence(turnStarted.sequence, turnStarted.method, turnStarted.params)
+        turnIds: [],
+        workspace
+      }
+      await this.mappings.put(mapping)
+    }
+
+    const evidence = new Zero3RemoteEvidenceCollector(mapping)
+    const threadEvidence = evidence.push(mapping.turnIds.length ? 'remote.thread.resumed' : 'remote.thread.started', {
+      threadId: mapping.threadId,
+      workspace
+    })
+    if (onEvidence) await onEvidence(threadEvidence.sequence, threadEvidence.method, threadEvidence.params)
+
+    let turnId = mapping.turnIds.at(-1) ?? null
+    if (!turnId) {
+      const turnResult = await this.codex.startTurn(
+        {
+          threadId: mapping.threadId,
+          input: [{ type: 'text', text: taskPrompt(task), text_elements: [] }]
+        },
+        30_000
+      )
+      turnId = idFromResult(turnResult, 'Codex turn id')
+      mapping.turnIds.push(turnId)
+      await this.mappings.put(mapping)
+      const turnStarted = evidence.push('remote.turn.started', { threadId: mapping.threadId, turnId })
+      if (onEvidence) await onEvidence(turnStarted.sequence, turnStarted.method, turnStarted.params)
+    } else {
+      const turnResumed = evidence.push('remote.turn.resumed', { threadId: mapping.threadId, turnId })
+      if (onEvidence) await onEvidence(turnResumed.sequence, turnResumed.method, turnResumed.params)
+    }
 
     const timeoutMs = (task.execution?.timeout_seconds ?? 3600) * 1000
     const deadline = Date.now() + timeoutMs
     let lastStatus = ''
 
     while (Date.now() < deadline) {
-      const snapshot = await this.codex.readThread({ threadId, includeTurns: true })
+      const snapshot = await this.codex.readThread({ threadId: mapping.threadId, includeTurns: true })
       const turn = findTurn(snapshot, turnId)
       if (!turn) {
         await delay(750)
