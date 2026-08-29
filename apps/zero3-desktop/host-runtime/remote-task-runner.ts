@@ -94,6 +94,10 @@ function taskPrompt(task: Zero3RemoteTask): string {
   return `[ZERO3 REMOTE TASK]\n\nTask ID: ${task.task_id}\nExecution ID: ${task.execution_id}\nPermission intent: ${task.permission_profile ?? 'standard'}\nMaximum host-started Codex Turns: ${task.execution?.max_turns ?? 1}\n\nObjective:\n${task.objective}\n\nConstraints:\n${constraints}\n\nAcceptance Criteria:\n${acceptance}\n\nExecution requirements:\n- Inspect the real repository before modifying it.\n- Preserve Zero3 architecture invariants; open-source Codex remains the only Agent Kernel.\n- Use real project verification rather than assuming generated code works.\n- Do not bypass sandbox or approval policy.\n- Do not claim success until the acceptance criteria have been verified.\n- If an action needs permission outside the granted profile, stop and surface the requirement.\n`
 }
 
+function taskFingerprint(task: Zero3RemoteTask): string {
+  return createHash('sha256').update(JSON.stringify(task)).digest('hex')
+}
+
 function turnClientId(task: Zero3RemoteTask): string {
   const digest = createHash('sha256')
     .update([ZERO3_REMOTE_TASK_PROTOCOL, task.task_id, task.execution_id, 'turn:1'].join('\u0000'))
@@ -165,6 +169,7 @@ export class Zero3RemoteTaskRunner {
 
   async run(lease: Zero3RemoteLease, onEvidence?: (sequence: number, method: string, payload: unknown) => Promise<void>) {
     const task = validateTask(lease.task)
+    const fingerprint = taskFingerprint(task)
     const allowedWorkspace = zero3RemoteWorkspaceAllowed(this.config, task.target.workspace)
     if (!allowedWorkspace) throw new Zero3RemoteTaskBlockedError('remote task workspace is not present in the local allow-list')
     const workspace = path.resolve(allowedWorkspace)
@@ -187,6 +192,9 @@ export class Zero3RemoteTaskRunner {
       if (mapping.executionId !== task.execution_id) {
         throw new Zero3RemoteTaskBlockedError('task_id is already bound to a different execution_id')
       }
+      if (mapping.taskFingerprint !== fingerprint) {
+        throw new Zero3RemoteTaskBlockedError('task_id and execution_id are already bound to different remote task content')
+      }
       if (path.resolve(mapping.workspace) !== workspace) {
         throw new Zero3RemoteTaskBlockedError('task_id is already bound to a different local workspace')
       }
@@ -205,6 +213,7 @@ export class Zero3RemoteTaskRunner {
       mapping = {
         taskId: task.task_id,
         executionId: task.execution_id,
+        taskFingerprint: fingerprint,
         threadId,
         turnIds: [],
         workspace
