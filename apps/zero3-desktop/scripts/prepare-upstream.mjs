@@ -12,6 +12,7 @@ import {
   upstreamRoot
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
+import { applyZero3CodexPrimaryChat } from './apply-codex-primary-chat.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
@@ -62,8 +63,9 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
-  // R1 permits only the reviewed shell transformations plus the typed Codex
-  // app-server boundary. Retired Zero3 Node runtime bridges stay disabled.
+  // R2 permits only the reviewed shell transformations plus the typed Codex
+  // app-server boundary and the primary-chat adapter. Retired Zero3 Node
+  // runtime bridges stay disabled.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -205,7 +207,7 @@ function applyBrandOverlay() {
         coreRuntime: 'openai-codex-app-server',
         desktopShell: 'hermes-electron-react',
         deepseekRole: 'capability-donor',
-        migrationPhase: 'R1A-codex-app-server-transport',
+        migrationPhase: 'R2A-codex-primary-chat',
         upstream: pins
       },
       null,
@@ -238,10 +240,12 @@ applyBrandOverlay()
 applyZero3ShellPolicy()
 applyZero3ChineseUi()
 applyZero3CodexTransport()
+applyZero3CodexPrimaryChat()
 
-console.log('Zero3 Desktop R1A shell prepared successfully.')
+console.log('Zero3 Desktop R2A shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
 console.log(`Hermes UI shell source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
 console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel; Hermes is UI shell only.')
-console.log('R1A: typed Codex thread/turn/event IPC is enabled; retired Zero3 Node runtime bridges remain disabled.')
+console.log('R2A: main chat Thread/Turn streaming, Stop and resume use Codex; retired Zero3 Node runtime bridges remain disabled.')
+console.log('R2A safety: main Codex chat is read-only/no-approval until native approval and tool UI mapping lands in R3.')
