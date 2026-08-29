@@ -69,9 +69,10 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
-  // R3C permits only the reviewed shell transformations plus the typed Codex
-  // app-server boundary, primary-chat adapter, native prompt/item presentation
-  // and structured UserInput mapping. Retired Zero3 Node bridges stay disabled.
+  // R3D permits only the reviewed shell transformations plus the typed Codex
+  // app-server boundary, primary-chat adapter, native prompt/item presentation,
+  // structured UserInput mapping and native Thread lifecycle surfaces. Retired
+  // Zero3 Node bridges stay disabled.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -82,6 +83,7 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/electron/preload.ts',
     'apps/desktop/public/apple-touch-icon.png',
     'apps/desktop/src/app/chat/composer/status-stack/index.tsx',
+    'apps/desktop/src/app/chat/sidebar/session-actions-menu.tsx',
     'apps/desktop/src/app/command-palette/index.tsx',
     'apps/desktop/src/app/context-menu/app-context-menu.tsx',
     'apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts',
@@ -91,6 +93,7 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/app/settings/connections-registry.tsx',
     'apps/desktop/src/app/settings/index.tsx',
     'apps/desktop/src/app/settings/providers-settings.tsx',
+    'apps/desktop/src/app/settings/sessions-settings.tsx',
     'apps/desktop/src/app/settings/types.ts',
     'apps/desktop/src/components/assistant-ui/thread/assistant-message.tsx',
     'apps/desktop/src/components/assistant-ui/tool/fallback-model/index.ts',
@@ -262,10 +265,11 @@ applyZero3CodexItemRenderingHardening()
 applyZero3CodexSessionListGuard()
 applyZero3CodexStructuredInput()
 
-console.log('Zero3 Desktop R3C shell prepared successfully.')
+console.log('Zero3 Desktop R3D shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
 console.log(`Hermes UI shell source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
 console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel; Hermes is UI shell only.')
 console.log('R3C: Hermes composer images use native Codex localImage; other attachment context is encoded as validated Codex text input.')
 console.log('R3C safety: Renderer may submit only text/localImage structured inputs; default sandbox stays read-only and unsupported server requests stay fail-closed.')
+console.log('R3D: archive/unarchive/delete/rename/whole-thread fork/active-turn steer use typed Codex app-server operations.')

@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir } from './config.mjs'
+import { applyZero3CodexThreadActions } from './apply-codex-thread-actions.mjs'
+import { applyZero3CodexThreadActionsHardening } from './apply-codex-thread-actions-hardening.mjs'
 
 function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
@@ -73,5 +75,8 @@ export function applyZero3CodexStructuredInputHardening() {
     }
   ])
 
+  applyZero3CodexThreadActions()
+  applyZero3CodexThreadActionsHardening()
   console.log('R3C hardening: turn/start enforces one input shape; saved terminal selections expand into validated Codex text without Hermes Runtime execution.')
+  console.log('R3D: native Codex thread actions are chained after the R3C typed input boundary.')
 }

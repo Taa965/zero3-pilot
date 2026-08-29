@@ -23,11 +23,11 @@ function patchFile(relativePath, replacements) {
   fs.writeFileSync(file, source)
 }
 
-function replaceFile(relativePath, marker, content) {
+function replaceFile(relativePath, marker, content, appliedMarker = null) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   const current = fs.readFileSync(file, 'utf8')
 
-  if (current === content) {
+  if (current === content || (appliedMarker && current.includes(appliedMarker))) {
     return
   }
   if (!current.includes(marker)) {
@@ -274,5 +274,10 @@ export function applyZero3ShellPolicy() {
     }
   ])
 
-  replaceFile('src/app/settings/about-settings.tsx', "const RELEASE_NOTES_URL = 'https://github.com/NousResearch/hermes-agent/releases'", ZERO3_ABOUT)
+  replaceFile(
+    'src/app/settings/about-settings.tsx',
+    "const RELEASE_NOTES_URL = 'https://github.com/NousResearch/hermes-agent/releases'",
+    ZERO3_ABOUT,
+    'Zero3 Pilot</h2>'
+  )
 }
