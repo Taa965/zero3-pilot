@@ -30,6 +30,16 @@ export function applyZero3ShellPolicy() {
   // uploads in the Zero3 desktop product.
   patchFile('src/app/settings/index.tsx', [
     {
+      label: 'account icon helper import',
+      from: "import { codiconIcon } from '@/components/ui/codicon'\n",
+      to: '// Zero3 shell policy: upstream account-login icon helper removed.\n'
+    },
+    {
+      label: 'billing icon import',
+      from: '  BarChart3,\n',
+      to: '  // Zero3 shell policy: upstream billing icon removed.\n'
+    },
+    {
       label: 'billing route entry',
       from: "  'billing',\n",
       to: "  // Zero3 shell policy: upstream billing page disabled.\n"
