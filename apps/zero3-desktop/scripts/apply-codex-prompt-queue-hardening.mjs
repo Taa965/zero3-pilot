@@ -178,4 +178,98 @@ export function applyZero3CodexPromptQueueHardening() {
         "        void rejectPendingPrompts(threadId, 'Codex runtime error ended the pending prompt.')"
     }
   ])
+
+  patchFile('src/store/prompts.ts', [
+    {
+      label: 'Codex prompt stores in shell prompt state',
+      from: "import { atom, computed, type ReadableAtom } from 'nanostores'",
+      to:
+        "import { atom, computed, type ReadableAtom } from 'nanostores'\n\n" +
+        "import { $codexApprovals, $codexUserInputs } from '@/app/zero3-codex/prompt-store'"
+    },
+    {
+      label: 'active Codex awaiting-input projection',
+      from:
+        "export const $activeSessionAwaitingInput = computed(\n" +
+        "  [$clarifyRequest, $approvalRequest, $sudoRequest, $secretRequest],\n" +
+        "  (clarify, approval, sudo, secret) => Boolean(clarify || approval || sudo || secret)\n" +
+        ")",
+      to:
+        "const $activeCodexAwaitingInput = computed(\n" +
+        "  [$codexApprovals, $codexUserInputs, $activeSessionId],\n" +
+        "  (approvals, inputs, activeId) => {\n" +
+        "    const key = keyFor(activeId)\n" +
+        "    return Boolean(approvals[key]?.length || inputs[key]?.some(request => request.isBlocking))\n" +
+        "  }\n" +
+        ")\n\n" +
+        "export const $activeSessionAwaitingInput = computed(\n" +
+        "  [$clarifyRequest, $approvalRequest, $sudoRequest, $secretRequest, $activeCodexAwaitingInput],\n" +
+        "  (clarify, approval, sudo, secret, codex) => Boolean(clarify || approval || sudo || secret || codex)\n" +
+        ")"
+    },
+    {
+      label: 'imperative Codex blocking prompt guard',
+      from:
+        "  return Boolean(approval.$all.get()[key] || sudo.$all.get()[key] || secret.$all.get()[key])",
+      to:
+        "  return Boolean(\n" +
+        "    approval.$all.get()[key] ||\n" +
+        "      sudo.$all.get()[key] ||\n" +
+        "      secret.$all.get()[key] ||\n" +
+        "      $codexApprovals.get()[key]?.length ||\n" +
+        "      $codexUserInputs.get()[key]?.some(request => request.isBlocking)\n" +
+        "  )"
+    },
+    {
+      label: 'reactive Codex blocking prompt guard',
+      from:
+        "export const sessionBlockingPrompt = (sessionId: string | null) =>\n" +
+        "  computed([approval.$all, sudo.$all, secret.$all], (approvals, sudos, secrets) => {\n" +
+        "    const key = keyFor(sessionId)\n\n" +
+        "    return Boolean(approvals[key] || sudos[key] || secrets[key])\n" +
+        "  })",
+      to:
+        "export const sessionBlockingPrompt = (sessionId: string | null) =>\n" +
+        "  computed(\n" +
+        "    [approval.$all, sudo.$all, secret.$all, $codexApprovals, $codexUserInputs],\n" +
+        "    (approvals, sudos, secrets, codexApprovals, codexInputs) => {\n" +
+        "      const key = keyFor(sessionId)\n\n" +
+        "      return Boolean(\n" +
+        "        approvals[key] ||\n" +
+        "          sudos[key] ||\n" +
+        "          secrets[key] ||\n" +
+        "          codexApprovals[key]?.length ||\n" +
+        "          codexInputs[key]?.some(request => request.isBlocking)\n" +
+        "      )\n" +
+        "    }\n" +
+        "  )"
+    },
+    {
+      label: 'per-session Codex awaiting-input state',
+      from:
+        "export function sessionAwaitingInput(sessionId: string | null) {\n" +
+        "  return computed([$clarifyRequests, approval.$all, sudo.$all, secret.$all], (clarify, approvals, sudos, secrets) => {\n" +
+        "    const key = keyFor(sessionId)\n\n" +
+        "    return Boolean(clarify[key] || approvals[key] || sudos[key] || secrets[key])\n" +
+        "  })\n" +
+        "}",
+      to:
+        "export function sessionAwaitingInput(sessionId: string | null) {\n" +
+        "  return computed(\n" +
+        "    [$clarifyRequests, approval.$all, sudo.$all, secret.$all, $codexApprovals, $codexUserInputs],\n" +
+        "    (clarify, approvals, sudos, secrets, codexApprovals, codexInputs) => {\n" +
+        "      const key = keyFor(sessionId)\n\n" +
+        "      return Boolean(\n" +
+        "        clarify[key] ||\n" +
+        "          approvals[key] ||\n" +
+        "          sudos[key] ||\n" +
+        "          secrets[key] ||\n" +
+        "          codexApprovals[key]?.length ||\n" +
+        "          codexInputs[key]?.some(request => request.isBlocking)\n" +
+        "      )\n" +
+        "    }\n" +
+        "  )\n" +
+        "}"
+    }
+  ])
 }
