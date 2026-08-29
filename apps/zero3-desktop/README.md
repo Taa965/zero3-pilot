@@ -2,7 +2,7 @@
 
 This directory is the migration harness for the next Zero3 Pilot desktop architecture.
 
-Zero3 uses the pinned open-source Hermes Desktop Electron/React implementation as a GUI foundation while keeping Zero3 Pilot Node as the local control plane. Hermes is an upstream implementation detail, not the product identity or commercial relationship presented to the user.
+Zero3 uses the pinned open-source Hermes Desktop Electron/React implementation as a GUI foundation while keeping Zero3 Pilot Node as the local control plane. Hermes is an upstream implementation detail, not the product identity or commercial relationship presented to the user. Upstream license/attribution notices remain preserved in source and distribution where required; product-facing branding is Zero3-owned.
 
 ## Pinned upstreams
 
