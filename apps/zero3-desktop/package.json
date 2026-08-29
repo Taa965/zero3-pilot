@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "node ./scripts/prepare-upstream.mjs",
+    "prepare": "node ./scripts/prepare-upstream.mjs && node ./scripts/prepare-codex-upstream.mjs",
+    "codex:verify": "node ../../../scripts/codex-overlay.mjs verify",
+    "codex:replay": "node ../../../scripts/codex-overlay.mjs replay",
     "dev": "node ./scripts/run.mjs dev",
     "typecheck": "node ./scripts/run.mjs typecheck",
     "dist:win": "node ./scripts/run.mjs dist:win",
