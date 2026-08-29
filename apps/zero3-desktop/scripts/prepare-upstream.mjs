@@ -13,6 +13,7 @@ import {
   upstreamRoot,
   zero3Port
 } from './config.mjs'
+import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
 const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
 const brandedLocaleFiles = ['ar.ts', 'en.ts', 'ja.ts', 'zh-hant.ts', 'zh.ts']
@@ -68,7 +69,15 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/assets/icon.ico',
     'apps/desktop/assets/icon.png',
     'apps/desktop/public/apple-touch-icon.png',
+    'apps/desktop/src/app/chat/composer/status-stack/index.tsx',
+    'apps/desktop/src/app/contrib/wiring.tsx',
+    'apps/desktop/src/app/settings/about-settings.tsx',
+    'apps/desktop/src/app/settings/index.tsx',
+    'apps/desktop/src/app/settings/providers-settings.tsx',
+    'apps/desktop/src/components/boot-failure-overlay.tsx',
     'apps/desktop/src/components/chat/intro.tsx',
+    'apps/desktop/src/components/onboarding/index.tsx',
+    'apps/desktop/src/store/onboarding.ts',
     ...brandedLocaleFiles.map(file => `apps/desktop/src/i18n/${file}`)
   ])
   const unexpected = trackedHermesChanges().filter(file => !allowed.has(file))
@@ -206,11 +215,13 @@ assertPin('Hermes Agent', hermesRoot, pins.hermes)
 assertPin('DeepSeek Harness', deepseekRoot, pins.deepseek)
 assertOnlyOverlayChanges()
 applyBrandOverlay()
+applyZero3ShellPolicy()
 installZero3HermesSkill()
 
 console.log('Zero3 Desktop upstream prepared successfully.')
 console.log(`Hermes Desktop: ${pins.hermes}`)
 console.log(`Codex app-server source: ${pins.codex}`)
 console.log(`DeepSeek Harness source: ${pins.deepseek}`)
+console.log('Zero3 shell policy: commercial account/billing/diagnostics surfaces disabled')
 console.log(`Zero3 Hermes home: ${resolveHermesHome()}`)
 console.log(`Zero3 Node endpoint: http://127.0.0.1:${zero3Port}`)
