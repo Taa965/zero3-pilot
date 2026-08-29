@@ -14,6 +14,7 @@ import {
   zero3Port
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
+import { applyZero3MemoryBridge } from './apply-memory-bridge.mjs'
 import { applyZero3NativeBridge } from './apply-native-bridge.mjs'
 import { applyZero3NativeChat } from './apply-native-chat.mjs'
 import { applyZero3NativeChatHardening } from './apply-native-chat-hardening.mjs'
@@ -255,6 +256,7 @@ applyZero3ChineseUi()
 applyZero3NativeBridge()
 applyZero3NativeChat()
 applyZero3NativeChatHardening()
+applyZero3MemoryBridge()
 installZero3HermesSkill()
 
 console.log('Zero3 Desktop upstream prepared successfully.')
@@ -263,6 +265,6 @@ console.log(`Codex app-server source: ${pins.codex}`)
 console.log(`DeepSeek Harness source: ${pins.deepseek}`)
 console.log('Zero3 shell policy: upstream commercial, diagnostics and self-update surfaces disabled')
 console.log('Zero3 UI policy: Simplified Chinese is the default locale; explicit user language choices remain supported')
-console.log('Zero3 native bridge: fixed read resources, approved Agent dispatch and hardened Phase B2 native Chat turn IPC')
+console.log('Zero3 native bridge: fixed reads, approved Agent dispatch, hardened native Chat, and native-approved Memory writes')
 console.log(`Zero3 Hermes home: ${resolveHermesHome()}`)
 console.log(`Zero3 Node endpoint: http://127.0.0.1:${zero3Port}`)
