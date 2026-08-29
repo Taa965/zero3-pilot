@@ -1,0 +1,14 @@
+[package]
+name = "zero3-context-retention"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Deterministic, model-free historical tool-result pruning for Zero3 Codex"
+publish = false
+
+[lib]
+name = "zero3_context_retention"
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
