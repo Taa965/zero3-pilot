@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir } from './config.mjs'
+import { applyZero3CodexStructuredInputHardening } from './apply-codex-structured-input-hardening.mjs'
 
 function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
@@ -357,5 +358,6 @@ export function applyZero3CodexStructuredInput() {
     }
   ])
 
+  applyZero3CodexStructuredInputHardening()
   console.log('R3C: Hermes composer attachments map to strictly validated Codex text/localImage UserInput without Hermes Runtime staging.')
 }
