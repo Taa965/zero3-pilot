@@ -149,9 +149,8 @@ for (const required of [
   "item/commandExecution/requestApproval",
   "item/fileChange/requestApproval",
   "item/tool/requestUserInput",
-  "decision: 'accept'",
-  "decision: 'acceptForSession'",
-  "decision: 'decline'",
+  "async (decision: 'accept' | 'acceptForSession' | 'decline')",
+  'respondResult(request.requestId, { decision })',
   'respondToServerRequest',
   'CodexPromptOverlay',
   'takeCodexPromptRequestIdsForThread'
