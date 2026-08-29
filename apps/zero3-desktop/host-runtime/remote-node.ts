@@ -95,6 +95,8 @@ export class Zero3RemoteNode {
           this.statusValue.activeTaskId = taskId
           let terminalSent = false
           try {
+            // Do not start local side effects until the leased task can be
+            // correlated back to the control plane at least once.
             await this.client.event(taskId, lease, 1, 'host.accepted', {
               node_id: this.config.nodeId
             })
@@ -110,7 +112,14 @@ export class Zero3RemoteNode {
             }, LEASE_RENEW_INTERVAL_MS)
 
             const result = await this.runner.run(lease, async (sequence, method, payload) => {
-              await this.client.event(taskId, lease, sequence + 1, `codex.${method}`, payload)
+              try {
+                await this.client.event(taskId, lease, sequence + 1, `codex.${method}`, payload)
+              } catch (error) {
+                // Progress mirroring is observational and must not abandon an
+                // already-running Codex Turn. Lease renewal + terminal fencing
+                // remain the authority; H4 adds durable local event replay.
+                this.statusValue.lastError = `remote evidence publication failed: ${error instanceof Error ? error.message : String(error)}`
+              }
             })
             await this.client.terminal(taskId, lease, result.state, result)
             terminalSent = true
