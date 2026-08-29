@@ -36,21 +36,10 @@ requireText(
   'Zero3CodexAppServer',
   'Remote Host architecture must route into the existing Zero3CodexAppServer.'
 )
-requireText(
-  remoteProtocol,
-  'zero3.pilot.remote-task.v1',
-  'Remote Task v1 protocol contract is missing.'
-)
-requireText(
-  taskRunner,
-  "this.codex.request('thread/start'",
-  'Remote tasks must create/resume work through typed Codex Thread operations.'
-)
-requireText(
-  taskRunner,
-  "'turn/start'",
-  'Remote tasks must execute through Codex Turn operations.'
-)
+requireText(remoteProtocol, 'zero3.pilot.remote-task.v1', 'Remote Task v1 protocol contract is missing.')
+requireText(taskRunner, 'this.codex.startThread(', 'Remote tasks must enter Codex through the narrow Thread operation.')
+requireText(taskRunner, 'this.codex.startTurn(', 'Remote tasks must enter Codex through the narrow Turn operation.')
+requireText(taskRunner, 'this.codex.readThread(', 'Remote task completion must be observed from authoritative Codex Thread state.')
 requireText(taskRunner, "approvalPolicy: 'on-request'", 'Remote tasks must retain on-request approvals.')
 requireText(taskRunner, "sandbox: 'read-only'", 'H3 must not silently widen the existing default sandbox.')
 requireText(taskRunner, 'zero3RemoteWorkspaceAllowed', 'Remote task workspaces must be locally allow-listed.')
@@ -58,6 +47,9 @@ requireText(remoteNode, 'this.client.lease(25)', 'Remote Host must use outbound 
 requireText(remoteClient, 'authorization', 'Remote Host control-plane requests must be authenticated.')
 requireText(remoteConfig, "parsed.protocol !== 'https:'", 'Remote Host production control plane must require HTTPS.')
 requireText(overlay, 'Zero3RemoteNode', 'Desktop overlay must install the Remote Host runtime.')
+requireText(overlay, "startThread: params => zero3CodexAppServer.request('thread/start', params)", 'Remote Host must adapt to the existing Codex app-server Thread boundary.')
+requireText(overlay, "startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs)", 'Remote Host must adapt to the existing Codex app-server Turn boundary.')
+requireText(overlay, "readThread: params => zero3CodexAppServer.request('thread/read', params)", 'Remote Host must observe the existing Codex Thread boundary.')
 requireText(prepare, 'applyZero3RemoteHostRuntime()', 'Desktop prepare must apply the Remote Host runtime overlay.')
 
 for (const source of [taskRunner, remoteNode, remoteClient]) {
@@ -75,4 +67,8 @@ for (const forbidden of ["ipcRenderer.invoke('zero3:codex:rpc'", "ipcRenderer.in
   forbidText(overlay, forbidden, 'Remote Host must not expose a generic Renderer-controlled Codex RPC proxy.')
 }
 
-console.log('Zero3 Remote Host architecture guard passed: outbound control plane -> typed Remote Task -> existing Zero3CodexAppServer -> pinned Codex Thread/Turn runtime.')
+forbidText(taskRunner, 'request(method:', 'Remote Task Runner must not receive a generic Codex request method.')
+forbidText(taskRunner, 'onEvent(', 'H3 uses authoritative Thread reads rather than patching the shared Codex event broadcaster.')
+forbidText(overlay, 'zero3CodexLocalEventListeners', 'Remote Host must not mutate the shared Codex transport event broadcaster.')
+
+console.log('Zero3 Remote Host architecture guard passed: outbound control plane -> typed Remote Task -> narrow existing Zero3CodexAppServer Thread/Turn/read adapter -> pinned Codex runtime.')
