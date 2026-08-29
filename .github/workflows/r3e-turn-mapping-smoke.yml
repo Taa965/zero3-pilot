@@ -108,7 +108,14 @@ jobs:
           if ($boundary -notmatch 'nonEmptyString\(item.id\)') { throw 'Turn resolver does not read Codex ThreadItem.id' }
           if ($boundary -match 'Date\.now|messageIndex|timestamp') { throw 'Turn resolver appears to infer identity from renderer ordering/time' }
 
-          if ($primary -notmatch 'thread\.read\(\{ threadId, includeTurns: true \}\)') { throw 'History action does not refresh authoritative Codex Turns before mutation' }
+          $boundaryReader = [regex]::Match(
+            $primary,
+            '(?s)const readThreadForBoundary = useCallback\(.*?const resolveMessageBoundary = useCallback'
+          ).Value
+          if (-not $boundaryReader) { throw 'Could not isolate authoritative R3E/R3F boundary history reader' }
+          if ($boundaryReader -notmatch 'thread\.read\(\{ threadId, includeTurns: false \}\)') { throw 'R3E identity refresh no longer reads authoritative Codex thread metadata' }
+          if ($boundaryReader -notmatch 'window\.zero3Codex\.thread\.turnsList') { throw 'R3E identity refresh must consume R3F native Turn pages' }
+          if ($boundaryReader -match 'includeTurns: true') { throw 'R3E destructive-history boundary regressed to whole-thread Turn hydration' }
           if ($primary -notmatch 'submittedUserTurnByMessageRef\.current\.set\(userMessage\.id') { throw 'Optimistic user message is not tied to turn/start response id' }
           if ($primary -notmatch 'window\.zero3Codex\.thread\.forkAtTurn') { throw 'Assistant-message branch is not using dedicated Turn fork' }
           if ($primary -notmatch 'window\.zero3Codex\.thread\.revertBeforeTurn') { throw 'Restore/regenerate is not using dedicated Turn revert' }
