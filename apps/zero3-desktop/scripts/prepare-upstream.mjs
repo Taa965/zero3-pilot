@@ -12,6 +12,7 @@ import {
   upstreamRoot
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
+import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
 const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
@@ -61,9 +62,8 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
-  // R0 intentionally keeps this allowlist broad enough for the existing
-  // branding/product-policy/localization transformations. Runtime bridges to
-  // Zero3 Node are no longer applied by this script.
+  // R1 permits only the reviewed shell transformations plus the typed Codex
+  // app-server boundary. Retired Zero3 Node runtime bridges stay disabled.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -205,7 +205,7 @@ function applyBrandOverlay() {
         coreRuntime: 'openai-codex-app-server',
         desktopShell: 'hermes-electron-react',
         deepseekRole: 'capability-donor',
-        migrationPhase: 'R0-codex-core-reset',
+        migrationPhase: 'R1A-codex-app-server-transport',
         upstream: pins
       },
       null,
@@ -237,11 +237,11 @@ assertOnlyOverlayChanges()
 applyBrandOverlay()
 applyZero3ShellPolicy()
 applyZero3ChineseUi()
+applyZero3CodexTransport()
 
-console.log('Zero3 Desktop R0 shell prepared successfully.')
+console.log('Zero3 Desktop R1A shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
 console.log(`Hermes UI shell source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
-console.log('Zero3 architecture: Codex is the only target Agent Kernel; Hermes is UI shell only.')
-console.log('R0: Zero3 Node chat/memory/schedule/browser overlays are intentionally NOT applied.')
-console.log('Next: R1 introduces the Zero3-owned codex app-server transport.')
+console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel; Hermes is UI shell only.')
+console.log('R1A: typed Codex thread/turn/event IPC is enabled; retired Zero3 Node runtime bridges remain disabled.')
