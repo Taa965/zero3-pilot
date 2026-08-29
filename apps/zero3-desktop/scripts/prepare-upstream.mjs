@@ -18,6 +18,7 @@ import { applyZero3CodexPrimaryChat } from './apply-codex-primary-chat.mjs'
 import { applyZero3CodexPromptQueueHardening } from './apply-codex-prompt-queue-hardening.mjs'
 import { applyZero3CodexPrompts } from './apply-codex-prompts.mjs'
 import { applyZero3CodexSessionListGuard } from './apply-codex-session-list-guard.mjs'
+import { applyZero3CodexStructuredInput } from './apply-codex-structured-input.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
@@ -68,9 +69,9 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
-  // R3A permits only the reviewed shell transformations plus the typed Codex
-  // app-server boundary, primary-chat adapter, native prompt surfaces and
-  // Codex Item presentation projection. Retired Zero3 Node bridges stay disabled.
+  // R3C permits only the reviewed shell transformations plus the typed Codex
+  // app-server boundary, primary-chat adapter, native prompt/item presentation
+  // and structured UserInput mapping. Retired Zero3 Node bridges stay disabled.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -92,6 +93,7 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/app/settings/providers-settings.tsx',
     'apps/desktop/src/app/settings/types.ts',
     'apps/desktop/src/components/assistant-ui/thread/assistant-message.tsx',
+    'apps/desktop/src/components/assistant-ui/tool/fallback-model/index.ts',
     'apps/desktop/src/components/boot-failure-overlay.tsx',
     'apps/desktop/src/components/brand-mark.tsx',
     'apps/desktop/src/components/chat/intro.tsx',
@@ -219,6 +221,7 @@ function applyBrandOverlay() {
         primaryChatPhase: 'R2A-codex-primary-chat',
         promptPhase: 'R2B-codex-approval-input',
         itemRenderingPhase: 'R3A-codex-item-rendering',
+        structuredInputPhase: 'R3C-codex-structured-input',
         upstream: pins
       },
       null,
@@ -257,11 +260,12 @@ applyZero3CodexPromptQueueHardening()
 applyZero3CodexItemRendering()
 applyZero3CodexItemRenderingHardening()
 applyZero3CodexSessionListGuard()
+applyZero3CodexStructuredInput()
 
-console.log('Zero3 Desktop R3A shell prepared successfully.')
+console.log('Zero3 Desktop R3C shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
 console.log(`Hermes UI shell source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
 console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel; Hermes is UI shell only.')
-console.log('R3A: Codex reasoning, commandExecution, fileChange and mcpToolCall Items project into the Hermes-derived presentation layer.')
-console.log('R3A safety: default Codex sandbox stays read-only; unsupported server requests remain denied fail-closed.')
+console.log('R3C: Hermes composer images use native Codex localImage; other attachment context is encoded as validated Codex text input.')
+console.log('R3C safety: Renderer may submit only text/localImage structured inputs; default sandbox stays read-only and unsupported server requests stay fail-closed.')

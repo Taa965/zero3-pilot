@@ -1,0 +1,84 @@
+name: R3C Structured Input Smoke
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  r3c-structured-input:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize pinned desktop upstreams
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
+          if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Source architecture and syntax guard
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/check-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'architecture guard failed' }
+          node --check apps/zero3-desktop/scripts/apply-codex-structured-input.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'R3C structured input overlay syntax failed' }
+          node --check apps/zero3-desktop/scripts/apply-codex-structured-input-hardening.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'R3C structured input hardening syntax failed' }
+
+      - name: Prepare pinned R3C desktop shell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node apps/zero3-desktop/scripts/prepare-upstream.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'R3C desktop preparation failed' }
+
+      - name: Verify generated structured-input boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stamp = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/public/zero3-upstream.json' | ConvertFrom-Json
+          if ($stamp.coreRuntime -ne 'openai-codex-app-server') { throw 'Codex app-server must remain the core runtime' }
+          if ($stamp.structuredInputPhase -ne 'R3C-codex-structured-input') { throw 'R3C structured-input provenance is missing' }
+          if ($stamp.upstream.codex -ne '94311d447587411789533c47601fd8bc9d81eb48') { throw 'Pinned Codex provenance changed' }
+          if ($stamp.upstream.hermes -ne 'f7c79efbac19ae18e8dee7c79a4e4c0935299b5f') { throw 'Pinned Hermes provenance changed' }
+
+          $main = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/main.ts'
+          $primary = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/zero3-codex/primary-chat.ts'
+          $globalTypes = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/global.d.ts'
+
+          if ($main -notmatch 'ZERO3_CODEX_MAX_TURN_INPUTS = 32') { throw 'R3C input count bound missing from generated Electron main' }
+          if ($main -notmatch 'type must be text or localImage') { throw 'R3C UserInput allowlist missing from generated Electron main' }
+          if ($main -notmatch 'turn/start must contain exactly one of input or text') { throw 'R3C exclusive turn/start request shape guard missing' }
+          if ($main -notmatch 'text_elements: \[\]') { throw 'Pinned Codex text_elements normalization missing' }
+          $mainInputParser = [regex]::Match(
+            $main,
+            '(?s)const ZERO3_CODEX_MAX_TURN_INPUTS = 32.*?function zero3CodexTurnInputs\(value: unknown\)'
+          ).Value
+          if (-not $mainInputParser) { throw 'Could not isolate generated R3C Electron input parser' }
+          if ($mainInputParser -match "type: 'mention'|type: 'skill'|type: 'audio'|type: 'localAudio'|type: 'image'") {
+            throw 'Unreviewed UserInput emitter leaked into generated R3C Electron parser'
+          }
+
+          if ($primary -notmatch 'codexTurnInputs') { throw 'R3C primary-chat structured input builder missing' }
+          if ($primary -notmatch "inputs.push\(\{ type: 'localImage'") { throw 'Native Codex localImage mapping missing' }
+          if ($primary -notmatch 'terminalContextBlocksFromDraft') { throw 'Saved terminal selection expansion missing' }
+          if ($primary -match 'requestGateway\(|ZERO3_PILOT_NODE_PORT|zero3:chat:turn') { throw 'Legacy/Hermes runtime execution leaked into R3C primary-chat input path' }
+
+          $rendererInputType = [regex]::Match(
+            $globalTypes,
+            '(?s)type Zero3CodexTurnInput =.*?type Zero3CodexTurnStartBase ='
+          ).Value
+          if (-not $rendererInputType) { throw 'Typed R3C renderer request surface missing' }
+          if ($rendererInputType -notmatch "type: 'localImage'; path: string") { throw 'Typed localImage request variant missing' }
+          if ($rendererInputType -match "type: 'mention'|type: 'skill'|type: 'audio'|type: 'localAudio'|type: 'image'") {
+            throw 'Unreviewed UserInput variant leaked into Zero3 Renderer input type'
+          }
