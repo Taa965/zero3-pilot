@@ -61,42 +61,17 @@ export function applyZero3RemoteHostRuntime() {
         "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
     },
     {
-      label: 'Zero3 Codex event broadcaster',
-      from: "function broadcastZero3CodexEvent(event: Zero3CodexEvent) {\n  for (const window of BrowserWindow.getAllWindows()) {",
+      label: 'Electron ready boundary after Codex transport registration',
+      from: "app.whenReady().then(() => {",
       to:
-        "const zero3CodexLocalEventListeners = new Set<(event: Zero3CodexEvent) => void>()\n\n" +
-        "function broadcastZero3CodexEvent(event: Zero3CodexEvent) {\n" +
-        "  for (const listener of zero3CodexLocalEventListeners) {\n" +
-        "    try { listener(event) } catch { /* local observers must not break Codex transport */ }\n" +
-        "  }\n" +
-        "  for (const window of BrowserWindow.getAllWindows()) {"
-    },
-    {
-      label: 'Zero3CodexAppServer server-response method',
-      from: "  async respondToServerRequest(value: unknown) {",
-      to:
-        "  onEvent(listener: (event: Zero3CodexEvent) => void) {\n" +
-        "    zero3CodexLocalEventListeners.add(listener)\n" +
-        "    return () => zero3CodexLocalEventListeners.delete(listener)\n" +
-        "  }\n\n" +
-        "  async respondToServerRequest(value: unknown) {"
-    },
-    {
-      label: 'Zero3 Codex singleton',
-      from: "const zero3CodexAppServer = new Zero3CodexAppServer()",
-      to:
-        "const zero3CodexAppServer = new Zero3CodexAppServer()\n" +
-        "const zero3RemoteNode = new Zero3RemoteNode(zero3CodexAppServer)\n" +
-        "app.once('ready', () => zero3RemoteNode.start())"
-    },
-    {
-      label: 'typed Codex before-quit hook',
-      from: "app.on('before-quit', () => zero3CodexAppServer.stop())",
-      to:
-        "app.on('before-quit', () => {\n" +
-        "  zero3RemoteNode.stop()\n" +
-        "  zero3CodexAppServer.stop()\n" +
-        "})"
+        "const zero3RemoteNode = new Zero3RemoteNode({\n" +
+        "  startThread: params => zero3CodexAppServer.request('thread/start', params),\n" +
+        "  startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs),\n" +
+        "  readThread: params => zero3CodexAppServer.request('thread/read', params)\n" +
+        "})\n" +
+        "app.on('before-quit', () => zero3RemoteNode.stop())\n\n" +
+        "app.whenReady().then(() => {\n" +
+        "  zero3RemoteNode.start()"
     }
   ])
 }
