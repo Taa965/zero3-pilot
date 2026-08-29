@@ -38,6 +38,7 @@ jobs:
         run: |
           node --check apps/zero3-desktop/scripts/config.mjs
           node --check apps/zero3-desktop/scripts/apply-shell-policy.mjs
+          node --check apps/zero3-desktop/scripts/apply-chinese-ui.mjs
           node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
           node --check apps/zero3-desktop/scripts/run.mjs
           node --check apps/zero3-desktop/scripts/reset-upstream.mjs
@@ -76,7 +77,10 @@ jobs:
           if (-not (Test-Path 'upstream/hermes-agent/apps/desktop/public/zero3-pilot.png')) { throw 'Zero3 public brand mark missing' }
           $about = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/settings/about-settings.tsx'
           if ($about -notmatch 'Zero3-managed updates') { throw 'Zero3 About policy overlay missing' }
+          if ($about -notmatch '桌面版本通道') { throw 'Zero3 Simplified Chinese About copy missing' }
           if ($about -match 'NousResearch|hermes-agent.nousresearch.com') { throw 'Upstream product link leaked into Zero3 About surface' }
+          $languages = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/i18n/languages.ts'
+          if ($languages -notmatch "DEFAULT_LOCALE: Locale = 'zh'") { throw 'Zero3 default locale must be Simplified Chinese' }
 
       - name: Install Hermes Desktop dependencies
         working-directory: upstream/hermes-agent
