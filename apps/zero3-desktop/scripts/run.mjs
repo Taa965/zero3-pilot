@@ -3,9 +3,12 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 
 import {
+  codexRoot,
   commandName,
   hermesRoot,
+  pinnedCodexBinary,
   repoRoot,
+  resolveCodexHome,
   resolveHermesHome
 } from './config.mjs'
 
@@ -54,6 +57,31 @@ function ensureHermesDependencies(env) {
     cwd: hermesRoot,
     env
   })
+}
+
+function ensurePinnedCodexBinary(env) {
+  const binary = pinnedCodexBinary()
+  if (isFile(binary)) return binary
+
+  console.log('[Zero3 R1A] Building pinned open-source Codex core...')
+  runSync(
+    'cargo',
+    [
+      'build',
+      '--manifest-path',
+      path.join(codexRoot, 'codex-rs', 'Cargo.toml'),
+      '-p',
+      'codex-cli',
+      '--bin',
+      'codex'
+    ],
+    { cwd: codexRoot, env }
+  )
+
+  if (!isFile(binary)) {
+    throw new Error(`Pinned Codex binary was not produced at ${binary}`)
+  }
+  return binary
 }
 
 function hermesVenvPython() {
@@ -137,28 +165,41 @@ function runHermesDesktop(script, env) {
 runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs')])
 
 const hermesHome = resolveHermesHome()
+const codexHome = resolveCodexHome()
 fs.mkdirSync(hermesHome, { recursive: true })
-const env = {
+fs.mkdirSync(codexHome, { recursive: true })
+
+const baseEnv = {
   ...process.env,
+  CODEX_HOME: codexHome,
   HERMES_HOME: hermesHome,
   HERMES_DESKTOP_HERMES_ROOT: hermesRoot,
   HERMES_DESKTOP_APP_NAME: 'Zero3 Pilot',
+  ZERO3_CODEX_CWD: repoRoot,
   ZERO3_DESKTOP_CORE: 'codex-app-server',
   ZERO3_DESKTOP_SHELL: 'hermes-ui-compat'
 }
 
-ensureHermesDependencies(env)
-
-// R0 migration note: upstream Hermes Desktop still expects its own backend to
-// boot the existing shell. Keep that backend only as temporary UI scaffolding.
-// The target Zero3 runtime is Codex app-server and no Zero3 product capability
-// may be added to this compatibility backend.
-if (mode === 'dev') {
-  console.warn('[Zero3 R0] Hermes backend is UI compatibility scaffolding only; Codex remains the target core runtime.')
-  ensureHermesPythonDependencies(env)
+const env = {
+  ...baseEnv,
+  // The target runtime always points at the binary built from upstream/codex's
+  // pinned source tree. Host-installed Codex/Claude/Hermes applications remain
+  // external collaborators and never satisfy this core-runtime path.
+  ZERO3_CODEX_BIN: mode === 'dev' ? ensurePinnedCodexBinary(baseEnv) : pinnedCodexBinary()
 }
 
-// Deliberately do NOT start zero3-pilot-node here. R0 breaks the previous
-// Hermes UI -> Zero3 Node -> worker architecture. R1 will own Codex app-server
-// lifecycle and transport directly from the desktop shell.
+ensureHermesDependencies(env)
+
+// Hermes still boots its backend only so the unported UI can render. No Zero3
+// capability may depend on it. R1A Codex IPC is independent and talks directly
+// to the pinned Codex app-server child owned by Electron main.
+if (mode === 'dev') {
+  console.warn('[Zero3 R1A] Hermes backend remains temporary UI compatibility scaffolding.')
+  ensureHermesPythonDependencies(env)
+  console.log(`[Zero3 R1A] Codex core binary: ${env.ZERO3_CODEX_BIN}`)
+  console.log(`[Zero3 R1A] Isolated Codex home: ${codexHome}`)
+}
+
+// Deliberately do NOT start zero3-pilot-node. Electron starts Codex app-server
+// lazily through the typed zero3Codex preload surface.
 await runHermesDesktop(mode, env)
