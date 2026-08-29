@@ -24,6 +24,49 @@ function patchFile(relativePath, replacements) {
 export function applyZero3CodexItemRenderingHardening() {
   patchFile('src/app/zero3-codex/item-projection.ts', [
     {
+      label: 'structured file-change kind type',
+      from:
+        "type NormalizedFileChange = {\n" +
+        "  path: string\n" +
+        "  kind: string\n" +
+        "  diff: string\n" +
+        "}",
+      to:
+        "type NormalizedFileChange = {\n" +
+        "  path: string\n" +
+        "  kind: string\n" +
+        "  diff: string\n" +
+        "  movePath?: string\n" +
+        "}"
+    },
+    {
+      label: 'structured file-change kind normalization',
+      from:
+        "  return value\n" +
+        "    .map(entry => record(entry))\n" +
+        "    .map(entry => ({\n" +
+        "      path: nonEmptyString(entry.path) ?? '',\n" +
+        "      kind: nonEmptyString(entry.kind) ?? '',\n" +
+        "      diff: typeof entry.diff === 'string' ? entry.diff : ''\n" +
+        "    }))\n" +
+        "    .filter(change => change.path || change.diff)",
+      to:
+        "  return value\n" +
+        "    .map(entry => record(entry))\n" +
+        "    .map(entry => {\n" +
+        "      const kind = record(entry.kind)\n" +
+        "      return {\n" +
+        "        path: nonEmptyString(entry.path) ?? '',\n" +
+        "        kind: nonEmptyString(kind.type) ?? '',\n" +
+        "        diff: typeof entry.diff === 'string' ? entry.diff : '',\n" +
+        "        ...(typeof kind.move_path === 'string' && kind.move_path.trim()\n" +
+        "          ? { movePath: kind.move_path.trim() }\n" +
+        "          : {})\n" +
+        "      }\n" +
+        "    })\n" +
+        "    .filter(change => change.path || change.diff)"
+    },
+    {
       label: 'summary stream reset helper',
       from: 'export function projectCodexCommandOutputDelta(messages: ChatMessage[], id: string, delta: string): ChatMessage[] {',
       to:
