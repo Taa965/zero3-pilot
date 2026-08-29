@@ -3,15 +3,12 @@ name = "zero3-desktop"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Zero3 Pilot launcher that boots the local sidecar and hands the visible shell to native Codex Desktop."
+description = "Zero3 Pilot Windows desktop shell over the local Pilot Node."
 
 [[bin]]
 name = "zero3-pilot"
 path = "src/main.rs"
 
-# Kept temporarily during the native-shell migration so Cargo.lock does not
-# churn in this branch. The launcher no longer imports Tao/Wry; remove these
-# together with the next intentional workspace dependency-lock refresh.
 [target.'cfg(windows)'.dependencies]
 tao = "0.37"
 wry = "0.56.1"
