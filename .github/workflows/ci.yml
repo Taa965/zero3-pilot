@@ -50,18 +50,23 @@ jobs:
         with:
           submodules: false
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.11.0'
-          cache: npm
-          cache-dependency-path: upstream/hermes-agent/package-lock.json
-
       - name: Initialize pinned desktop upstreams
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
           if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+          cache: npm
+          cache-dependency-path: upstream/hermes-agent/package-lock.json
+
+      - name: Prepare Zero3 Desktop overlay
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           node apps/zero3-desktop/scripts/prepare-upstream.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Zero3 Desktop preparation failed' }
           $stamp = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/public/zero3-upstream.json' | ConvertFrom-Json
