@@ -67,6 +67,47 @@ export function applyZero3CodexItemRenderingHardening() {
         "    .filter(change => change.path || change.diff)"
     },
     {
+      label: 'MCP error message normalization',
+      from:
+        "function errorText(value: unknown): string {\n" +
+        "  if (typeof value === 'string') return value\n" +
+        "  if (!value) return ''\n" +
+        "  try {\n" +
+        "    return JSON.stringify(value)\n" +
+        "  } catch {\n" +
+        "    return String(value)\n" +
+        "  }\n" +
+        "}",
+      to:
+        "function errorText(value: unknown): string {\n" +
+        "  if (typeof value === 'string') return value\n" +
+        "  if (!value) return ''\n" +
+        "  const message = nonEmptyString(record(value).message)\n" +
+        "  if (message) return message\n" +
+        "  try {\n" +
+        "    return JSON.stringify(value)\n" +
+        "  } catch {\n" +
+        "    return String(value)\n" +
+        "  }\n" +
+        "}"
+    },
+    {
+      label: 'command declined terminal state',
+      from: "          ...(status === 'failed' ? { error: true } : {})",
+      to:
+        "          ...(status === 'failed' || status === 'declined'\n" +
+        "            ? { error: status === 'declined' ? 'Command execution declined.' : true }\n" +
+        "            : {})"
+    },
+    {
+      label: 'file change declined state',
+      from: "          ...(status === 'failed' ? { error: true } : {})",
+      to:
+        "          ...(status === 'failed' || status === 'declined'\n" +
+        "            ? { error: status === 'declined' ? 'File change declined.' : true }\n" +
+        "            : {})"
+    },
+    {
       label: 'summary stream reset helper',
       from: 'export function projectCodexCommandOutputDelta(messages: ChatMessage[], id: string, delta: string): ChatMessage[] {',
       to:
