@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zero3.local/schemas/codex-overlay-manifest-v1.json",
+  "title": "Zero3 Codex Overlay Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "runtime_authority", "pins", "patch_order", "features", "extensions", "patches"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "runtime_authority": { "const": "openai-codex" },
+    "pins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codex", "hermes", "deepseek_harness"],
+      "properties": {
+        "codex": { "$ref": "#/$defs/sha" },
+        "hermes": { "$ref": "#/$defs/sha" },
+        "deepseek_harness": { "$ref": "#/$defs/sha" }
+      }
+    },
+    "patch_order": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["foundation", "output-retention", "context-pruning", "lsp", "external-agent", "team", "jobs", "workflow"] }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/feature" }
+    },
+    "extensions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/extension" }
+    },
+    "patches": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/patch" }
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "extension_id", "extension_source", "patch_dir"],
+      "properties": {
+        "owner": { "enum": ["S0/S1", "S1", "S2", "S3", "S4"] },
+        "extension_id": { "type": ["string", "null"], "pattern": "^zero3-[a-z0-9-]+$" },
+        "extension_source": { "type": ["string", "null"] },
+        "patch_dir": { "type": "string" }
+      }
+    },
+    "donor": { "$ref": "./provenance.schema.json" },
+    "extension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "feature", "source", "destination", "donor"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^zero3-[a-z0-9-]+$" },
+        "feature": { "type": "string" },
+        "source": { "type": "string", "pattern": "^codex-overlays/ext/zero3-[a-z0-9-]+/$" },
+        "destination": { "type": "string", "pattern": "^codex-rs/ext/zero3/[a-z0-9-]+/$" },
+        "donor": { "$ref": "#/$defs/donor" }
+      }
+    },
+    "patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "feature", "path", "core_patch", "extension_gap", "donor"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9]{3}-[a-z0-9-]+$" },
+        "feature": { "type": "string" },
+        "path": { "type": "string", "pattern": "^codex-overlays/patches/[a-z0-9-]+/[0-9]{3}-[a-z0-9-]+\\.patch$" },
+        "core_patch": { "type": "boolean" },
+        "extension_gap": { "type": "string", "minLength": 1 },
+        "donor": { "$ref": "#/$defs/donor" }
+      }
+    }
+  }
+}

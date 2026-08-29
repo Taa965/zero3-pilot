@@ -2,14 +2,30 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 
-import { hermesDesktopDir, hermesRoot, pins, repoRoot } from './config.mjs'
+import { resetCodexOverlay } from '../../../scripts/codex-overlay.mjs'
+import { codexRoot, hermesDesktopDir, hermesRoot, pins, repoRoot } from './config.mjs'
 
 function exec(file, args) {
   execFileSync(file, args, { cwd: repoRoot, stdio: 'inherit' })
 }
 
-if (!fs.isDirectory(hermesRoot)) {
-  console.log('Hermes upstream is not initialized; nothing to reset.')
+function isDirectory(dir) {
+  try {
+    return fs.statSync(dir).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+if (isDirectory(codexRoot)) {
+  resetCodexOverlay({ repoRoot, codexRoot, expectedPins: pins })
+  console.log(`Codex overlay reset to ${pins.codex}.`)
+} else {
+  console.log('Codex upstream is not initialized; no Codex overlay to reset.')
+}
+
+if (!isDirectory(hermesRoot)) {
+  console.log('Hermes upstream is not initialized; nothing else to reset.')
   process.exit(0)
 }
 

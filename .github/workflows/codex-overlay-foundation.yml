@@ -1,0 +1,69 @@
+name: Codex Overlay Foundation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'codex-overlays/**'
+      - 'scripts/codex-overlay.mjs'
+      - 'scripts/check-codex-overlay.mjs'
+      - 'apps/zero3-desktop/**'
+      - 'docs/UPSTREAM.md'
+      - 'docs/donors/**'
+      - '.github/workflows/codex-overlay-foundation.yml'
+
+jobs:
+  overlay-foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Initialize reviewed upstream pins
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive -- \
+            upstream/codex \
+            upstream/hermes-agent \
+            upstream/deepseek-harness
+          test "$(git -C upstream/codex rev-parse HEAD)" = "94311d447587411789533c47601fd8bc9d81eb48"
+          test "$(git -C upstream/hermes-agent rev-parse HEAD)" = "f7c79efbac19ae18e8dee7c79a4e4c0935299b5f"
+          test "$(git -C upstream/deepseek-harness rev-parse HEAD)" = "cd5ef8148158c3a752a658978873241fdf8e2bbc"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Overlay engine unit tests
+        run: node --test codex-overlays/tests/foundation/overlay-engine.test.mjs
+
+      - name: Overlay architecture guard
+        run: node scripts/check-codex-overlay.mjs
+
+      - name: Unified desktop prepare
+        run: npm --prefix apps/zero3-desktop run prepare
+
+      - name: Exact base and managed-worktree verification
+        run: node scripts/codex-overlay.mjs verify
+
+      - name: Detached overlay replay drift guard
+        run: node scripts/codex-overlay.mjs replay
+
+      - name: Codex format check
+        run: cargo fmt --manifest-path upstream/codex/codex-rs/Cargo.toml --all -- --check
+
+      - name: Codex compile check
+        run: cargo check --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-cli
+
+      - name: Build pinned Codex CLI
+        run: cargo build --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-cli --bin codex
+
+      - name: Real app-server JSONL smoke
+        run: |
+          node apps/zero3-desktop/scripts/smoke-codex-app-server.mjs \
+            upstream/codex/codex-rs/target/debug/codex
+
+      - name: Common Zero3 architecture guard
+        run: node scripts/check-architecture.mjs

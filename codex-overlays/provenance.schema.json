@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zero3.local/schemas/donor-provenance-v1.json",
+  "title": "Zero3 Donor Provenance v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["repo", "sha", "mode", "source_files", "license"],
+  "properties": {
+    "repo": { "type": "string", "minLength": 1 },
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "mode": { "enum": ["design-derived", "algorithm-derived", "code-port"] },
+    "source_files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "license": { "type": "string", "minLength": 1 },
+    "notes": { "type": "string" }
+  }
+}
