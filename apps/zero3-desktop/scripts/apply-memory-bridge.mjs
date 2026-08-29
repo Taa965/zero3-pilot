@@ -145,7 +145,7 @@ async function putZero3Memory(value: unknown): Promise<{ ok: true }> {
       type: 'warning',
       title: 'Zero3 记忆确认',
       message: '是否保存这条个人长期记忆？',
-      detail: `键：${payload.key}\n范围：${zero3MemoryScopeLabel(payload.scope)}\n内容：${preview}`,
+      detail: '键：' + payload.key + '\\n范围：' + zero3MemoryScopeLabel(payload.scope) + '\\n内容：' + preview,
       buttons: ['取消', '批准一次'],
       defaultId: 0,
       cancelId: 0,
