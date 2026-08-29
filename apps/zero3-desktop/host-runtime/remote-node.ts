@@ -2,6 +2,7 @@ import { loadZero3RemoteHostConfig } from './remote-config'
 import { Zero3RemoteClient } from './remote-client'
 import {
   Zero3RemoteTaskBlockedError,
+  Zero3RemoteTaskOutcomeUnknownError,
   Zero3RemoteTaskRunner,
   type Zero3CodexRuntime
 } from './remote-task-runner'
@@ -129,7 +130,12 @@ export class Zero3RemoteNode {
             terminalSent = true
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error)
-            const terminalState = error instanceof Zero3RemoteTaskBlockedError ? 'blocked' : 'failed'
+            const terminalState =
+              error instanceof Zero3RemoteTaskBlockedError
+                ? 'blocked'
+                : error instanceof Zero3RemoteTaskOutcomeUnknownError
+                  ? 'outcome_unknown'
+                  : 'failed'
             if (!terminalSent && !this.stopped) {
               try {
                 await this.client.terminal(taskId, lease, terminalState, { reason })
