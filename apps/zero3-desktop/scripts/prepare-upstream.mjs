@@ -12,6 +12,7 @@ import {
   upstreamRoot
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
+import { applyZero3CodexItemRenderingHardening } from './apply-codex-item-rendering-hardening.mjs'
 import { applyZero3CodexItemRendering } from './apply-codex-item-rendering.mjs'
 import { applyZero3CodexPrimaryChat } from './apply-codex-primary-chat.mjs'
 import { applyZero3CodexPromptQueueHardening } from './apply-codex-prompt-queue-hardening.mjs'
@@ -254,6 +255,7 @@ applyZero3CodexPrimaryChat()
 applyZero3CodexPrompts()
 applyZero3CodexPromptQueueHardening()
 applyZero3CodexItemRendering()
+applyZero3CodexItemRenderingHardening()
 applyZero3CodexSessionListGuard()
 
 console.log('Zero3 Desktop R3A shell prepared successfully.')
