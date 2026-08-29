@@ -106,6 +106,67 @@ function ensureHermesDependencies(env) {
   })
 }
 
+function hermesVenvPython() {
+  return path.join(
+    hermesRoot,
+    '.venv',
+    process.platform === 'win32' ? 'Scripts' : 'bin',
+    process.platform === 'win32' ? 'python.exe' : 'python'
+  )
+}
+
+function pythonCanStartHermesGateway(python, env) {
+  if (!isFile(python)) return false
+  const probe = spawnSync(
+    python,
+    ['-c', 'import yaml; import dotenv; import fastapi; import uvicorn; import multipart; import hermes_cli.config'],
+    {
+      cwd: hermesRoot,
+      env,
+      stdio: 'ignore',
+      shell: false
+    }
+  )
+  return !probe.error && probe.status === 0
+}
+
+function resolveSystemPython(env) {
+  const candidates = process.platform === 'win32' ? ['python.exe', 'python'] : ['python3', 'python']
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ['-c', 'import sys; print(sys.executable)'], {
+      cwd: hermesRoot,
+      env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      shell: false
+    })
+    if (!probe.error && probe.status === 0) return candidate
+  }
+  throw new Error('A supported Python interpreter is required to prepare the Hermes gateway runtime.')
+}
+
+function ensureHermesPythonDependencies(env) {
+  const venvPython = hermesVenvPython()
+  if (pythonCanStartHermesGateway(venvPython, env)) return
+
+  if (!isFile(venvPython)) {
+    runSync(resolveSystemPython(env), ['-m', 'venv', path.join(hermesRoot, '.venv')], {
+      cwd: hermesRoot,
+      env
+    })
+  }
+
+  runSync(
+    venvPython,
+    ['-m', 'pip', 'install', '--disable-pip-version-check', '--editable', '.[web]'],
+    { cwd: hermesRoot, env }
+  )
+
+  if (!pythonCanStartHermesGateway(venvPython, env)) {
+    throw new Error(`Hermes gateway dependencies were not importable after installation in ${venvPython}`)
+  }
+}
+
 function runHermesDesktop(script, env) {
   const command = commandName('npm')
   const child = spawn(command, ['--workspace', 'apps/desktop', 'run', script], {
@@ -131,11 +192,13 @@ const env = {
   ...process.env,
   HERMES_HOME: hermesHome,
   HERMES_DESKTOP_HERMES_ROOT: hermesRoot,
+  HERMES_DESKTOP_APP_NAME: 'Zero3 Pilot',
   ZERO3_PILOT_NODE_PORT: String(zero3Port),
   ZERO3_DESKTOP_SHELL: 'hermes'
 }
 
 ensureHermesDependencies(env)
+if (mode === 'dev') ensureHermesPythonDependencies(env)
 
 let ownedNode = null
 try {

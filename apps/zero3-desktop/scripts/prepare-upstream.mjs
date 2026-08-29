@@ -14,6 +14,9 @@ import {
   zero3Port
 } from './config.mjs'
 
+const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
+const brandedLocaleFiles = ['ar.ts', 'en.ts', 'ja.ts', 'zh-hant.ts', 'zh.ts']
+
 function exec(file, args, options = {}) {
   return execFileSync(file, args, {
     cwd: options.cwd ?? repoRoot,
@@ -49,7 +52,7 @@ function trackedHermesChanges() {
     'status',
     '--porcelain',
     '--untracked-files=no'
-  ]).trim()
+  ]).trimEnd()
   if (!output) return []
   return output
     .split(/\r?\n/)
@@ -58,7 +61,16 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
-  const allowed = new Set(['apps/desktop/package.json', 'apps/desktop/index.html'])
+  const allowed = new Set([
+    'apps/desktop/package.json',
+    'apps/desktop/index.html',
+    'apps/desktop/assets/icon.icns',
+    'apps/desktop/assets/icon.ico',
+    'apps/desktop/assets/icon.png',
+    'apps/desktop/public/apple-touch-icon.png',
+    'apps/desktop/src/components/chat/intro.tsx',
+    ...brandedLocaleFiles.map(file => `apps/desktop/src/i18n/${file}`)
+  ])
   const unexpected = trackedHermesChanges().filter(file => !allowed.has(file))
   if (unexpected.length > 0) {
     throw new Error(
@@ -86,6 +98,25 @@ function applyBrandOverlay() {
     }
   ]
   packageJson.build.artifactName = 'Zero3Pilot-${version}-${os}-${arch}.${ext}'
+  packageJson.build.mac = packageJson.build.mac ?? {}
+  packageJson.build.mac.extendInfo = packageJson.build.mac.extendInfo ?? {}
+  packageJson.build.mac.extendInfo.CFBundleDisplayName = 'Zero3 Pilot'
+  packageJson.build.mac.extendInfo.CFBundleExecutable = 'Zero3Pilot'
+  packageJson.build.mac.extendInfo.CFBundleName = 'Zero3 Pilot'
+  for (const [key, value] of Object.entries(packageJson.build.mac.extendInfo)) {
+    if (typeof value === 'string') {
+      packageJson.build.mac.extendInfo[key] = value.replaceAll('Hermes', 'Zero3 Pilot')
+    }
+  }
+  packageJson.build.dmg = packageJson.build.dmg ?? {}
+  packageJson.build.dmg.title = 'Install Zero3 Pilot'
+  packageJson.build.win = packageJson.build.win ?? {}
+  packageJson.build.win.legalTrademarks = 'Zero3 Pilot'
+  packageJson.build.linux = packageJson.build.linux ?? {}
+  packageJson.build.linux.synopsis = 'Zero3 Pilot desktop agent shell.'
+  packageJson.build.nsis = packageJson.build.nsis ?? {}
+  packageJson.build.nsis.shortcutName = 'Zero3 Pilot'
+  packageJson.build.nsis.uninstallDisplayName = 'Zero3 Pilot'
 
   fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
 
@@ -97,8 +128,38 @@ function applyBrandOverlay() {
   }
   fs.writeFileSync(indexPath, branded)
 
+  for (const file of brandedLocaleFiles) {
+    const localePath = path.join(hermesDesktopDir, 'src', 'i18n', file)
+    const locale = fs.readFileSync(localePath, 'utf8')
+    const productBranded = locale
+      .replaceAll('Hermes Agent', 'Zero3 Pilot')
+      .replaceAll('HERMES AGENT', 'ZERO3 PILOT')
+      .replaceAll("Hermes couldn't start", "Zero3 Pilot couldn't start")
+      .replaceAll('recommended way to run Hermes', 'recommended way to run Zero3 Pilot')
+    fs.writeFileSync(localePath, productBranded)
+  }
+
+  const introPath = path.join(hermesDesktopDir, 'src', 'components', 'chat', 'intro.tsx')
+  const intro = fs.readFileSync(introPath, 'utf8')
+  const brandedIntro = intro.replace("const WORDMARK = 'HERMES AGENT'", "const WORDMARK = 'ZERO3 PILOT'")
+  if (brandedIntro === intro && !intro.includes("const WORDMARK = 'ZERO3 PILOT'")) {
+    throw new Error('Hermes chat wordmark changed upstream; update the Zero3 branding overlay.')
+  }
+  fs.writeFileSync(introPath, brandedIntro)
+
   const publicDir = path.join(hermesDesktopDir, 'public')
   fs.mkdirSync(publicDir, { recursive: true })
+  const brandFiles = [
+    ['zero3-pilot.png', path.join(hermesDesktopDir, 'assets', 'icon.png')],
+    ['zero3-pilot.ico', path.join(hermesDesktopDir, 'assets', 'icon.ico')],
+    ['zero3-pilot.icns', path.join(hermesDesktopDir, 'assets', 'icon.icns')],
+    ['zero3-pilot.png', path.join(publicDir, 'apple-touch-icon.png')]
+  ]
+  for (const [sourceName, target] of brandFiles) {
+    const source = path.join(brandAssetsDir, sourceName)
+    if (!isFile(source)) throw new Error(`Zero3 brand asset is missing: ${source}`)
+    fs.copyFileSync(source, target)
+  }
   fs.writeFileSync(
     path.join(publicDir, 'zero3-upstream.json'),
     `${JSON.stringify(
