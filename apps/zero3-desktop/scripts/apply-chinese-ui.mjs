@@ -25,14 +25,44 @@ function patchFile(relativePath, replacements) {
 
 export function applyZero3ChineseUi() {
   // Zero3 is a Chinese-first product. A fresh profile, an invalid locale, or a
-  // missing display.language value must resolve to Simplified Chinese. Explicit
-  // user choices such as English remain respected because normalizeLocale still
-  // returns the configured supported locale when one is present.
+  // missing display.language value must resolve to Simplified Chinese. The
+  // pinned Hermes runtime can materialize `display.language: en` before the
+  // Zero3 renderer has ever shown a language picker, so an unmarked English
+  // value is treated as the upstream legacy default. Once the user explicitly
+  // chooses English, localeConfigValue records that choice and future launches
+  // keep English. This also prevents the first paint from flashing English.
   patchFile('src/i18n/languages.ts', [
     {
       label: 'default desktop locale',
       from: "export const DEFAULT_LOCALE: Locale = 'en'",
       to: "export const DEFAULT_LOCALE: Locale = 'zh'"
+    },
+    {
+      label: 'explicit English language migration policy',
+      from: `export function normalizeLocale(value: unknown): Locale {\n  if (typeof value !== 'string') {\n    return DEFAULT_LOCALE\n  }\n\n  return LOCALE_ALIASES[normalize(value)] ?? DEFAULT_LOCALE\n}\n\nexport function isSupportedLocaleValue(value: unknown): boolean {\n  return typeof value === 'string' && LOCALE_ALIASES[normalize(value)] != null\n}\n\nexport function localeConfigValue(locale: Locale): string {\n  return LOCALE_OPTIONS.find(item => item.id === locale)?.configValue ?? DEFAULT_LOCALE\n}`,
+      to: `const ZERO3_EXPLICIT_LANGUAGE_KEY = 'zero3-explicit-language-v1'\n\nfunction hasZero3ExplicitLanguageChoice(): boolean {\n  if (typeof window === 'undefined') return false\n  try {\n    return window.localStorage.getItem(ZERO3_EXPLICIT_LANGUAGE_KEY) === '1'\n  } catch {\n    return false\n  }\n}\n\nfunction markZero3ExplicitLanguageChoice(): void {\n  if (typeof window === 'undefined') return\n  try {\n    window.localStorage.setItem(ZERO3_EXPLICIT_LANGUAGE_KEY, '1')\n  } catch {\n    // Language still changes for the current session if storage is unavailable.\n  }\n}\n\nexport function normalizeLocale(value: unknown): Locale {\n  if (typeof value !== 'string') {\n    return DEFAULT_LOCALE\n  }\n\n  const locale = LOCALE_ALIASES[normalize(value)] ?? DEFAULT_LOCALE\n  if (locale === 'en' && !hasZero3ExplicitLanguageChoice()) {\n    return DEFAULT_LOCALE\n  }\n\n  return locale\n}\n\nexport function isSupportedLocaleValue(value: unknown): boolean {\n  return typeof value === 'string' && LOCALE_ALIASES[normalize(value)] != null\n}\n\nexport function localeConfigValue(locale: Locale): string {\n  if (locale === 'en') {\n    markZero3ExplicitLanguageChoice()\n  }\n  return LOCALE_OPTIONS.find(item => item.id === locale)?.configValue ?? DEFAULT_LOCALE\n}`
+    }
+  ])
+
+  // Keep the onboarding provider catalog Chinese-first without translating
+  // provider/model brand names. Generic product copy such as the local endpoint
+  // label and dynamically derived API-access descriptions follows the selected
+  // UI locale.
+  patchFile('src/components/onboarding/index.tsx', [
+    {
+      label: 'localized API-key provider catalog',
+      from: `function useApiKeyCatalog(): ApiKeyOption[] {\n  const [rows, setRows] = useState<ModelOptionProvider[]>([])\n\n  useEffect(() => {\n    let cancelled = false\n\n    // Best-effort — on failure the curated defaults still render. Wrapped in\n    // Promise.resolve().then so a synchronous throw (e.g. no desktop bridge in\n    // tests) is funneled into the same .catch instead of escaping.\n    void Promise.resolve()\n      .then(() => getGlobalModelOptions({ includeUnconfigured: true, explicitOnly: false }))\n      .then(res => {\n        if (!cancelled) {\n          setRows(res.providers ?? [])\n        }\n      })\n      .catch(() => {\n        // Ignore — fall back to the curated API_KEY_OPTIONS only.\n      })\n\n    return () => {\n      cancelled = true\n    }\n  }, [])\n\n  return useMemo(() => {\n    const curatedByEnv = new Map(API_KEY_OPTIONS.map(o => [o.envKey, o]))\n    const derived: ApiKeyOption[] = []\n    const seenEnv = new Set<string>(API_KEY_OPTIONS.map(o => o.envKey))\n\n    for (const row of rows) {\n      // Only api_key providers can be activated with a pasted key. Skip OAuth /\n      // external / managed flows and anything missing an env var to write to.\n      if (row.auth_type && row.auth_type !== 'api_key') {\n        continue\n      }\n\n      const envKey = row.key_env\n\n      if (!envKey || seenEnv.has(envKey)) {\n        continue\n      }\n\n      seenEnv.add(envKey)\n      derived.push({\n        id: row.slug,\n        name: row.name,\n        envKey,\n        description: \`Direct API access to \${row.name}.\`,\n        docsUrl: ''\n      })\n    }\n\n    // Curated first (recommended order), then the rest alphabetically so the\n    // long tail is scannable.\n    derived.sort((a, b) => a.name.localeCompare(b.name))\n\n    return [...API_KEY_OPTIONS.filter(o => curatedByEnv.has(o.envKey)), ...derived]\n  }, [rows])\n}`,
+      to: `function useApiKeyCatalog(): ApiKeyOption[] {\n  const { locale } = useI18n()\n  const [rows, setRows] = useState<ModelOptionProvider[]>([])\n\n  useEffect(() => {\n    let cancelled = false\n\n    // Best-effort — on failure the curated defaults still render. Wrapped in\n    // Promise.resolve().then so a synchronous throw (e.g. no desktop bridge in\n    // tests) is funneled into the same .catch instead of escaping.\n    void Promise.resolve()\n      .then(() => getGlobalModelOptions({ includeUnconfigured: true, explicitOnly: false }))\n      .then(res => {\n        if (!cancelled) {\n          setRows(res.providers ?? [])\n        }\n      })\n      .catch(() => {\n        // Ignore — fall back to the curated API_KEY_OPTIONS only.\n      })\n\n    return () => {\n      cancelled = true\n    }\n  }, [])\n\n  return useMemo(() => {\n    const localizedCurated = API_KEY_OPTIONS.map(option =>\n      option.id === 'local'\n        ? {\n            ...option,\n            name:\n              locale === 'zh'\n                ? '本地 / 自定义端点'\n                : locale === 'zh-hant'\n                  ? '本機 / 自訂端點'\n                  : option.name\n          }\n        : option\n    )\n    const curatedByEnv = new Map(localizedCurated.map(o => [o.envKey, o]))\n    const derived: ApiKeyOption[] = []\n    const seenEnv = new Set<string>(localizedCurated.map(o => o.envKey))\n\n    for (const row of rows) {\n      // Only api_key providers can be activated with a pasted key. Skip OAuth /\n      // external / managed flows and anything missing an env var to write to.\n      if (row.auth_type && row.auth_type !== 'api_key') {\n        continue\n      }\n\n      const envKey = row.key_env\n\n      if (!envKey || seenEnv.has(envKey)) {\n        continue\n      }\n\n      seenEnv.add(envKey)\n      derived.push({\n        id: row.slug,\n        name: row.name,\n        envKey,\n        description:\n          locale === 'zh'\n            ? \`直接通过 API 访问 \${row.name}。\`\n            : locale === 'zh-hant'\n              ? \`直接透過 API 存取 \${row.name}。\`\n              : \`Direct API access to \${row.name}.\`,\n        docsUrl: ''\n      })\n    }\n\n    // Curated first (recommended order), then the rest alphabetically so the\n    // long tail is scannable.\n    derived.sort((a, b) => a.name.localeCompare(b.name))\n\n    return [...localizedCurated.filter(o => curatedByEnv.has(o.envKey)), ...derived]\n  }, [locale, rows])\n}`
+    }
+  ])
+
+  // Remove a high-visibility English fallback that still ships inside the
+  // upstream Simplified Chinese catalog.
+  patchFile('src/i18n/zh.ts', [
+    {
+      label: 'gateway reconnect detail Chinese copy',
+      from: `      gatewayConnectionLostDetail:\n        'Still retrying in the background. You can keep reading and drafting — open Gateway settings if this persists.',`,
+      to: `      gatewayConnectionLostDetail:\n        '正在后台持续重试。你可以继续阅读和编辑；如果问题持续存在，请打开“网关设置”检查连接。',`
     }
   ])
 
