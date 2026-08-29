@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir } from './config.mjs'
+import { applyZero3CodexTurnMapping } from './apply-codex-turn-mapping.mjs'
 
 function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
@@ -83,5 +84,7 @@ export function applyZero3CodexThreadActionsHardening() {
     }
   ])
 
-  console.log('R3D hardening: whole-thread fork is read-only/on-request, lastTurnId stays private until Turn-id mapping, and Hermes auto-archive is hidden in Codex mode.')
+  applyZero3CodexTurnMapping()
+  console.log('R3D hardening: whole-thread fork is read-only/on-request, lastTurnId stays private outside the dedicated R3E Turn-boundary action, and Hermes auto-archive is hidden in Codex mode.')
+  console.log('R3E: authoritative message -> Item -> Turn mapping is applied only after the R3D permission floor.')
 }
