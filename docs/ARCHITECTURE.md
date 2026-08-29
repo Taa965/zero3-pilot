@@ -151,7 +151,7 @@ The R2A mapping is:
 
 Codex Threads/Turns/Items are projected into the Hermes `SessionInfo` and `ChatMessage` stores strictly as presentation adapters. Those stores do not define runtime authority on the migrated path.
 
-R2A does not silently route missing operations back into Hermes Runtime. Attachments, edit/rewind/regenerate/branch, native archive/delete, steering, rich tool/file/reasoning rendering and multi-pane Codex parity remain explicit migration work. See [`CODEX_PRIMARY_CHAT_R2.md`](CODEX_PRIMARY_CHAT_R2.md).
+R2A does not silently route missing operations back into Hermes Runtime. Attachments, edit/rewind/regenerate/branch, native archive/delete, steering, additional Item families and multi-pane Codex parity remain explicit migration work. See [`CODEX_PRIMARY_CHAT_R2.md`](CODEX_PRIMARY_CHAT_R2.md).
 
 ### R2B native approval and input boundary
 
@@ -163,11 +163,38 @@ item/fileChange/requestApproval       -> approval dialog -> accept / acceptForSe
 item/tool/requestUserInput             -> input dialog    -> native answers map
 ```
 
-The primary chat now uses `approvalPolicy=on-request` while keeping the **default sandbox** at `read-only`. `read-only` does not override an explicit Codex escalation the user approves; it means Zero3 has not made `workspace-write` the default sandbox. Persistent exec-policy/network-policy amendments, permission-profile escalation, MCP elicitation, dynamic tool callbacks, auth refresh/attestation and legacy approval methods remain fail-closed until they receive dedicated reviewed UX.
+The primary chat uses `approvalPolicy=on-request` while keeping the **default sandbox** at `read-only`. `read-only` does not override an explicit Codex escalation the user approves; it means Zero3 has not made `workspace-write` the default sandbox. Persistent exec-policy/network-policy amendments, permission-profile escalation, MCP elicitation, dynamic tool callbacks, auth refresh/attestation and legacy approval methods remain fail-closed until they receive dedicated reviewed UX.
 
 Prompt requests are queued per Thread rather than stored in a single shared slot. Blocking Codex approvals/input are projected into the shell's existing awaiting-input state so composer gating, Stop/Esc and session status remain coherent. Stop, terminal turn completion and runtime errors reject/clear any unresolved request IDs, preventing orphaned app-server callbacks in Electron main.
 
 Secret `request_user_input` values remain component-local and are returned directly to the matching server request rather than being persisted in Zero3 presentation stores.
+
+### R3A native Item presentation boundary
+
+R3A adds `apps/zero3-desktop/scripts/apply-codex-item-rendering.mjs`. Codex remains the source of truth for Item identity, lifecycle and results; the adapter only translates those Items into the Hermes-derived chat presentation types already used by the shell.
+
+```text
+Codex ThreadItem / notifications
+          |
+Zero3 item-projection.ts
+          |
+Hermes ChatMessage parts
+          |
+reasoning timeline / tool cards
+```
+
+Current mappings are:
+
+- `reasoning` -> Hermes reasoning timeline parts;
+- `commandExecution` -> Hermes `terminal` tool-card presentation;
+- `fileChange` -> Hermes `patch` / inline-diff presentation;
+- `mcpToolCall` -> generic MCP tool-card presentation carrying server/tool/arguments/result/error.
+
+The same mapper is used for restored history from `thread/read(includeTurns=true)` and for live Item lifecycle notifications. Live projection consumes the pinned protocol's `item/started`, `item/completed`, `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta`, `item/commandExecution/outputDelta`, `item/fileChange/patchUpdated` and `item/mcpToolCall/progress` notifications.
+
+Reasoning summary deltas take presentation priority when Codex emits them; raw reasoning text is the fallback. Command output previews are bounded in Renderer state and replaced by the authoritative completed Item output. File-change presentation keeps structured changes and diff text. MCP progress remains presentation-only; it does not turn Hermes into the MCP runtime.
+
+R3A does not widen permissions. The R2B `approvalPolicy=on-request` and default `sandbox=read-only` boundary remains in force, and unsupported server-request classes remain fail-closed.
 
 ### Core binary ownership
 
@@ -186,11 +213,12 @@ The Hermes-derived shell still has unported surfaces whose boot/data dependencie
 
 Rules during the remaining migration:
 
-- main chat conversation semantics and R2B approval/input requests are Codex-owned;
+- main chat conversation semantics, native prompt requests and R3A Item execution state are Codex-owned;
+- Hermes components may render Codex data but do not become runtime authority;
 - no new Zero3 runtime feature may be added to Hermes runtime;
 - no desktop product feature may use Zero3 Node as primary state/runtime authority;
 - old Node bridge overlay files remain unapplied;
-- new core work goes through `window.zero3Codex`;
+- new core work goes through `window.zero3Codex` and Codex-native extension seams;
 - removal of the Hermes compatibility backend happens after all target shell dependencies are ported, not by weakening the Codex-core invariant.
 
 ## Multi-Agent Collaboration
@@ -275,7 +303,7 @@ Legacy naming for External Agent Collaboration adapters. Codex/Claude/Hermes are
 - durable session restore -> `thread/list/read/resume`;
 - compatibility types remain presentation-only.
 
-### R2B — current: native approval/input prompts
+### R2B — complete: native approval/input prompts
 
 - command-execution approval -> Zero3 dialog -> Codex server response;
 - file-change approval -> Zero3 dialog -> Codex server response;
@@ -284,10 +312,19 @@ Legacy naming for External Agent Collaboration adapters. Codex/Claude/Hermes are
 - unsupported server requests remain fail-closed;
 - default sandbox remains `read-only`; `workspace-write` is not the default.
 
-### R3 — execution UX and remaining thread parity
+### R3A — current: reasoning and tool Item presentation
+
+- restore/live projection for Codex `reasoning`;
+- restore/live projection for `commandExecution` using the shell's terminal card;
+- restore/live projection for `fileChange` using patch/diff presentation;
+- restore/live projection for `mcpToolCall` using generic MCP tool cards;
+- consume native reasoning/output/patch/progress notifications;
+- preserve Codex runtime authority and R2B permission boundary.
+
+### R3B — remaining execution UX and thread parity
 
 - structured attachments -> Codex UserInput;
-- reasoning / shell / file / MCP / dynamic-tool Item rendering;
+- dynamicToolCall / plan / functionCallOutput / webSearch and other useful Item families;
 - permission-profile and MCP elicitation UX where required;
 - native thread archive/delete/branch/edit/rollback/steer;
 - projects/worktrees and token/cost/status presentation;
@@ -314,6 +351,6 @@ Legacy naming for External Agent Collaboration adapters. Codex/Claude/Hermes are
 
 The dedicated Codex Core Smoke builds the exact pinned Codex source and exercises real JSONL protocol flow through `initialize`, `thread/list`, `thread/start` and `turn/start`, including the pinned `text_elements` UserInput field. Credential-free CI may tolerate a model/auth runtime failure only after request deserialization succeeds; invalid-params/unknown-field failures block the release.
 
-CI and the architecture guard require the typed `zero3Codex` boundary, reject generic Codex Renderer proxies, reject legacy Zero3 Node routing from primary chat, require the R2B prompt bridge/queue hardening, and keep the retired Node desktop bridge out of the target shell.
+CI and the architecture guard require the typed `zero3Codex` boundary, reject generic Codex Renderer proxies, reject legacy Zero3 Node routing from primary chat, require the R2B prompt bridge/queue hardening, require the R3A native Item projection and keep the retired Node desktop bridge out of the target shell.
 
 Platform smoke tests for legacy/extension components may continue until each path is replaced. Passing a legacy smoke test is evidence that a compatibility component still works; it is not evidence that the component defines the target architecture.
