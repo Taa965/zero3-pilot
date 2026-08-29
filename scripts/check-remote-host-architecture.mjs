@@ -38,6 +38,7 @@ requireText(
   'Remote Host architecture must route into the existing Zero3CodexAppServer.'
 )
 requireText(remoteProtocol, 'zero3.pilot.remote-task.v1', 'Remote Task v1 protocol contract is missing.')
+requireText(remoteProtocol, 'taskFingerprint: string', 'Durable task mapping must bind the exact validated remote-task content.')
 requireText(remoteProtocol, 'pendingTurnClientId?: string', 'Durable task mapping must persist an unresolved Codex Turn intent.')
 requireText(taskRunner, 'this.codex.startThread(', 'Remote tasks must enter Codex through the narrow Thread operation.')
 requireText(taskRunner, 'this.codex.startTurn(', 'Remote tasks must enter Codex through the narrow Turn operation.')
@@ -46,6 +47,9 @@ requireText(taskRunner, "approvalPolicy: 'on-request'", 'Remote tasks must retai
 requireText(taskRunner, "sandbox: 'read-only'", 'H3 must not silently widen the existing default sandbox.')
 requireText(taskRunner, 'zero3RemoteWorkspaceAllowed', 'Remote task workspaces must be locally allow-listed.')
 requireText(taskRunner, 'this.mappings.get(task.task_id)', 'Remote task idempotency must consult durable task mapping state.')
+requireText(taskRunner, 'taskFingerprint(task)', 'Remote task idempotency must fingerprint the validated task envelope.')
+requireText(taskRunner, 'mapping.taskFingerprint !== fingerprint', 'Same-id task payload drift must fail closed.')
+requireText(taskRunner, 'already bound to different remote task content', 'Task content collisions must be surfaced explicitly.')
 requireText(taskRunner, 'await this.mappings.put(mapping)', 'Remote Codex Thread/Turn mappings must be persisted before later retries.')
 requireText(taskRunner, 'mapping.pendingTurnClientId = clientUserMessageId', 'Remote Host must durably record Turn intent before turn/start.')
 requireText(taskRunner, 'clientUserMessageId,', 'Remote Host must pass its deterministic Turn identity into pinned Codex.')
@@ -95,4 +99,4 @@ forbidText(taskRunner, 'request(method:', 'Remote Task Runner must not receive a
 forbidText(taskRunner, 'onEvent(', 'H3 uses authoritative Thread reads rather than patching the shared Codex event broadcaster.')
 forbidText(overlay, 'zero3CodexLocalEventListeners', 'Remote Host must not mutate the shared Codex transport event broadcaster.')
 
-console.log('Zero3 Remote Host architecture guard passed: outbound control plane -> durable task/turn intent -> narrow existing Zero3CodexAppServer Thread/Turn/read adapter -> pinned Codex runtime, with at-most-once Turn recovery, fail-closed Git preconditions and no shell/Git bypass.')
+console.log('Zero3 Remote Host architecture guard passed: outbound control plane -> exact task fingerprint -> durable turn intent -> narrow existing Zero3CodexAppServer Thread/Turn/read adapter -> pinned Codex runtime, with at-most-once Turn recovery, fail-closed Git preconditions and no shell/Git bypass.')
