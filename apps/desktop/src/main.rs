@@ -15,15 +15,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(target_os = "windows")]
 mod windows {
     use std::env;
+    use std::fs;
     use std::io::{Read, Write};
     use std::net::{SocketAddr, TcpStream};
-    use std::path::PathBuf;
+    use std::os::windows::process::CommandExt;
+    use std::path::{Path, PathBuf};
     use std::process::{Child, Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
 
     const DEFAULT_PORT: u16 = 8790;
     const START_TIMEOUT: Duration = Duration::from_secs(12);
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const ZERO3_CODEX_SKILL: &str =
+        include_str!("../../../.agents/skills/zero3-pilot/SKILL.md");
 
     /// Owns a Node process only until the Codex native shell has been opened.
     ///
@@ -76,18 +81,19 @@ mod windows {
 
         if !node_healthy(port) {
             let binary = resolve_node_binary()?;
-            let child = Command::new(&binary)
+            let mut command = Command::new(&binary);
+            command
+                .creation_flags(CREATE_NO_WINDOW)
                 .env("ZERO3_PILOT_NODE_PORT", port.to_string())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|error| {
-                    format!(
-                        "failed to start Zero3 Pilot Node at {}: {error}",
-                        binary.display()
-                    )
-                })?;
+                .stderr(Stdio::null());
+            let child = command.spawn().map_err(|error| {
+                format!(
+                    "failed to start Zero3 Pilot Node at {}: {error}",
+                    binary.display()
+                )
+            })?;
             node.attach(child);
             wait_for_node(port)?;
         }
@@ -99,6 +105,7 @@ mod windows {
             );
         }
 
+        install_codex_skill()?;
         let workspace = resolve_codex_workspace()?;
         open_codex_workspace(&workspace)?;
 
@@ -125,23 +132,50 @@ mod windows {
 
     fn resolve_codex_workspace() -> Result<PathBuf, Box<dyn std::error::Error>> {
         if let Some(path) = env::var_os("ZERO3_CODEX_WORKSPACE") {
-            let path = PathBuf::from(path);
-            if !path.is_dir() {
-                return Err(format!(
-                    "ZERO3_CODEX_WORKSPACE is not a directory: {}",
-                    path.display()
-                )
-                .into());
-            }
-            return Ok(path);
+            return validate_workspace(PathBuf::from(path));
+        }
+        if let Some(path) = env::args_os().nth(1) {
+            return validate_workspace(PathBuf::from(path));
         }
         Ok(env::current_dir()?)
+    }
+
+    fn validate_workspace(path: PathBuf) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        if !path.is_dir() {
+            return Err(format!("Codex workspace is not a directory: {}", path.display()).into());
+        }
+        Ok(path)
+    }
+
+    fn install_codex_skill() -> Result<(), Box<dyn std::error::Error>> {
+        if matches!(
+            env::var("ZERO3_DISABLE_CODEX_SKILL_SYNC").as_deref(),
+            Ok("1" | "true" | "TRUE")
+        ) {
+            return Ok(());
+        }
+
+        let user_profile = env::var_os("USERPROFILE")
+            .ok_or("USERPROFILE is unavailable; cannot install the Zero3 Codex skill")?;
+        let skill_dir = PathBuf::from(user_profile)
+            .join(".agents")
+            .join("skills")
+            .join("zero3-pilot");
+        let skill_file = skill_dir.join("SKILL.md");
+
+        if fs::read_to_string(&skill_file).as_deref() == Ok(ZERO3_CODEX_SKILL) {
+            return Ok(());
+        }
+
+        fs::create_dir_all(&skill_dir)?;
+        fs::write(skill_file, ZERO3_CODEX_SKILL)?;
+        Ok(())
     }
 
     fn codex_app_is_installed() -> Result<bool, Box<dyn std::error::Error>> {
         // Keep the same stable package identity check used by the upstream
         // Codex CLI Windows desktop launcher.
-        let output = Command::new("powershell.exe")
+        let output = powershell()
             .arg("-NoProfile")
             .arg("-Command")
             .arg(
@@ -154,10 +188,10 @@ mod windows {
         Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
     }
 
-    fn open_codex_workspace(workspace: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    fn open_codex_workspace(workspace: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let path = workspace.display().to_string();
         let url = codex_new_thread_url(&path);
-        let status = Command::new("powershell.exe")
+        let status = powershell()
             .arg("-NoProfile")
             .arg("-Command")
             .arg("& { param($target) Start-Process -FilePath $target }")
@@ -169,6 +203,12 @@ mod windows {
         } else {
             Err(format!("failed to open Codex native shell with status {status}").into())
         }
+    }
+
+    fn powershell() -> Command {
+        let mut command = Command::new("powershell.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
     }
 
     fn codex_new_thread_url(workspace: &str) -> String {
