@@ -58,10 +58,10 @@ for (const forbidden of [
   forbidText(history, forbidden, `R3F must not fall back to Hermes Runtime, guessed history identity, or generic Codex RPC: ${forbidden}`)
 }
 
-requireText(
-  r3dHardening,
-  'applyZero3CodexTurnMapping()\n  applyZero3CodexAuthoritativeHistory()',
-  'R3F must execute only after the R3E authoritative Message -> Turn mapping overlay.'
-)
+const r3eIndex = r3dHardening.indexOf('applyZero3CodexTurnMapping()')
+const r3fIndex = r3dHardening.indexOf('applyZero3CodexAuthoritativeHistory()')
+if (r3eIndex < 0 || r3fIndex <= r3eIndex) {
+  throw new Error('R3F must execute only after the R3E authoritative Message -> Turn mapping overlay.')
+}
 
 console.log('R3F architecture guard passed: paginated full-Turn rehydrate / Codex-native user edit / no Hermes rewind fallback / typed-only history IPC.')
