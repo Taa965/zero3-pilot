@@ -28,6 +28,7 @@ const codexPrimaryChat = read('apps/zero3-desktop/scripts/apply-codex-primary-ch
 const codexPrompts = read('apps/zero3-desktop/scripts/apply-codex-prompts.mjs')
 const codexPromptHardening = read('apps/zero3-desktop/scripts/apply-codex-prompt-queue-hardening.mjs')
 const codexItemRendering = read('apps/zero3-desktop/scripts/apply-codex-item-rendering.mjs')
+const codexItemRenderingHardening = read('apps/zero3-desktop/scripts/apply-codex-item-rendering-hardening.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -137,6 +138,11 @@ requireText(
   'applyZero3CodexItemRendering()',
   'R3A target desktop must project native Codex Items into the Hermes-derived presentation layer.'
 )
+requireText(
+  prepare,
+  'applyZero3CodexItemRenderingHardening()',
+  'R3A target desktop must preserve summary-over-raw reasoning stream semantics.'
+)
 requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the pinned open-source Codex core.')
 requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
 requireText(config, 'resolveCodexHome', 'Zero3 must own an explicit Codex home boundary.')
@@ -220,6 +226,19 @@ for (const required of [
   )
 }
 
+for (const required of [
+  'projectCodexReasoningSummaryDelta',
+  'resetToSummary',
+  'firstSummaryDelta',
+  '!reasoningSummaryItemsRef.current.has(itemId)'
+]) {
+  requireText(
+    codexItemRenderingHardening,
+    required,
+    `R3A reasoning hardening is missing summary-stream takeover behavior: ${required}`
+  )
+}
+
 for (const forbidden of [
   "ipcRenderer.invoke('zero3:codex:rpc'",
   "ipcRenderer.invoke('zero3:codex:request'",
@@ -244,12 +263,14 @@ for (const forbidden of ['acceptWithExecpolicyAmendment', 'applyNetworkPolicyAme
   )
 }
 
-for (const forbidden of ['ZERO3_PILOT_NODE_PORT', 'requestGateway(', 'zero3:chat:turn']) {
-  forbidText(
-    codexItemRendering,
-    forbidden,
-    `R3A Item projection must remain presentation-only and must not regain legacy runtime authority: ${forbidden}`
-  )
+for (const source of [codexItemRendering, codexItemRenderingHardening]) {
+  for (const forbidden of ['ZERO3_PILOT_NODE_PORT', 'requestGateway(', 'zero3:chat:turn']) {
+    forbidText(
+      source,
+      forbidden,
+      `R3A Item projection must remain presentation-only and must not regain legacy runtime authority: ${forbidden}`
+    )
+  }
 }
 
-console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / native reasoning+tool Item projection / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
+console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / hardened native reasoning+tool Item projection / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
