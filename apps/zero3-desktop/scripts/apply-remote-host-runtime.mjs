@@ -38,6 +38,7 @@ function copyRuntimeSources() {
     'remote-config.ts',
     'remote-client.ts',
     'remote-evidence.ts',
+    'remote-mapping-store.ts',
     'remote-task-runner.ts',
     'remote-node.ts',
     'index.ts'
