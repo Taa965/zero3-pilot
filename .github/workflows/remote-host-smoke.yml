@@ -47,16 +47,30 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $main = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/main.ts'
           if ($main -notmatch 'Zero3RemoteNode') { throw 'generated Electron main does not include Zero3RemoteNode' }
-          if ($main -notmatch 'zero3CodexLocalEventListeners') { throw 'generated main is missing local Codex event fanout' }
-          if ($main -notmatch "thread/start") { throw 'generated main lost Codex Thread transport' }
-          if ($main -notmatch "turn/start") { throw 'generated main lost Codex Turn transport' }
+          if ($main -notmatch "startThread: params => zero3CodexAppServer\.request\('thread/start', params\)") { throw 'generated Remote Host does not use the narrow Codex Thread adapter' }
+          if ($main -notmatch "startTurn: \(params, timeoutMs\) => zero3CodexAppServer\.request\('turn/start', params, timeoutMs\)") { throw 'generated Remote Host does not use the narrow Codex Turn adapter' }
+          if ($main -notmatch "readThread: params => zero3CodexAppServer\.request\('thread/read', params\)") { throw 'generated Remote Host does not use authoritative Codex Thread reads' }
+          if ($main -match 'zero3CodexLocalEventListeners') { throw 'Remote Host mutated the shared Codex event broadcaster' }
           if ($main -match 'ZERO3_PILOT_NODE_PORT') { throw 'legacy Zero3 Node runtime leaked into Remote Host path' }
           if ($main -match "ipcRenderer\.invoke\('zero3:codex:(rpc|proxy)'" ) { throw 'generic Codex Renderer proxy detected' }
 
           $runner = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/zero3/remote-host/remote-task-runner.ts'
-          if ($runner -notmatch "this\.codex\.request\('thread/start'") { throw 'remote task does not enter Codex Thread runtime' }
-          if ($runner -notmatch "'turn/start'") { throw 'remote task does not enter Codex Turn runtime' }
+          if ($runner -notmatch 'this\.codex\.startThread\(') { throw 'remote task does not enter Codex Thread runtime' }
+          if ($runner -notmatch 'this\.codex\.startTurn\(') { throw 'remote task does not enter Codex Turn runtime' }
+          if ($runner -notmatch 'this\.codex\.readThread\(') { throw 'remote task does not observe authoritative Codex Thread state' }
+          if ($runner -match 'request\(method:') { throw 'remote task runner received a generic Codex method channel' }
           if ($runner -notmatch "sandbox: 'read-only'") { throw 'remote H3 widened default sandbox' }
+
+      - name: Verify prepare idempotency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mainPath = 'upstream/hermes-agent/apps/desktop/electron/main.ts'
+          $before = (Get-FileHash $mainPath -Algorithm SHA256).Hash
+          node apps/zero3-desktop/scripts/prepare-upstream.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'second desktop prepare failed' }
+          $after = (Get-FileHash $mainPath -Algorithm SHA256).Hash
+          if ($before -ne $after) { throw 'Remote Host overlay is not idempotent across repeated prepare' }
 
       - name: Install desktop dependencies
         shell: pwsh
