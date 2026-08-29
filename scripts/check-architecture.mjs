@@ -29,6 +29,7 @@ const codexPrompts = read('apps/zero3-desktop/scripts/apply-codex-prompts.mjs')
 const codexPromptHardening = read('apps/zero3-desktop/scripts/apply-codex-prompt-queue-hardening.mjs')
 const codexItemRendering = read('apps/zero3-desktop/scripts/apply-codex-item-rendering.mjs')
 const codexItemRenderingHardening = read('apps/zero3-desktop/scripts/apply-codex-item-rendering-hardening.mjs')
+const codexMoreItems = read('apps/zero3-desktop/scripts/apply-codex-more-items.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -143,6 +144,11 @@ requireText(
   'applyZero3CodexItemRenderingHardening()',
   'R3A target desktop must preserve summary/file/status protocol semantics.'
 )
+requireText(
+  codexItemRenderingHardening,
+  'applyZero3CodexMoreItems()',
+  'R3B native Item projection must be chained after the reviewed R3A projection hardening.'
+)
 requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the pinned open-source Codex core.')
 requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
 requireText(config, 'resolveCodexHome', 'Zero3 must own an explicit Codex home boundary.')
@@ -244,6 +250,20 @@ for (const required of [
   )
 }
 
+for (const required of [
+  'dynamicToolPayload',
+  'planPayload',
+  'webSearchPayload',
+  "item.type === 'dynamicToolCall'",
+  "item.type === 'plan'",
+  "item.type === 'webSearch'",
+  "item.type === 'functionCallOutput'",
+  "name: 'web_search'",
+  "moreItemRenderingPhase = 'R3B-codex-more-items'"
+]) {
+  requireText(codexMoreItems, required, `R3B Codex Item projection is missing required mapping/policy: ${required}`)
+}
+
 for (const forbidden of [
   "ipcRenderer.invoke('zero3:codex:rpc'",
   "ipcRenderer.invoke('zero3:codex:request'",
@@ -268,14 +288,28 @@ for (const forbidden of ['acceptWithExecpolicyAmendment', 'applyNetworkPolicyAme
   )
 }
 
-for (const source of [codexItemRendering, codexItemRenderingHardening]) {
+forbidText(
+  codexPrompts,
+  "event.method === 'item/tool/call'",
+  'R3B must not execute client-hosted dynamic tools through the approval/input prompt dispatcher.'
+)
+
+for (const source of [codexItemRendering, codexItemRenderingHardening, codexMoreItems]) {
   for (const forbidden of ['ZERO3_PILOT_NODE_PORT', 'requestGateway(', 'zero3:chat:turn']) {
     forbidText(
       source,
       forbidden,
-      `R3A Item projection must remain presentation-only and must not regain legacy runtime authority: ${forbidden}`
+      `Codex Item projection must remain presentation-only and must not regain legacy runtime authority: ${forbidden}`
     )
   }
 }
 
-console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / hardened native reasoning+tool Item projection / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
+for (const forbidden of ['respondToServerRequest', "item/tool/call", 'ipcRenderer.invoke']) {
+  forbidText(
+    codexMoreItems,
+    forbidden,
+    `R3B Item presentation must not become a dynamic-tool execution transport: ${forbidden}`
+  )
+}
+
+console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / R3A+R3B native Item projection / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
