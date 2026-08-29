@@ -24,6 +24,7 @@ const prepare = read('apps/zero3-desktop/scripts/prepare-upstream.mjs')
 const run = read('apps/zero3-desktop/scripts/run.mjs')
 const config = read('apps/zero3-desktop/scripts/config.mjs')
 const codexTransport = read('apps/zero3-desktop/scripts/apply-codex-transport.mjs')
+const codexPrimaryChat = read('apps/zero3-desktop/scripts/apply-codex-primary-chat.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -39,7 +40,7 @@ requireText(
 requireText(
   constitution,
   'DeepSeek-Harness is a **capability donor**',
-  'Architecture constitution must classify DeepSeek-Harness as a capability donor.'
+  'Architecture constitution must classify DeepSeek-Harness as capability donor.'
 )
 requireText(
   constitution,
@@ -110,7 +111,8 @@ requireText(
   "deepseekRole: 'capability-donor'",
   'Desktop provenance must identify DeepSeek as capability donor.'
 )
-requireText(prepare, 'applyZero3CodexTransport()', 'R1 target desktop must apply the typed Codex app-server transport.')
+requireText(prepare, 'applyZero3CodexTransport()', 'Target desktop must apply the typed Codex app-server transport.')
+requireText(prepare, 'applyZero3CodexPrimaryChat()', 'R2 target desktop must apply the Codex primary-chat adapter.')
 requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the pinned open-source Codex core.')
 requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
 requireText(config, 'resolveCodexHome', 'Zero3 must own an explicit Codex home boundary.')
@@ -127,6 +129,19 @@ for (const ipc of [
   requireText(codexTransport, ipc, `Codex transport is missing typed IPC ${ipc}.`)
 }
 
+for (const required of [
+  'window.zero3Codex.thread.start',
+  'window.zero3Codex.thread.resume',
+  'window.zero3Codex.thread.read',
+  'window.zero3Codex.turn.start',
+  'window.zero3Codex.turn.interrupt',
+  "event.method === 'item/agentMessage/delta'",
+  "event.method === 'turn/completed'",
+  "const R2_SANDBOX = 'read-only'"
+]) {
+  requireText(codexPrimaryChat, required, `R2 Codex primary chat is missing required path: ${required}`)
+}
+
 for (const forbidden of [
   "ipcRenderer.invoke('zero3:codex:rpc'",
   "ipcRenderer.invoke('zero3:codex:request'",
@@ -135,4 +150,12 @@ for (const forbidden of [
   forbidText(codexTransport, forbidden, 'Renderer must not receive a generic Codex JSON-RPC proxy.')
 }
 
-console.log('Zero3 architecture guard passed: pinned Codex app-server core / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
+for (const forbidden of ['ZERO3_PILOT_NODE_PORT', "requestGateway('prompt.submit'", 'zero3:chat:turn']) {
+  forbidText(
+    codexPrimaryChat,
+    forbidden,
+    `R2 primary chat must not route core conversation execution through legacy runtime path: ${forbidden}`
+  )
+}
+
+console.log('Zero3 architecture guard passed: pinned Codex app-server core / Codex primary chat / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
