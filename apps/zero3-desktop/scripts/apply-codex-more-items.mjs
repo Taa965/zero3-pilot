@@ -25,8 +25,7 @@ const moreItemPayloads = String.raw`function dynamicOutputText(value: unknown): 
   if (!Array.isArray(value)) return ''
   return value
     .map(entry => record(entry))
-    .filter(entry => entry.type === 'inputText' && typeof entry.text === 'string')
-    .map(entry => entry.text.trim())
+    .map(entry => (entry.type === 'inputText' && typeof entry.text === 'string' ? entry.text.trim() : ''))
     .filter(Boolean)
     .join('\n\n')
 }
