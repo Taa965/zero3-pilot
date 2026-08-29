@@ -61,16 +61,16 @@ jobs:
           if ($runner -match 'request\(method:') { throw 'remote task runner received a generic Codex method channel' }
           if ($runner -notmatch "sandbox: 'read-only'") { throw 'remote H3 widened default sandbox' }
 
-      - name: Verify prepare idempotency
+      - name: Verify Remote Host overlay idempotency
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $mainPath = 'upstream/hermes-agent/apps/desktop/electron/main.ts'
           $before = (Get-FileHash $mainPath -Algorithm SHA256).Hash
-          node apps/zero3-desktop/scripts/prepare-upstream.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'second desktop prepare failed' }
+          node --input-type=module -e "import('./apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs').then(m => m.applyZero3RemoteHostRuntime())"
+          if ($LASTEXITCODE -ne 0) { throw 'second Remote Host overlay application failed' }
           $after = (Get-FileHash $mainPath -Algorithm SHA256).Hash
-          if ($before -ne $after) { throw 'Remote Host overlay is not idempotent across repeated prepare' }
+          if ($before -ne $after) { throw 'Remote Host overlay is not idempotent when reapplied to a prepared shell' }
 
       - name: Install desktop dependencies
         shell: pwsh
