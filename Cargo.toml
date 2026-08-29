@@ -10,6 +10,7 @@ members = [
     "apps/web",
     "apps/node",
     "apps/desktop",
+    "apps/weixin",
 ]
 
 [workspace.package]

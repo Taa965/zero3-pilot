@@ -90,8 +90,16 @@ jobs:
           submodules: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build local Node and native desktop
-        run: cargo build -p zero3-node -p zero3-desktop
+      - name: Build local Node, Weixin channel and native desktop
+        run: cargo build -p zero3-node -p zero3-weixin -p zero3-desktop
+      - name: Weixin channel starts disconnected without credentials
+        shell: pwsh
+        run: |
+          $env:ZERO3_PILOT_DATA_DIR = Join-Path $env:RUNNER_TEMP 'zero3-pilot-weixin-smoke'
+          $out = & 'target\debug\zero3-pilot-weixin.exe' status
+          if ($LASTEXITCODE -ne 0) { throw 'zero3-pilot-weixin status failed' }
+          $status = $out | ConvertFrom-Json
+          if ($status.connected -ne $false) { throw 'fresh Weixin channel must start disconnected' }
       - name: Start real local Node and verify API
         shell: pwsh
         run: |
@@ -130,3 +138,52 @@ jobs:
           if ($env:ZERO3_PRODUCT_NODE_PID) {
             Stop-Process -Id ([int]$env:ZERO3_PRODUCT_NODE_PID) -Force -ErrorAction SilentlyContinue
           }
+
+  windows-installer-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release desktop bundle
+        run: cargo build --release -p zero3-node -p zero3-weixin -p zero3-desktop
+      - name: Resolve Inno Setup compiler
+        shell: pwsh
+        run: |
+          $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          }
+          if (-not $iscc) {
+            $candidate = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+            if (Test-Path $candidate) { $iscc = Get-Item $candidate }
+          }
+          if (-not $iscc) { throw 'Inno Setup compiler not found' }
+          "ZERO3_ISCC=$($iscc.Source ?? $iscc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build Zero3Pilot-Setup.exe
+        shell: pwsh
+        run: |
+          & $env:ZERO3_ISCC 'installer\Zero3Pilot.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+          if (-not (Test-Path 'dist\Zero3Pilot-Setup.exe')) { throw 'installer artifact missing' }
+      - name: Silent install smoke
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP 'Zero3PilotInstalled'
+          $setup = (Resolve-Path 'dist\Zero3Pilot-Setup.exe').Path
+          $proc = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',("/DIR=$installDir") -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "installer exited with $($proc.ExitCode)" }
+          @('zero3-pilot.exe','zero3-pilot-node.exe','zero3-pilot-weixin.exe') | ForEach-Object {
+            if (-not (Test-Path (Join-Path $installDir $_))) { throw "installed file missing: $_" }
+          }
+          $env:ZERO3_PILOT_DATA_DIR = Join-Path $env:RUNNER_TEMP 'zero3-pilot-installed-data'
+          $status = & (Join-Path $installDir 'zero3-pilot-weixin.exe') status | ConvertFrom-Json
+          if ($status.connected -ne $false) { throw 'installed Weixin channel status invalid' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zero3Pilot-Setup-${{ github.sha }}
+          path: dist/Zero3Pilot-Setup.exe
+          if-no-files-found: error
