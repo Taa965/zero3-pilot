@@ -98,6 +98,7 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/global.d.ts',
     'apps/desktop/src/i18n/languages.ts',
     'apps/desktop/src/store/onboarding.ts',
+    'apps/desktop/src/store/prompts.ts',
     'apps/desktop/src/store/updates.ts',
     ...brandedLocaleFiles.map(file => `apps/desktop/src/i18n/${file}`)
   ])
