@@ -13,6 +13,7 @@ import {
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
 import { applyZero3CodexPrimaryChat } from './apply-codex-primary-chat.mjs'
+import { applyZero3CodexSessionListGuard } from './apply-codex-session-list-guard.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
@@ -80,6 +81,7 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/app/context-menu/app-context-menu.tsx',
     'apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts',
     'apps/desktop/src/app/contrib/wiring.tsx',
+    'apps/desktop/src/app/session/hooks/use-session-list-actions.ts',
     'apps/desktop/src/app/settings/about-settings.tsx',
     'apps/desktop/src/app/settings/connections-registry.tsx',
     'apps/desktop/src/app/settings/index.tsx',
@@ -242,6 +244,7 @@ applyZero3ShellPolicy()
 applyZero3ChineseUi()
 applyZero3CodexTransport()
 applyZero3CodexPrimaryChat()
+applyZero3CodexSessionListGuard()
 
 console.log('Zero3 Desktop R2A shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
