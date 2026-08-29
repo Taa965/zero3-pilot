@@ -43,6 +43,7 @@ jobs:
           node --check apps/zero3-desktop/scripts/config.mjs
           node --check apps/zero3-desktop/scripts/apply-shell-policy.mjs
           node --check apps/zero3-desktop/scripts/apply-chinese-ui.mjs
+          node --check apps/zero3-desktop/scripts/apply-codex-transport.mjs
           node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
           node --check apps/zero3-desktop/scripts/run.mjs
           node --check apps/zero3-desktop/scripts/reset-upstream.mjs
@@ -82,6 +83,8 @@ jobs:
           if ($stamp.coreRuntime -ne 'openai-codex-app-server') { throw 'Codex must remain the target core runtime' }
           if ($stamp.desktopShell -ne 'hermes-electron-react') { throw 'Hermes must remain the desktop UI shell' }
           if ($stamp.deepseekRole -ne 'capability-donor') { throw 'DeepSeek must remain a capability donor' }
+          if ($stamp.migrationPhase -ne 'R1A-codex-app-server-transport') { throw 'R1A migration provenance is missing' }
+          if ($stamp.upstream.codex -ne '94311d447587411789533c47601fd8bc9d81eb48') { throw 'Codex pin mismatch in provenance stamp' }
           if ($stamp.upstream.hermes -ne 'f7c79efbac19ae18e8dee7c79a4e4c0935299b5f') { throw 'Hermes pin mismatch in provenance stamp' }
           if (-not (Test-Path 'upstream/hermes-agent/apps/desktop/public/zero3-pilot.png')) { throw 'Zero3 public brand mark missing' }
           $about = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/settings/about-settings.tsx'
@@ -92,6 +95,21 @@ jobs:
           if ($languages -notmatch "DEFAULT_LOCALE: Locale = 'zh'") { throw 'Zero3 default locale must be Simplified Chinese' }
           $preload = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/preload.ts'
           $main = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/main.ts'
+          $globalTypes = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/global.d.ts'
+          if ($preload -notmatch "exposeInMainWorld\('zero3Codex'") { throw 'Typed zero3Codex preload surface missing' }
+          if ($globalTypes -notmatch 'zero3Codex:') { throw 'zero3Codex renderer types missing' }
+          @(
+            'zero3:codex:thread:start',
+            'zero3:codex:thread:resume',
+            'zero3:codex:thread:list',
+            'zero3:codex:thread:read',
+            'zero3:codex:turn:start',
+            'zero3:codex:turn:interrupt',
+            'zero3:codex:server:respond'
+          ) | ForEach-Object {
+            if ($main -notmatch [regex]::Escape($_)) { throw "Typed Codex IPC missing: $_" }
+          }
+          if ($preload -match "zero3:codex:(rpc|request|proxy)") { throw 'Renderer must not receive a generic Codex JSON-RPC proxy' }
           if ($preload -match "zero3:chat|zero3:memory|zero3:schedule|zero3:browser|zero3:agent:dispatch") { throw 'Retired Zero3 Node runtime bridge leaked into target preload' }
           if ($main -match "ZERO3_READ_ROUTES|zero3:chat:turn|zero3:memory:put|zero3:schedule:create|zero3:browser:") { throw 'Retired Zero3 Node runtime bridge leaked into target Electron main' }
 
