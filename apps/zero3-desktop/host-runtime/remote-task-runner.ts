@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 
 import { zero3RemoteWorkspaceAllowed } from './remote-config'
@@ -23,6 +24,13 @@ export class Zero3RemoteTaskBlockedError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'Zero3RemoteTaskBlockedError'
+  }
+}
+
+export class Zero3RemoteTaskOutcomeUnknownError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'Zero3RemoteTaskOutcomeUnknownError'
   }
 }
 
@@ -86,6 +94,13 @@ function taskPrompt(task: Zero3RemoteTask): string {
   return `[ZERO3 REMOTE TASK]\n\nTask ID: ${task.task_id}\nExecution ID: ${task.execution_id}\nPermission intent: ${task.permission_profile ?? 'standard'}\nMaximum host-started Codex Turns: ${task.execution?.max_turns ?? 1}\n\nObjective:\n${task.objective}\n\nConstraints:\n${constraints}\n\nAcceptance Criteria:\n${acceptance}\n\nExecution requirements:\n- Inspect the real repository before modifying it.\n- Preserve Zero3 architecture invariants; open-source Codex remains the only Agent Kernel.\n- Use real project verification rather than assuming generated code works.\n- Do not bypass sandbox or approval policy.\n- Do not claim success until the acceptance criteria have been verified.\n- If an action needs permission outside the granted profile, stop and surface the requirement.\n`
 }
 
+function turnClientId(task: Zero3RemoteTask): string {
+  const digest = createHash('sha256')
+    .update([ZERO3_REMOTE_TASK_PROTOCOL, task.task_id, task.execution_id, 'turn:1'].join('\u0000'))
+    .digest('hex')
+  return `zero3-remote-${digest}`
+}
+
 function idFromResult(value: unknown, label: string): string {
   const root = record(value)
   const candidate =
@@ -99,13 +114,29 @@ function idFromResult(value: unknown, label: string): string {
   return requiredString(candidate, label, 512)
 }
 
-function findTurn(threadRead: unknown, turnId: string): RecordValue | null {
+function threadTurns(threadRead: unknown): RecordValue[] {
   const root = record(threadRead)
   const thread = record(root.thread)
   const turns = Array.isArray(thread.turns) ? thread.turns : Array.isArray(root.turns) ? root.turns : []
-  for (const raw of turns) {
-    const turn = record(raw)
+  return turns.map(record)
+}
+
+function findTurn(threadRead: unknown, turnId: string): RecordValue | null {
+  for (const turn of threadTurns(threadRead)) {
     if (turn.id === turnId) return turn
+  }
+  return null
+}
+
+function findTurnByClientId(threadRead: unknown, clientId: string): { turnId: string; turn: RecordValue } | null {
+  for (const turn of threadTurns(threadRead)) {
+    const items = Array.isArray(turn.items) ? turn.items : []
+    for (const rawItem of items) {
+      const item = record(rawItem)
+      if (item.clientId === clientId && typeof turn.id === 'string') {
+        return { turnId: turn.id, turn }
+      }
+    }
   }
   return null
 }
@@ -120,6 +151,17 @@ export class Zero3RemoteTaskRunner {
     private readonly codex: Zero3CodexRuntime,
     private readonly mappings = new Zero3RemoteMappingStore(config.mappingStateFile)
   ) {}
+
+  private async recoverPendingTurn(mapping: Zero3RemoteCodexMapping, clientId: string): Promise<string | null> {
+    const deadline = Date.now() + 5_000
+    do {
+      const snapshot = await this.codex.readThread({ threadId: mapping.threadId, includeTurns: true })
+      const recovered = findTurnByClientId(snapshot, clientId)
+      if (recovered) return recovered.turnId
+      if (Date.now() < deadline) await delay(250)
+    } while (Date.now() < deadline)
+    return null
+  }
 
   async run(lease: Zero3RemoteLease, onEvidence?: (sequence: number, method: string, payload: unknown) => Promise<void>) {
     const task = validateTask(lease.task)
@@ -178,20 +220,64 @@ export class Zero3RemoteTaskRunner {
     if (onEvidence) await onEvidence(threadEvidence.sequence, threadEvidence.method, threadEvidence.params)
 
     let turnId = mapping.turnIds.at(-1) ?? null
+    if (!turnId && mapping.pendingTurnClientId) {
+      turnId = await this.recoverPendingTurn(mapping, mapping.pendingTurnClientId)
+      if (!turnId) {
+        throw new Zero3RemoteTaskOutcomeUnknownError(
+          'a persisted Codex turn-start intent has no authoritative matching Turn; refusing to start a duplicate Turn'
+        )
+      }
+      mapping.turnIds.push(turnId)
+      delete mapping.pendingTurnClientId
+      try {
+        await this.mappings.put(mapping)
+      } catch (error) {
+        throw new Zero3RemoteTaskOutcomeUnknownError(
+          `recovered Codex Turn ${turnId} but could not persist the recovered mapping: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+      const recovered = evidence.push('remote.turn.recovered', { threadId: mapping.threadId, turnId })
+      if (onEvidence) await onEvidence(recovered.sequence, recovered.method, recovered.params)
+    }
+
     if (!turnId) {
-      const turnResult = await this.codex.startTurn(
-        {
-          threadId: mapping.threadId,
-          input: [{ type: 'text', text: taskPrompt(task), text_elements: [] }]
-        },
-        30_000
-      )
+      const clientUserMessageId = turnClientId(task)
+      mapping.pendingTurnClientId = clientUserMessageId
+      await this.mappings.put(mapping)
+
+      let turnResult: unknown
+      try {
+        turnResult = await this.codex.startTurn(
+          {
+            threadId: mapping.threadId,
+            clientUserMessageId,
+            input: [{ type: 'text', text: taskPrompt(task), text_elements: [] }]
+          },
+          30_000
+        )
+      } catch (error) {
+        throw new Zero3RemoteTaskOutcomeUnknownError(
+          `Codex turn/start returned without an authoritative Turn id after intent persistence: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+
       turnId = idFromResult(turnResult, 'Codex turn id')
       mapping.turnIds.push(turnId)
-      await this.mappings.put(mapping)
-      const turnStarted = evidence.push('remote.turn.started', { threadId: mapping.threadId, turnId })
+      delete mapping.pendingTurnClientId
+      try {
+        await this.mappings.put(mapping)
+      } catch (error) {
+        throw new Zero3RemoteTaskOutcomeUnknownError(
+          `Codex Turn ${turnId} started but its durable mapping could not be finalized: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+      const turnStarted = evidence.push('remote.turn.started', { threadId: mapping.threadId, turnId, clientUserMessageId })
       if (onEvidence) await onEvidence(turnStarted.sequence, turnStarted.method, turnStarted.params)
     } else {
+      if (mapping.pendingTurnClientId) {
+        delete mapping.pendingTurnClientId
+        await this.mappings.put(mapping)
+      }
       const turnResumed = evidence.push('remote.turn.resumed', { threadId: mapping.threadId, turnId })
       if (onEvidence) await onEvidence(turnResumed.sequence, turnResumed.method, turnResumed.params)
     }
