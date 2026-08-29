@@ -18,7 +18,7 @@ function forbidText(source, needle, message) {
 
 const constitution = read('docs/ARCHITECTURE_CONSTITUTION.md')
 const remoteArchitecture = read('docs/REMOTE_HOST_RUNTIME.md')
-const remoteProtocol = read('docs/REMOTE_TASK_PROTOCOL.md')
+const remoteProtocol = read('apps/zero3-desktop/host-runtime/remote-types.ts')
 const prepare = read('apps/zero3-desktop/scripts/prepare-upstream.mjs')
 const overlay = read('apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs')
 const taskRunner = read('apps/zero3-desktop/host-runtime/remote-task-runner.ts')
@@ -44,7 +44,11 @@ requireText(taskRunner, "approvalPolicy: 'on-request'", 'Remote tasks must retai
 requireText(taskRunner, "sandbox: 'read-only'", 'H3 must not silently widen the existing default sandbox.')
 requireText(taskRunner, 'zero3RemoteWorkspaceAllowed', 'Remote task workspaces must be locally allow-listed.')
 requireText(remoteNode, 'this.client.lease(25)', 'Remote Host must use outbound task lease transport.')
+requireText(remoteNode, 'this.client.renew(taskId, lease)', 'Remote Host must renew the active task lease while Codex runs.')
+requireText(remoteNode, 'this.client.close()', 'Remote Host shutdown must cancel outstanding control-plane requests.')
 requireText(remoteClient, 'authorization', 'Remote Host control-plane requests must be authenticated.')
+requireText(remoteClient, 'AbortController', 'Remote Host requests must be bounded/cancellable.')
+requireText(remoteClient, 'MAX_REQUEST_BYTES', 'Remote Host outbound payloads must be bounded.')
 requireText(remoteConfig, "parsed.protocol !== 'https:'", 'Remote Host production control plane must require HTTPS.')
 requireText(overlay, 'Zero3RemoteNode', 'Desktop overlay must install the Remote Host runtime.')
 requireText(overlay, "startThread: params => zero3CodexAppServer.request('thread/start', params)", 'Remote Host must adapt to the existing Codex app-server Thread boundary.')
@@ -71,4 +75,4 @@ forbidText(taskRunner, 'request(method:', 'Remote Task Runner must not receive a
 forbidText(taskRunner, 'onEvent(', 'H3 uses authoritative Thread reads rather than patching the shared Codex event broadcaster.')
 forbidText(overlay, 'zero3CodexLocalEventListeners', 'Remote Host must not mutate the shared Codex transport event broadcaster.')
 
-console.log('Zero3 Remote Host architecture guard passed: outbound control plane -> typed Remote Task -> narrow existing Zero3CodexAppServer Thread/Turn/read adapter -> pinned Codex runtime.')
+console.log('Zero3 Remote Host architecture guard passed: outbound control plane -> typed Remote Task -> narrow existing Zero3CodexAppServer Thread/Turn/read adapter -> pinned Codex runtime, with bounded/cancellable transport and lease renewal.')
