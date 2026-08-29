@@ -35,6 +35,7 @@ export type Zero3RemoteLease = {
 export type Zero3RemoteCodexMapping = {
   taskId: string
   executionId: string
+  taskFingerprint: string
   threadId: string
   turnIds: string[]
   workspace: string
