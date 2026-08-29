@@ -136,7 +136,7 @@ export class Zero3RemoteTaskRunner {
       workspace
     }
     const evidence = new Zero3RemoteEvidenceCollector(mapping)
-    const started = evidence.push('remote.thread.started', threadResult)
+    const started = evidence.push('remote.thread.started', { threadId, workspace })
     if (onEvidence) await onEvidence(started.sequence, started.method, started.params)
 
     const turnResult = await this.codex.startTurn(
@@ -148,17 +148,15 @@ export class Zero3RemoteTaskRunner {
     )
     const turnId = idFromResult(turnResult, 'Codex turn id')
     mapping.turnIds.push(turnId)
-    const turnStarted = evidence.push('remote.turn.started', turnResult)
+    const turnStarted = evidence.push('remote.turn.started', { threadId, turnId })
     if (onEvidence) await onEvidence(turnStarted.sequence, turnStarted.method, turnStarted.params)
 
     const timeoutMs = (task.execution?.timeout_seconds ?? 3600) * 1000
     const deadline = Date.now() + timeoutMs
     let lastStatus = ''
-    let finalThreadRead: unknown = null
 
     while (Date.now() < deadline) {
       const snapshot = await this.codex.readThread({ threadId, includeTurns: true })
-      finalThreadRead = snapshot
       const turn = findTurn(snapshot, turnId)
       if (!turn) {
         await delay(750)
@@ -178,8 +176,7 @@ export class Zero3RemoteTaskRunner {
           task,
           mapping,
           terminal: { turnId, status },
-          evidence: evidence.snapshot(),
-          thread: snapshot
+          evidence: evidence.snapshot()
         }
       }
       if (status === 'failed' || status === 'interrupted') {
@@ -188,8 +185,7 @@ export class Zero3RemoteTaskRunner {
           task,
           mapping,
           terminal: { turnId, status, error: turn.error ?? null },
-          evidence: evidence.snapshot(),
-          thread: snapshot
+          evidence: evidence.snapshot()
         }
       }
 
@@ -201,8 +197,7 @@ export class Zero3RemoteTaskRunner {
       task,
       mapping,
       terminal: { turnId, status: lastStatus || 'unknown', reason: 'remote task observation timed out' },
-      evidence: evidence.snapshot(),
-      thread: finalThreadRead
+      evidence: evidence.snapshot()
     }
   }
 }
