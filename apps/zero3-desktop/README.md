@@ -16,7 +16,7 @@ The architecture constitution is [`../../docs/ARCHITECTURE_CONSTITUTION.md`](../
 ```text
 Hermes-derived React UI
         |
-Zero3 Codex primary-chat adapter
+Zero3 Codex adapters
         |
 window.zero3Codex
         |
@@ -29,7 +29,7 @@ codex app-server --stdio
 open-source Codex
 ```
 
-Codex Thread / Turn / Item and app-server notifications are the authoritative model for the migrated primary chat path.
+Codex Thread / Turn / Item and app-server notifications/server requests are authoritative for the migrated primary chat path.
 
 ## R1A — implemented transport boundary
 
@@ -73,16 +73,40 @@ Stop / Esc     -> turn/interrupt
 
 Codex Threads and Items are projected into the existing `SessionInfo` / `ChatMessage` stores only as presentation adapters. Hermes session/job semantics are no longer authoritative for this main path.
 
-R2A deliberately runs primary Codex threads with:
+Operations not migrated yet — attachments, edit/rewind/regenerate/branch, native archive/delete, steering, rich tool/file/reasoning rendering and multi-pane Codex parity — do **not** silently fall back into Hermes Runtime for the primary chat. See [`../../docs/CODEX_PRIMARY_CHAT_R2.md`](../../docs/CODEX_PRIMARY_CHAT_R2.md).
+
+## R2B — Codex native approval and user-input bridge
+
+`apply-codex-prompts.mjs` connects selected app-server **server requests** directly to Zero3-owned prompt UI mounted inside the existing Hermes-derived presentation shell.
+
+Supported in R2B:
 
 ```text
-approvalPolicy = never
+item/commandExecution/requestApproval -> Zero3 approval dialog
+item/fileChange/requestApproval       -> Zero3 approval dialog
+item/tool/requestUserInput             -> Zero3 multi-question input dialog
+```
+
+Approval responses map only to the reviewed Codex decisions:
+
+```text
+accept
+acceptForSession
+decline
+```
+
+Zero3 deliberately does **not** expose persistent exec-policy or network-policy amendments yet. User-input answers are returned in Codex's native `{ answers: { questionId: { answers: [...] } } }` shape; secret values stay in component-local state rather than a global store.
+
+The main Codex chat now uses:
+
+```text
+approvalPolicy = on-request
 sandbox = read-only
 ```
 
-This is a temporary safety boundary until native Codex approval/input UI is connected. Unexpected server-originated requests are denied fail-closed rather than auto-approved. R2A therefore cannot modify the workspace.
+`read-only` is the default sandbox, not a claim that an explicitly approved escalation can never write. A command or file action can gain the permission represented by its Codex server request only after the user explicitly approves it; R2B still does **not** switch the default thread sandbox to `workspace-write`. Unsupported app-server request classes — including permission-profile escalation, MCP elicitation, dynamic tool callbacks, auth refresh/attestation and legacy approval RPCs — are rejected fail-closed rather than auto-approved.
 
-Operations not migrated yet — attachments, edit/rewind/regenerate/branch, native archive/delete, steering, rich tool/file/reasoning rendering, approval/input UI and multi-pane Codex parity — do **not** silently fall back into Hermes Runtime for the primary chat. See [`../../docs/CODEX_PRIMARY_CHAT_R2.md`](../../docs/CODEX_PRIMARY_CHAT_R2.md).
+Prompt requests are queued per Codex Thread instead of stored in a single slot. Blocking Codex prompts are also wired into the shell's existing `awaiting-input` state so the composer, Stop/Esc behavior and session UI do not treat a user decision as ordinary background execution. Stop, terminal turn settlement and runtime errors clear/reject unresolved request IDs so Electron main does not retain orphaned app-server callbacks.
 
 ## Retired Zero3 Node desktop direction
 
@@ -104,7 +128,7 @@ They must not receive new feature work.
 
 The pinned Hermes Desktop still expects its own backend for unported shell surfaces. `npm run dev` may therefore prepare Hermes' backend **only as compatibility scaffolding**.
 
-That backend is not allowed to own primary conversation semantics or new Zero3 product state. R2A's main chat already goes through Codex. The compatibility backend can be removed only after the remaining shell dependencies are ported.
+That backend is not allowed to own primary conversation semantics, Codex approvals/input, or new Zero3 product state. The compatibility backend can be removed only after the remaining shell dependencies are ported.
 
 ## Pinned upstreams
 
@@ -125,7 +149,7 @@ npm run dev
 npm run dist:win
 ```
 
-`npm run prepare` applies branding/product/localization, the R1A typed Codex transport and the R2A primary-chat adapter. `npm run dev` additionally builds the pinned open-source Codex binary when missing and launches the temporary UI compatibility environment. It does not launch Zero3 Node.
+`npm run prepare` applies branding/localization, the R1A Codex transport, R2A primary-chat adapter and R2B native prompt adapter. `npm run dev` additionally builds the pinned open-source Codex binary when missing and launches the temporary UI compatibility environment. It does not launch Zero3 Node.
 
 Before changes:
 
@@ -133,16 +157,16 @@ Before changes:
 node ../../scripts/check-architecture.mjs
 ```
 
-## Next implementation phase: R2B / R3
+## Next implementation phase: R3
 
-Next work is to close feature parity without returning runtime authority to Hermes:
+Next work closes execution parity before default write access is considered:
 
+- reasoning / command / file-change / MCP / dynamic-tool Item rendering;
+- permission-profile and MCP elicitation UX where required;
 - attachments -> Codex structured `UserInput`;
-- reasoning / shell / file-change / MCP / dynamic-tool Item rendering;
-- Codex approval and user-input requests -> native Zero3 UI;
-- restore workspace-write only after approval routing is live;
 - native archive/delete/branch/edit/rollback/steer operations;
 - session tiles / multi-pane Codex parity;
+- only then evaluate `workspace-write` as a default sandbox with explicit approval policy and tests;
 - remove the remaining Hermes compatibility-backend boot dependency once no target surface needs it.
 
 ## Upstream modification policy

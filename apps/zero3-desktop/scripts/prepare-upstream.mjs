@@ -13,6 +13,8 @@ import {
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
 import { applyZero3CodexPrimaryChat } from './apply-codex-primary-chat.mjs'
+import { applyZero3CodexPromptQueueHardening } from './apply-codex-prompt-queue-hardening.mjs'
+import { applyZero3CodexPrompts } from './apply-codex-prompts.mjs'
 import { applyZero3CodexSessionListGuard } from './apply-codex-session-list-guard.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
@@ -65,8 +67,8 @@ function trackedHermesChanges() {
 
 function assertOnlyOverlayChanges() {
   // R2 permits only the reviewed shell transformations plus the typed Codex
-  // app-server boundary and the primary-chat adapter. Retired Zero3 Node
-  // runtime bridges stay disabled.
+  // app-server boundary, primary-chat adapter and native prompt surfaces.
+  // Retired Zero3 Node runtime bridges stay disabled.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -92,9 +94,11 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/components/brand-mark.tsx',
     'apps/desktop/src/components/chat/intro.tsx',
     'apps/desktop/src/components/onboarding/index.tsx',
+    'apps/desktop/src/components/prompt-overlays.tsx',
     'apps/desktop/src/global.d.ts',
     'apps/desktop/src/i18n/languages.ts',
     'apps/desktop/src/store/onboarding.ts',
+    'apps/desktop/src/store/prompts.ts',
     'apps/desktop/src/store/updates.ts',
     ...brandedLocaleFiles.map(file => `apps/desktop/src/i18n/${file}`)
   ])
@@ -211,6 +215,7 @@ function applyBrandOverlay() {
         deepseekRole: 'capability-donor',
         migrationPhase: 'R1A-codex-app-server-transport',
         primaryChatPhase: 'R2A-codex-primary-chat',
+        promptPhase: 'R2B-codex-approval-input',
         upstream: pins
       },
       null,
@@ -244,12 +249,14 @@ applyZero3ShellPolicy()
 applyZero3ChineseUi()
 applyZero3CodexTransport()
 applyZero3CodexPrimaryChat()
+applyZero3CodexPrompts()
+applyZero3CodexPromptQueueHardening()
 applyZero3CodexSessionListGuard()
 
-console.log('Zero3 Desktop R2A shell prepared successfully.')
+console.log('Zero3 Desktop R2B shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
 console.log(`Hermes UI shell source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
 console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel; Hermes is UI shell only.')
-console.log('R2A: main chat Thread/Turn streaming, Stop and resume use Codex; retired Zero3 Node runtime bridges remain disabled.')
-console.log('R2A safety: main Codex chat is read-only/no-approval until native approval and tool UI mapping lands in R3.')
+console.log('R2B: main chat plus queued command/file approvals and request_user_input use Codex-native Thread/Turn server requests.')
+console.log('R2B safety: default Codex sandbox stays read-only; unsupported server requests are denied fail-closed until later execution UX phases.')
