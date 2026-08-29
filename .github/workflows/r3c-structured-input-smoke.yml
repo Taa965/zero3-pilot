@@ -59,13 +59,26 @@ jobs:
           if ($main -notmatch 'type must be text or localImage') { throw 'R3C UserInput allowlist missing from generated Electron main' }
           if ($main -notmatch 'turn/start must contain exactly one of input or text') { throw 'R3C exclusive turn/start request shape guard missing' }
           if ($main -notmatch 'text_elements: \[\]') { throw 'Pinned Codex text_elements normalization missing' }
-          if ($main -match "type: 'mention'|type: 'skill'|type: 'audio'|type: 'localAudio'") { throw 'Unreviewed UserInput emitter leaked into generated Electron main' }
+          $mainInputParser = [regex]::Match(
+            $main,
+            '(?s)const ZERO3_CODEX_MAX_TURN_INPUTS = 32.*?function zero3CodexTurnInputs\(value: unknown\)'
+          ).Value
+          if (-not $mainInputParser) { throw 'Could not isolate generated R3C Electron input parser' }
+          if ($mainInputParser -match "type: 'mention'|type: 'skill'|type: 'audio'|type: 'localAudio'|type: 'image'") {
+            throw 'Unreviewed UserInput emitter leaked into generated R3C Electron parser'
+          }
 
           if ($primary -notmatch 'codexTurnInputs') { throw 'R3C primary-chat structured input builder missing' }
           if ($primary -notmatch "inputs.push\(\{ type: 'localImage'") { throw 'Native Codex localImage mapping missing' }
           if ($primary -notmatch 'terminalContextBlocksFromDraft') { throw 'Saved terminal selection expansion missing' }
           if ($primary -match 'requestGateway\(|ZERO3_PILOT_NODE_PORT|zero3:chat:turn') { throw 'Legacy/Hermes runtime execution leaked into R3C primary-chat input path' }
 
-          if ($globalTypes -notmatch "type Zero3CodexTurnInput") { throw 'Typed R3C renderer request surface missing' }
-          if ($globalTypes -notmatch "type: 'localImage'; path: string") { throw 'Typed localImage request variant missing' }
-          if ($globalTypes -match "type: 'mention'|type: 'skill'|type: 'audio'|type: 'localAudio'") { throw 'Unreviewed UserInput variant leaked into Renderer types' }
+          $rendererInputType = [regex]::Match(
+            $globalTypes,
+            '(?s)type Zero3CodexTurnInput =.*?type Zero3CodexTurnStartBase ='
+          ).Value
+          if (-not $rendererInputType) { throw 'Typed R3C renderer request surface missing' }
+          if ($rendererInputType -notmatch "type: 'localImage'; path: string") { throw 'Typed localImage request variant missing' }
+          if ($rendererInputType -match "type: 'mention'|type: 'skill'|type: 'audio'|type: 'localAudio'|type: 'image'") {
+            throw 'Unreviewed UserInput variant leaked into Zero3 Renderer input type'
+          }
