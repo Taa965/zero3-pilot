@@ -22,6 +22,8 @@ const architecture = read('docs/ARCHITECTURE.md')
 const desktopReadme = read('apps/zero3-desktop/README.md')
 const prepare = read('apps/zero3-desktop/scripts/prepare-upstream.mjs')
 const run = read('apps/zero3-desktop/scripts/run.mjs')
+const config = read('apps/zero3-desktop/scripts/config.mjs')
+const codexTransport = read('apps/zero3-desktop/scripts/apply-codex-transport.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -91,6 +93,7 @@ for (const needle of ['ensureZero3Node', 'zero3NodeBinary', 'ZERO3_PILOT_NODE_PO
     `Architecture regression: target desktop launcher must not own Zero3 Node (${needle}).`
   )
 }
+forbidText(config, 'zero3NodeBinary', 'Target desktop config must not expose a Zero3 Node core-runtime binary helper.')
 
 requireText(
   prepare,
@@ -107,5 +110,29 @@ requireText(
   "deepseekRole: 'capability-donor'",
   'Desktop provenance must identify DeepSeek as capability donor.'
 )
+requireText(prepare, 'applyZero3CodexTransport()', 'R1 target desktop must apply the typed Codex app-server transport.')
+requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the pinned open-source Codex core.')
+requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
+requireText(config, 'resolveCodexHome', 'Zero3 must own an explicit Codex home boundary.')
 
-console.log('Zero3 architecture guard passed: Codex core / Hermes UI shell / DeepSeek capability donor / external-agent collaboration.')
+for (const ipc of [
+  'zero3:codex:thread:start',
+  'zero3:codex:thread:resume',
+  'zero3:codex:thread:list',
+  'zero3:codex:thread:read',
+  'zero3:codex:turn:start',
+  'zero3:codex:turn:interrupt',
+  'zero3:codex:server:respond'
+]) {
+  requireText(codexTransport, ipc, `Codex transport is missing typed IPC ${ipc}.`)
+}
+
+for (const forbidden of [
+  "ipcRenderer.invoke('zero3:codex:rpc'",
+  "ipcRenderer.invoke('zero3:codex:request'",
+  "ipcRenderer.invoke('zero3:codex:proxy'"
+]) {
+  forbidText(codexTransport, forbidden, 'Renderer must not receive a generic Codex JSON-RPC proxy.')
+}
+
+console.log('Zero3 architecture guard passed: pinned Codex app-server core / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
