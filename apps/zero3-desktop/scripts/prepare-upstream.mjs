@@ -13,6 +13,7 @@ import {
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
 import { applyZero3CodexPrimaryChat } from './apply-codex-primary-chat.mjs'
+import { applyZero3CodexPromptQueueHardening } from './apply-codex-prompt-queue-hardening.mjs'
 import { applyZero3CodexPrompts } from './apply-codex-prompts.mjs'
 import { applyZero3CodexSessionListGuard } from './apply-codex-session-list-guard.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
@@ -248,6 +249,7 @@ applyZero3ChineseUi()
 applyZero3CodexTransport()
 applyZero3CodexPrimaryChat()
 applyZero3CodexPrompts()
+applyZero3CodexPromptQueueHardening()
 applyZero3CodexSessionListGuard()
 
 console.log('Zero3 Desktop R2B shell prepared successfully.')
@@ -255,5 +257,5 @@ console.log(`Codex CORE source pin: ${pins.codex}`)
 console.log(`Hermes UI shell source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
 console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel; Hermes is UI shell only.')
-console.log('R2B: main chat plus command/file approvals and request_user_input use Codex-native Thread/Turn server requests.')
-console.log('R2B safety: Codex stays read-only; unsupported server requests are denied fail-closed until later execution UX phases.')
+console.log('R2B: main chat plus queued command/file approvals and request_user_input use Codex-native Thread/Turn server requests.')
+console.log('R2B safety: default Codex sandbox stays read-only; unsupported server requests are denied fail-closed until later execution UX phases.')
