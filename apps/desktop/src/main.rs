@@ -181,9 +181,9 @@ mod windows {
     fn percent_encode_query_value(value: &str) -> String {
         const HEX: &[u8; 16] = b"0123456789ABCDEF";
         let mut encoded = String::with_capacity(value.len());
-        for byte in value.as_bytes() {
+        for &byte in value.as_bytes() {
             if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                encoded.push(*byte as char);
+                encoded.push(byte as char);
             } else {
                 encoded.push('%');
                 encoded.push(HEX[(byte >> 4) as usize] as char);
