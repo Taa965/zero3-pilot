@@ -1,0 +1,121 @@
+name: R3E Turn Mapping Smoke
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  r3e-turn-mapping:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize pinned desktop upstreams
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
+          if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Source architecture and syntax guard
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/check-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'base architecture guard failed' }
+          node scripts/check-r3d-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'R3D architecture guard failed' }
+          node scripts/check-r3e-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'R3E architecture guard failed' }
+          node --check apps/zero3-desktop/scripts/apply-codex-turn-mapping.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'R3E turn-mapping overlay syntax failed' }
+          node --check apps/zero3-desktop/scripts/apply-codex-thread-actions-hardening.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'R3D/R3E chain syntax failed' }
+
+      - name: Verify pinned Codex Turn boundary contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $threadData = Get-Content -Raw 'upstream/codex/codex-rs/app-server-protocol/src/protocol/v2/thread_data.rs'
+          $thread = Get-Content -Raw 'upstream/codex/codex-rs/app-server-protocol/src/protocol/v2/thread.rs'
+          $item = Get-Content -Raw 'upstream/codex/codex-rs/app-server-protocol/src/protocol/v2/item.rs'
+          $common = Get-Content -Raw 'upstream/codex/codex-rs/app-server-protocol/src/protocol/common.rs'
+
+          if ($threadData -notmatch 'pub struct Turn \{') { throw 'Pinned Codex Turn type missing' }
+          if ($threadData -notmatch 'pub items: Vec<ThreadItem>') { throw 'Pinned Codex Turn no longer owns ThreadItems' }
+          if ($item -notmatch 'pub turn_id: String') { throw 'Pinned Codex Item lifecycle notifications no longer expose turnId' }
+          if ($thread -notmatch 'pub last_turn_id: Option<String>') { throw 'Pinned Codex thread/fork lastTurnId contract changed' }
+          if ($thread -notmatch 'pub before_turn_id: String') { throw 'Pinned Codex thread/revert beforeTurnId contract changed' }
+          if ($thread -notmatch 'This only changes persisted conversation history. It does not revert local file changes.') { throw 'Pinned Codex revert disk-safety contract changed' }
+          if ($common -notmatch 'ThreadRevert => "thread/revert"') { throw 'Pinned Codex thread/revert method registration changed' }
+
+      - name: Prepare pinned R3E desktop shell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node apps/zero3-desktop/scripts/prepare-upstream.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'R3E desktop preparation failed' }
+
+      - name: Verify generated authoritative mapping boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stamp = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/public/zero3-upstream.json' | ConvertFrom-Json
+          if ($stamp.coreRuntime -ne 'openai-codex-app-server') { throw 'Codex app-server must remain the core runtime' }
+          if ($stamp.turnMappingPhase -ne 'R3E-codex-message-turn-mapping') { throw 'R3E provenance is missing' }
+          if ($stamp.upstream.codex -ne '94311d447587411789533c47601fd8bc9d81eb48') { throw 'Pinned Codex provenance changed' }
+
+          $main = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/main.ts'
+          $preload = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/preload.ts'
+          $globalTypes = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/global.d.ts'
+          $primary = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/zero3-codex/primary-chat.ts'
+          $boundary = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/zero3-codex/turn-boundary.ts'
+          $wiring = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/contrib/wiring.tsx'
+
+          @('zero3:codex:thread:fork-at-turn', 'zero3:codex:thread:revert-before-turn') | ForEach-Object {
+            if ($main -notmatch [regex]::Escape($_)) { throw "R3E typed IPC missing: $_" }
+            if ($preload -notmatch [regex]::Escape($_)) { throw "R3E preload method missing: $_" }
+          }
+
+          $wholeFork = [regex]::Match(
+            $main,
+            '(?s)function zero3CodexThreadForkParams\(value: unknown\).*?function zero3CodexThreadForkAtTurnParams'
+          ).Value
+          if (-not $wholeFork) { throw 'Could not isolate whole-thread fork validator' }
+          if ($wholeFork -match 'lastTurnId') { throw 'Whole-thread fork must remain unable to accept a Turn id' }
+
+          $messageFork = [regex]::Match(
+            $main,
+            '(?s)function zero3CodexThreadForkAtTurnParams\(value: unknown\).*?function zero3CodexThreadRevertBeforeTurnParams'
+          ).Value
+          if (-not $messageFork) { throw 'Could not isolate message-level fork validator' }
+          if ($messageFork -notmatch "approvalPolicy: 'on-request'") { throw 'Message fork lost on-request approval floor' }
+          if ($messageFork -notmatch "sandbox: 'read-only'") { throw 'Message fork lost read-only sandbox floor' }
+          if ($messageFork -notmatch 'lastTurnId: zero3CodexRequiredString') { throw 'Message fork must require an explicit Turn id' }
+
+          if ($globalTypes -notmatch 'type Zero3CodexThreadForkAtTurnRequest = \{ lastTurnId: string; threadId: string \}') { throw 'Typed fork-at-Turn request missing' }
+          if ($globalTypes -notmatch 'type Zero3CodexThreadRevertBeforeTurnRequest = \{ beforeTurnId: string; threadId: string \}') { throw 'Typed revert-before-Turn request missing' }
+          if ($preload -match 'zero3:codex:(rpc|request|proxy)') { throw 'Renderer must not receive a generic Codex JSON-RPC proxy' }
+
+          if ($boundary -notmatch 'findCodexMessageBoundary') { throw 'Authoritative Item -> Turn resolver missing' }
+          if ($boundary -notmatch 'nonEmptyString\(turn.id\)') { throw 'Turn resolver does not read Codex Turn.id' }
+          if ($boundary -notmatch 'nonEmptyString\(item.id\)') { throw 'Turn resolver does not read Codex ThreadItem.id' }
+          if ($boundary -match 'Date\.now|messageIndex|timestamp') { throw 'Turn resolver appears to infer identity from renderer ordering/time' }
+
+          if ($primary -notmatch 'thread\.read\(\{ threadId, includeTurns: true \}\)') { throw 'History action does not refresh authoritative Codex Turns before mutation' }
+          if ($primary -notmatch 'submittedUserTurnByMessageRef\.current\.set\(userMessage\.id') { throw 'Optimistic user message is not tied to turn/start response id' }
+          if ($primary -notmatch 'window\.zero3Codex\.thread\.forkAtTurn') { throw 'Assistant-message branch is not using dedicated Turn fork' }
+          if ($primary -notmatch 'window\.zero3Codex\.thread\.revertBeforeTurn') { throw 'Restore/regenerate is not using dedicated Turn revert' }
+          if ($primary -notmatch "boundary\.role === 'user'") { throw 'User-bubble partial-Turn branch fail-closed gate missing' }
+          if ($primary -notmatch '!boundary\.isLastMessageInTurn') { throw 'Partial assistant Turn branch fail-closed gate missing' }
+          if ($primary -notmatch 'boundary\.hasImageInput') { throw 'Destructive image-turn replay safety gate missing' }
+
+          if ($wiring -notmatch 'codexPrimaryChat\.branchFromMessage') { throw 'Main chat branch action is not wired to R3E' }
+          if ($wiring -notmatch 'codexPrimaryChat\.restoreToMessage') { throw 'Main chat restore action is not wired to R3E' }
+          if ($wiring -notmatch 'codexPrimaryChat\.reloadFromMessage') { throw 'Main chat regenerate action is not wired to R3E' }
