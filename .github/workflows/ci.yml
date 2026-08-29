@@ -37,6 +37,7 @@ jobs:
       - name: Zero3 Desktop v3 orchestrator syntax
         run: |
           node --check apps/zero3-desktop/scripts/config.mjs
+          node --check apps/zero3-desktop/scripts/apply-shell-policy.mjs
           node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
           node --check apps/zero3-desktop/scripts/run.mjs
           node --check apps/zero3-desktop/scripts/reset-upstream.mjs
@@ -72,6 +73,10 @@ jobs:
           $stamp = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/public/zero3-upstream.json' | ConvertFrom-Json
           if ($stamp.product -ne 'Zero3 Pilot') { throw 'Zero3 provenance stamp missing product identity' }
           if ($stamp.upstream.hermes -ne 'f7c79efbac19ae18e8dee7c79a4e4c0935299b5f') { throw 'Hermes pin mismatch in provenance stamp' }
+          if (-not (Test-Path 'upstream/hermes-agent/apps/desktop/public/zero3-pilot.png')) { throw 'Zero3 public brand mark missing' }
+          $about = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/settings/about-settings.tsx'
+          if ($about -notmatch 'Zero3-managed updates') { throw 'Zero3 About policy overlay missing' }
+          if ($about -match 'NousResearch|hermes-agent.nousresearch.com') { throw 'Upstream product link leaked into Zero3 About surface' }
 
       - name: Install Hermes Desktop dependencies
         working-directory: upstream/hermes-agent
