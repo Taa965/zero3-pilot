@@ -13,6 +13,7 @@ import {
   upstreamRoot,
   zero3Port
 } from './config.mjs'
+import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
 const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
@@ -83,6 +84,7 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/components/brand-mark.tsx',
     'apps/desktop/src/components/chat/intro.tsx',
     'apps/desktop/src/components/onboarding/index.tsx',
+    'apps/desktop/src/i18n/languages.ts',
     'apps/desktop/src/store/onboarding.ts',
     'apps/desktop/src/store/updates.ts',
     ...brandedLocaleFiles.map(file => `apps/desktop/src/i18n/${file}`)
@@ -242,6 +244,7 @@ assertPin('DeepSeek Harness', deepseekRoot, pins.deepseek)
 assertOnlyOverlayChanges()
 applyBrandOverlay()
 applyZero3ShellPolicy()
+applyZero3ChineseUi()
 installZero3HermesSkill()
 
 console.log('Zero3 Desktop upstream prepared successfully.')
@@ -249,5 +252,6 @@ console.log(`Hermes Desktop source pin: ${pins.hermes}`)
 console.log(`Codex app-server source: ${pins.codex}`)
 console.log(`DeepSeek Harness source: ${pins.deepseek}`)
 console.log('Zero3 shell policy: upstream commercial, diagnostics and self-update surfaces disabled')
+console.log('Zero3 UI policy: Simplified Chinese is the default locale; explicit user language choices remain supported')
 console.log(`Zero3 Hermes home: ${resolveHermesHome()}`)
 console.log(`Zero3 Node endpoint: http://127.0.0.1:${zero3Port}`)
