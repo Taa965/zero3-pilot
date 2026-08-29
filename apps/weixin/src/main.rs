@@ -300,6 +300,9 @@ fn render_reply(value: &Value) -> String {
     if let Some(text) = value.as_str() {
         return text.to_string();
     }
+    if let Some(summary) = value.get("summary").and_then(Value::as_str) {
+        return summary.to_string();
+    }
     if let Some(output) = value.get("output").and_then(Value::as_str) {
         return output.to_string();
     }
