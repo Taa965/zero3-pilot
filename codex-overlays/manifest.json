@@ -1,0 +1,72 @@
+{
+  "$schema": "./manifest.schema.json",
+  "schema_version": 1,
+  "runtime_authority": "openai-codex",
+  "pins": {
+    "codex": "94311d447587411789533c47601fd8bc9d81eb48",
+    "hermes": "f7c79efbac19ae18e8dee7c79a4e4c0935299b5f",
+    "deepseek_harness": "cd5ef8148158c3a752a658978873241fdf8e2bbc"
+  },
+  "patch_order": [
+    "foundation",
+    "output-retention",
+    "context-pruning",
+    "lsp",
+    "external-agent",
+    "team",
+    "jobs",
+    "workflow"
+  ],
+  "features": {
+    "foundation": {
+      "owner": "S1",
+      "extension_id": null,
+      "extension_source": null,
+      "patch_dir": "codex-overlays/patches/foundation/"
+    },
+    "output-retention": {
+      "owner": "S2",
+      "extension_id": "zero3-output-retention",
+      "extension_source": "codex-overlays/ext/zero3-output-retention/",
+      "patch_dir": "codex-overlays/patches/output-retention/"
+    },
+    "context-pruning": {
+      "owner": "S3",
+      "extension_id": "zero3-context-retention",
+      "extension_source": "codex-overlays/ext/zero3-context-retention/",
+      "patch_dir": "codex-overlays/patches/context-pruning/"
+    },
+    "lsp": {
+      "owner": "S4",
+      "extension_id": "zero3-lsp",
+      "extension_source": "codex-overlays/ext/zero3-lsp/",
+      "patch_dir": "codex-overlays/patches/lsp/"
+    },
+    "external-agent": {
+      "owner": "S2",
+      "extension_id": "zero3-external-agent",
+      "extension_source": "codex-overlays/ext/zero3-external-agent/",
+      "patch_dir": "codex-overlays/patches/external-agent/"
+    },
+    "team": {
+      "owner": "S4",
+      "extension_id": "zero3-durable-team",
+      "extension_source": "codex-overlays/ext/zero3-durable-team/",
+      "patch_dir": "codex-overlays/patches/team/"
+    },
+    "jobs": {
+      "owner": "S3",
+      "extension_id": "zero3-background-jobs",
+      "extension_source": "codex-overlays/ext/zero3-background-jobs/",
+      "patch_dir": "codex-overlays/patches/jobs/"
+    },
+    "workflow": {
+      "owner": "S2",
+      "extension_id": "zero3-dynamic-workflow",
+      "extension_source": "codex-overlays/ext/zero3-dynamic-workflow/",
+      "patch_dir": "codex-overlays/patches/workflow/"
+    }
+  },
+  "extensions": [],
+  "patches": []
+}
