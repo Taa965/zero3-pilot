@@ -27,8 +27,7 @@ mod windows {
     const DEFAULT_PORT: u16 = 8790;
     const START_TIMEOUT: Duration = Duration::from_secs(12);
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    const ZERO3_CODEX_SKILL: &str =
-        include_str!("../../../.agents/skills/zero3-pilot/SKILL.md");
+    const ZERO3_CODEX_SKILL: &str = include_str!("../../../.agents/skills/zero3-pilot/SKILL.md");
 
     /// Owns a Node process only until the Codex native shell has been opened.
     ///
