@@ -932,7 +932,9 @@ mod tests {
                     .method("PATCH")
                     .uri(format!("/api/v1/schedules/{id}"))
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"enabled":false,"granted_level":"Standard","approved":false}"#))
+                    .body(Body::from(
+                        r#"{"enabled":false,"granted_level":"Standard","approved":false}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -946,7 +948,9 @@ mod tests {
                     .method("PATCH")
                     .uri(format!("/api/v1/schedules/{id}"))
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"enabled":true,"granted_level":"Standard","approved":false}"#))
+                    .body(Body::from(
+                        r#"{"enabled":true,"granted_level":"Standard","approved":false}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -962,7 +966,9 @@ mod tests {
                     .method("PATCH")
                     .uri(format!("/api/v1/schedules/{id}"))
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"enabled":true,"granted_level":"Standard","approved":true}"#))
+                    .body(Body::from(
+                        r#"{"enabled":true,"granted_level":"Standard","approved":true}"#,
+                    ))
                     .unwrap(),
             )
             .await
