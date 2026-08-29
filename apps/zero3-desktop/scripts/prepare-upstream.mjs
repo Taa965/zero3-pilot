@@ -23,6 +23,14 @@ function exec(file, args, options = {}) {
   })
 }
 
+function isFile(file) {
+  try {
+    return fs.statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
+
 function gitHead(dir) {
   return exec('git', ['-C', dir, 'rev-parse', 'HEAD']).trim()
 }
@@ -108,7 +116,7 @@ function applyBrandOverlay() {
 
 function installZero3HermesSkill() {
   const source = path.join(repoRoot, '.agents', 'skills', 'zero3-pilot', 'SKILL.md')
-  if (!fs.isFileSync(source)) {
+  if (!isFile(source)) {
     throw new Error(`Zero3 skill source is missing: ${source}`)
   }
   const targetDir = path.join(resolveHermesHome(), 'skills', 'zero3-pilot')
