@@ -27,6 +27,7 @@ const codexTransport = read('apps/zero3-desktop/scripts/apply-codex-transport.mj
 const codexPrimaryChat = read('apps/zero3-desktop/scripts/apply-codex-primary-chat.mjs')
 const codexPrompts = read('apps/zero3-desktop/scripts/apply-codex-prompts.mjs')
 const codexPromptHardening = read('apps/zero3-desktop/scripts/apply-codex-prompt-queue-hardening.mjs')
+const codexItemRendering = read('apps/zero3-desktop/scripts/apply-codex-item-rendering.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -118,6 +119,11 @@ requireText(
   "promptPhase: 'R2B-codex-approval-input'",
   'Desktop provenance must identify the native Codex prompt migration phase.'
 )
+requireText(
+  prepare,
+  "itemRenderingPhase: 'R3A-codex-item-rendering'",
+  'Desktop provenance must identify the native Codex Item rendering phase.'
+)
 requireText(prepare, 'applyZero3CodexTransport()', 'Target desktop must apply the typed Codex app-server transport.')
 requireText(prepare, 'applyZero3CodexPrimaryChat()', 'R2 target desktop must apply the Codex primary-chat adapter.')
 requireText(prepare, 'applyZero3CodexPrompts()', 'R2B target desktop must apply the Codex approval/input prompt adapter.')
@@ -125,6 +131,11 @@ requireText(
   prepare,
   'applyZero3CodexPromptQueueHardening()',
   'R2B target desktop must preserve queued prompt requests and awaiting-input shell state.'
+)
+requireText(
+  prepare,
+  'applyZero3CodexItemRendering()',
+  'R3A target desktop must project native Codex Items into the Hermes-derived presentation layer.'
 )
 requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the pinned open-source Codex core.')
 requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
@@ -157,9 +168,9 @@ for (const required of [
 
 for (const required of [
   "const R2_APPROVAL_POLICY = 'on-request' as const",
-  "item/commandExecution/requestApproval",
-  "item/fileChange/requestApproval",
-  "item/tool/requestUserInput",
+  'item/commandExecution/requestApproval',
+  'item/fileChange/requestApproval',
+  'item/tool/requestUserInput',
   "async (decision: 'accept' | 'acceptForSession' | 'decline')",
   'respondResult(request.requestId, { decision })',
   'respondToServerRequest',
@@ -182,6 +193,30 @@ for (const required of [
     codexPromptHardening,
     required,
     `R2B Codex prompt hardening is missing queue/cleanup/awaiting-input behavior: ${required}`
+  )
+}
+
+for (const required of [
+  'projectCodexAuxHistoryItem',
+  'projectCodexAuxItemStarted',
+  'projectCodexAuxItemCompleted',
+  'projectCodexReasoningDelta',
+  'projectCodexCommandOutputDelta',
+  'projectCodexFilePatchUpdated',
+  'projectCodexMcpProgress',
+  'upsertToolPart',
+  "name: 'terminal'",
+  "name: 'patch'",
+  "event.method === 'item/reasoning/summaryTextDelta'",
+  "event.method === 'item/reasoning/textDelta'",
+  "event.method === 'item/commandExecution/outputDelta'",
+  "event.method === 'item/fileChange/patchUpdated'",
+  "event.method === 'item/mcpToolCall/progress'"
+]) {
+  requireText(
+    codexItemRendering,
+    required,
+    `R3A Codex Item projection is missing required native Item/notification mapping: ${required}`
   )
 }
 
@@ -209,4 +244,12 @@ for (const forbidden of ['acceptWithExecpolicyAmendment', 'applyNetworkPolicyAme
   )
 }
 
-console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native approval+input prompts / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
+for (const forbidden of ['ZERO3_PILOT_NODE_PORT', 'requestGateway(', 'zero3:chat:turn']) {
+  forbidText(
+    codexItemRendering,
+    forbidden,
+    `R3A Item projection must remain presentation-only and must not regain legacy runtime authority: ${forbidden}`
+  )
+}
+
+console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / native reasoning+tool Item projection / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
