@@ -163,7 +163,7 @@ mod windows {
             .join("zero3-pilot");
         let skill_file = skill_dir.join("SKILL.md");
 
-        if fs::read_to_string(&skill_file).as_deref() == Ok(ZERO3_CODEX_SKILL) {
+        if fs::read_to_string(&skill_file).ok().as_deref() == Some(ZERO3_CODEX_SKILL) {
             return Ok(());
         }
 
