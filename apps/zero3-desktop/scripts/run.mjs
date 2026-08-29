@@ -6,9 +6,7 @@ import {
   commandName,
   hermesRoot,
   repoRoot,
-  resolveHermesHome,
-  zero3NodeBinary,
-  zero3Port
+  resolveHermesHome
 } from './config.mjs'
 
 const mode = process.argv[2] ?? 'dev'
@@ -50,21 +48,12 @@ function runSync(file, args, options = {}) {
   }
 }
 
-async function nodeHealthy() {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 600)
-  try {
-    const response = await fetch(`http://127.0.0.1:${zero3Port}/health`, {
-      signal: controller.signal
-    })
-    if (!response.ok) return false
-    const body = await response.json()
-    return body?.status === 'ok'
-  } catch {
-    return false
-  } finally {
-    clearTimeout(timer)
-  }
+function ensureHermesDependencies(env) {
+  if (isDirectory(path.join(hermesRoot, 'node_modules'))) return
+  runSync(commandName('npm'), ['install', '--workspace', 'apps/desktop'], {
+    cwd: hermesRoot,
+    env
+  })
 }
 
 function hermesVenvPython() {
@@ -74,61 +63,6 @@ function hermesVenvPython() {
     process.platform === 'win32' ? 'Scripts' : 'bin',
     process.platform === 'win32' ? 'python.exe' : 'python'
   )
-}
-
-function hermesVenvCli() {
-  return path.join(
-    hermesRoot,
-    '.venv',
-    process.platform === 'win32' ? 'Scripts' : 'bin',
-    process.platform === 'win32' ? 'hermes.exe' : 'hermes'
-  )
-}
-
-function resolveHermesWorkerExecutable(env) {
-  if (env.ZERO3_HERMES_BIN) return env.ZERO3_HERMES_BIN
-  const bundled = hermesVenvCli()
-  return isFile(bundled) ? bundled : 'hermes'
-}
-
-async function ensureZero3Node(env) {
-  if (await nodeHealthy()) return null
-
-  const binary = zero3NodeBinary()
-  if (!isFile(binary)) {
-    runSync('cargo', ['build', '-p', 'zero3-node'])
-  }
-  if (!isFile(binary)) {
-    throw new Error(`Zero3 Node binary was not produced at ${binary}`)
-  }
-
-  const child = spawn(binary, [], {
-    cwd: repoRoot,
-    env: {
-      ...env,
-      ZERO3_PILOT_NODE_PORT: String(zero3Port),
-      ZERO3_HERMES_BIN: resolveHermesWorkerExecutable(env)
-    },
-    stdio: 'inherit',
-    windowsHide: true
-  })
-
-  const deadline = Date.now() + 12_000
-  while (Date.now() < deadline) {
-    if (await nodeHealthy()) return child
-    await new Promise(resolve => setTimeout(resolve, 250))
-  }
-
-  child.kill()
-  throw new Error(`Zero3 Node did not become healthy on 127.0.0.1:${zero3Port}`)
-}
-
-function ensureHermesDependencies(env) {
-  if (isDirectory(path.join(hermesRoot, 'node_modules'))) return
-  runSync(commandName('npm'), ['install', '--workspace', 'apps/desktop'], {
-    cwd: hermesRoot,
-    env
-  })
 }
 
 function pythonCanStartHermesGateway(python, env) {
@@ -158,7 +92,7 @@ function resolveSystemPython(env) {
     })
     if (!probe.error && probe.status === 0) return candidate
   }
-  throw new Error('A supported Python interpreter is required to prepare the Hermes gateway runtime.')
+  throw new Error('A supported Python interpreter is required for the temporary Hermes UI compatibility backend.')
 }
 
 function ensureHermesPythonDependencies(env) {
@@ -179,7 +113,7 @@ function ensureHermesPythonDependencies(env) {
   )
 
   if (!pythonCanStartHermesGateway(venvPython, env)) {
-    throw new Error(`Hermes gateway dependencies were not importable after installation in ${venvPython}`)
+    throw new Error(`Hermes UI compatibility dependencies were not importable after installation in ${venvPython}`)
   }
 }
 
@@ -209,17 +143,22 @@ const env = {
   HERMES_HOME: hermesHome,
   HERMES_DESKTOP_HERMES_ROOT: hermesRoot,
   HERMES_DESKTOP_APP_NAME: 'Zero3 Pilot',
-  ZERO3_PILOT_NODE_PORT: String(zero3Port),
-  ZERO3_DESKTOP_SHELL: 'hermes'
+  ZERO3_DESKTOP_CORE: 'codex-app-server',
+  ZERO3_DESKTOP_SHELL: 'hermes-ui-compat'
 }
 
 ensureHermesDependencies(env)
-if (mode === 'dev') ensureHermesPythonDependencies(env)
 
-let ownedNode = null
-try {
-  if (mode === 'dev') ownedNode = await ensureZero3Node(env)
-  await runHermesDesktop(mode, env)
-} finally {
-  if (ownedNode && !ownedNode.killed) ownedNode.kill()
+// R0 migration note: upstream Hermes Desktop still expects its own backend to
+// boot the existing shell. Keep that backend only as temporary UI scaffolding.
+// The target Zero3 runtime is Codex app-server and no Zero3 product capability
+// may be added to this compatibility backend.
+if (mode === 'dev') {
+  console.warn('[Zero3 R0] Hermes backend is UI compatibility scaffolding only; Codex remains the target core runtime.')
+  ensureHermesPythonDependencies(env)
 }
+
+// Deliberately do NOT start zero3-pilot-node here. R0 breaks the previous
+// Hermes UI -> Zero3 Node -> worker architecture. R1 will own Codex app-server
+// lifecycle and transport directly from the desktop shell.
+await runHermesDesktop(mode, env)
