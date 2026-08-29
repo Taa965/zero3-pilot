@@ -39,6 +39,7 @@ jobs:
           node --check apps/zero3-desktop/scripts/config.mjs
           node --check apps/zero3-desktop/scripts/apply-shell-policy.mjs
           node --check apps/zero3-desktop/scripts/apply-chinese-ui.mjs
+          node --check apps/zero3-desktop/scripts/apply-native-bridge.mjs
           node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
           node --check apps/zero3-desktop/scripts/run.mjs
           node --check apps/zero3-desktop/scripts/reset-upstream.mjs
@@ -81,6 +82,17 @@ jobs:
           if ($about -match 'NousResearch|hermes-agent.nousresearch.com') { throw 'Upstream product link leaked into Zero3 About surface' }
           $languages = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/i18n/languages.ts'
           if ($languages -notmatch "DEFAULT_LOCALE: Locale = 'zh'") { throw 'Zero3 default locale must be Simplified Chinese' }
+          $preload = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/preload.ts'
+          if ($preload -notmatch "exposeInMainWorld\('zero3Desktop'") { throw 'Zero3 preload bridge missing' }
+          if ($preload -match "zero3:request|zero3:fetch|zero3:proxy") { throw 'Zero3 preload must not expose a generic request proxy' }
+          $main = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/main.ts'
+          if ($main -notmatch 'ZERO3_READ_ROUTES') { throw 'Zero3 main-process allowlist missing' }
+          @('/health','/api/v1/status','/api/v1/jobs','/api/v1/schedules','/api/v1/memory') | ForEach-Object {
+            if ($main -notmatch [regex]::Escape($_)) { throw "Zero3 read allowlist missing route: $_" }
+          }
+          $control = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/src/app/settings/zero3-control-settings.tsx'
+          if ($control -notmatch 'Zero3 总控') { throw 'Chinese-first Zero3 control surface missing' }
+          if ($control -notmatch '白名单 IPC') { throw 'Zero3 control surface must describe the native security boundary' }
 
       - name: Install Hermes Desktop dependencies
         working-directory: upstream/hermes-agent

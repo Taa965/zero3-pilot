@@ -14,6 +14,7 @@ import {
   zero3Port
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
+import { applyZero3NativeBridge } from './apply-native-bridge.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
 const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
@@ -69,6 +70,8 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/assets/icon.icns',
     'apps/desktop/assets/icon.ico',
     'apps/desktop/assets/icon.png',
+    'apps/desktop/electron/main.ts',
+    'apps/desktop/electron/preload.ts',
     'apps/desktop/public/apple-touch-icon.png',
     'apps/desktop/src/app/chat/composer/status-stack/index.tsx',
     'apps/desktop/src/app/command-palette/index.tsx',
@@ -79,11 +82,13 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/app/settings/connections-registry.tsx',
     'apps/desktop/src/app/settings/index.tsx',
     'apps/desktop/src/app/settings/providers-settings.tsx',
+    'apps/desktop/src/app/settings/types.ts',
     'apps/desktop/src/components/assistant-ui/thread/assistant-message.tsx',
     'apps/desktop/src/components/boot-failure-overlay.tsx',
     'apps/desktop/src/components/brand-mark.tsx',
     'apps/desktop/src/components/chat/intro.tsx',
     'apps/desktop/src/components/onboarding/index.tsx',
+    'apps/desktop/src/global.d.ts',
     'apps/desktop/src/i18n/languages.ts',
     'apps/desktop/src/store/onboarding.ts',
     'apps/desktop/src/store/updates.ts',
@@ -245,6 +250,7 @@ assertOnlyOverlayChanges()
 applyBrandOverlay()
 applyZero3ShellPolicy()
 applyZero3ChineseUi()
+applyZero3NativeBridge()
 installZero3HermesSkill()
 
 console.log('Zero3 Desktop upstream prepared successfully.')
@@ -253,5 +259,6 @@ console.log(`Codex app-server source: ${pins.codex}`)
 console.log(`DeepSeek Harness source: ${pins.deepseek}`)
 console.log('Zero3 shell policy: upstream commercial, diagnostics and self-update surfaces disabled')
 console.log('Zero3 UI policy: Simplified Chinese is the default locale; explicit user language choices remain supported')
+console.log('Zero3 native bridge: read-only allowlist for health, status, jobs, schedules and memory')
 console.log(`Zero3 Hermes home: ${resolveHermesHome()}`)
 console.log(`Zero3 Node endpoint: http://127.0.0.1:${zero3Port}`)
