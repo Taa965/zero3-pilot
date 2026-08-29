@@ -77,9 +77,9 @@ jobs:
 
           $forkParser = [regex]::Match(
             $main,
-            '(?s)function zero3CodexThreadForkParams\(value: unknown\).*?function zero3CodexThreadSetNameParams'
+            '(?s)function zero3CodexThreadForkParams\(value: unknown\).*?function zero3CodexThreadForkAtTurnParams'
           ).Value
-          if (-not $forkParser) { throw 'Could not isolate generated R3D fork validator' }
+          if (-not $forkParser) { throw 'Could not isolate generated R3D whole-thread fork validator' }
           if ($forkParser -notmatch "approvalPolicy: 'on-request'") { throw 'R3D fork must force on-request approvals' }
           if ($forkParser -notmatch "sandbox: 'read-only'") { throw 'R3D fork must force read-only sandbox' }
           if ($forkParser -match 'lastTurnId') { throw 'Renderer-controlled lastTurnId leaked into whole-thread R3D fork' }
@@ -102,5 +102,5 @@ jobs:
           if ($settings -notmatch 'thread\.parentThreadId == null') { throw 'Archived internal child-thread filter missing' }
           if ($settings -notmatch 'thread\.ephemeral !== true') { throw 'Archived ephemeral-thread filter missing' }
 
-          if ($main -match 'zero3:codex:thread:(revert|rollback)') { throw 'Message-level revert/rollback was exposed before Turn-id mapping' }
+          if ($main -match "zero3:codex:thread:(revert|rollback)'") { throw 'Raw R3D revert/rollback channel was exposed instead of the dedicated R3E boundary' }
           if ($preload -match 'zero3:codex:(rpc|request|proxy)') { throw 'Renderer must not receive a generic Codex JSON-RPC proxy' }
