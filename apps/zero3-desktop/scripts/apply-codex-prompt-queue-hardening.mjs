@@ -156,4 +156,26 @@ export function applyZero3CodexPromptQueueHardening() {
         "}"
     }
   ])
+
+  patchFile('src/app/zero3-codex/primary-chat.ts', [
+    {
+      label: 'prompt cleanup when Stop cannot resolve a live turn id',
+      from: '    if (!turnId) return',
+      to:
+        "    if (!turnId) {\n" +
+        "      await rejectPendingPrompts(threadId, 'Codex Stop could not resolve an active Turn; pending prompts were cancelled.')\n" +
+        "      return\n" +
+        "    }"
+    },
+    {
+      label: 'prompt cleanup on Codex runtime error',
+      from:
+        "      if (event.method === 'error') {\n" +
+        "        const message = errorMessage(params.error ?? params.message, 'Codex Runtime 错误')",
+      to:
+        "      if (event.method === 'error') {\n" +
+        "        const message = errorMessage(params.error ?? params.message, 'Codex Runtime 错误')\n" +
+        "        void rejectPendingPrompts(threadId, 'Codex runtime error ended the pending prompt.')"
+    }
+  ])
 }
