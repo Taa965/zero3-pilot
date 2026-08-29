@@ -21,6 +21,22 @@ function needsShell(file) {
   return process.platform === 'win32' && file.toLowerCase().endsWith('.cmd')
 }
 
+function isFile(file) {
+  try {
+    return fs.statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
+
+function isDirectory(dir) {
+  try {
+    return fs.statSync(dir).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 function runSync(file, args, options = {}) {
   const result = spawnSync(file, args, {
     cwd: options.cwd ?? repoRoot,
@@ -55,10 +71,10 @@ async function ensureZero3Node() {
   if (await nodeHealthy()) return null
 
   const binary = zero3NodeBinary()
-  if (!fs.isFileSync(binary)) {
+  if (!isFile(binary)) {
     runSync('cargo', ['build', '-p', 'zero3-node'])
   }
-  if (!fs.isFileSync(binary)) {
+  if (!isFile(binary)) {
     throw new Error(`Zero3 Node binary was not produced at ${binary}`)
   }
 
@@ -83,7 +99,7 @@ async function ensureZero3Node() {
 }
 
 function ensureHermesDependencies(env) {
-  if (fs.isDirectory(path.join(hermesRoot, 'node_modules'))) return
+  if (isDirectory(path.join(hermesRoot, 'node_modules'))) return
   runSync(commandName('npm'), ['install', '--workspace', 'apps/desktop'], {
     cwd: hermesRoot,
     env
