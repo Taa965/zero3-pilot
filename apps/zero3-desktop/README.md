@@ -104,9 +104,9 @@ approvalPolicy = on-request
 sandbox = read-only
 ```
 
-`read-only` remains intentional. R2B proves that request routing, user decisions and cancellation are correctly correlated before Zero3 permits workspace mutation. Unsupported app-server request classes — including permission-profile escalation, MCP elicitation, dynamic tool callbacks, auth refresh/attestation and legacy approval RPCs — are rejected fail-closed rather than auto-approved.
+`read-only` is the default sandbox, not a claim that an explicitly approved escalation can never write. A command or file action can gain the permission represented by its Codex server request only after the user explicitly approves it; R2B still does **not** switch the default thread sandbox to `workspace-write`. Unsupported app-server request classes — including permission-profile escalation, MCP elicitation, dynamic tool callbacks, auth refresh/attestation and legacy approval RPCs — are rejected fail-closed rather than auto-approved.
 
-Stop and terminal turn settlement also clear/reject any unresolved prompt request IDs so Electron main does not retain orphaned app-server callbacks.
+Prompt requests are queued per Codex Thread instead of stored in a single slot. Blocking Codex prompts are also wired into the shell's existing `awaiting-input` state so the composer, Stop/Esc behavior and session UI do not treat a user decision as ordinary background execution. Stop, terminal turn settlement and runtime errors clear/reject unresolved request IDs so Electron main does not retain orphaned app-server callbacks.
 
 ## Retired Zero3 Node desktop direction
 
@@ -159,14 +159,14 @@ node ../../scripts/check-architecture.mjs
 
 ## Next implementation phase: R3
 
-Next work closes execution parity before write access is restored:
+Next work closes execution parity before default write access is considered:
 
 - reasoning / command / file-change / MCP / dynamic-tool Item rendering;
 - permission-profile and MCP elicitation UX where required;
 - attachments -> Codex structured `UserInput`;
 - native archive/delete/branch/edit/rollback/steer operations;
 - session tiles / multi-pane Codex parity;
-- only then evaluate `workspace-write` with explicit approval policy and tests;
+- only then evaluate `workspace-write` as a default sandbox with explicit approval policy and tests;
 - remove the remaining Hermes compatibility-backend boot dependency once no target surface needs it.
 
 ## Upstream modification policy
