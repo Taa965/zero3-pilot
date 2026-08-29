@@ -1,0 +1,148 @@
+name: Electron Desktop Package
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  windows-electron-package-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize pinned desktop upstreams
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
+          if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+          cache: npm
+          cache-dependency-path: upstream/hermes-agent/package-lock.json
+
+      - name: Validate Zero3 Desktop overlay scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @(
+            'apps/zero3-desktop/scripts/config.mjs',
+            'apps/zero3-desktop/scripts/apply-shell-policy.mjs',
+            'apps/zero3-desktop/scripts/apply-chinese-ui.mjs',
+            'apps/zero3-desktop/scripts/apply-native-bridge.mjs',
+            'apps/zero3-desktop/scripts/apply-native-chat.mjs',
+            'apps/zero3-desktop/scripts/apply-native-chat-hardening.mjs',
+            'apps/zero3-desktop/scripts/apply-node-lifecycle.mjs',
+            'apps/zero3-desktop/scripts/prepare-upstream.mjs',
+            'apps/zero3-desktop/scripts/run.mjs',
+            'apps/zero3-desktop/scripts/reset-upstream.mjs'
+          ) | ForEach-Object {
+            node --check $_
+            if ($LASTEXITCODE -ne 0) { throw "syntax check failed: $_" }
+          }
+
+      - name: Prepare Zero3 Electron overlay
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node apps/zero3-desktop/scripts/prepare-upstream.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Zero3 Desktop preparation failed' }
+
+          $package = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/package.json' | ConvertFrom-Json
+          $nodeResource = @($package.build.extraResources) | Where-Object { $_.to -eq 'zero3/zero3-pilot-node.exe' }
+          if ($nodeResource.Count -ne 1) { throw 'Electron package does not declare exactly one bundled Zero3 Node resource' }
+
+          $main = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/main.ts'
+          @('ZERO3_NODE_RUNTIME','ensureZero3NodeRuntime','zero3PackagedNodePath','before-quit') | ForEach-Object {
+            if ($main -notmatch [regex]::Escape($_)) { throw "Zero3 Node lifecycle overlay missing: $_" }
+          }
+
+      - name: Install Hermes Desktop dependencies
+        working-directory: upstream/hermes-agent
+        run: npm install --workspace apps/desktop
+
+      - name: Typecheck Zero3 Electron Desktop
+        working-directory: upstream/hermes-agent
+        run: npm --workspace apps/desktop run typecheck
+
+      - name: Build and stage release Zero3 Node
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --release -p zero3-node
+          if ($LASTEXITCODE -ne 0) { throw 'release Zero3 Node build failed' }
+          $source = (Resolve-Path 'target\release\zero3-pilot-node.exe').Path
+          $targetDir = 'upstream\hermes-agent\apps\desktop\build\zero3'
+          New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+          Copy-Item -Force $source (Join-Path $targetDir 'zero3-pilot-node.exe')
+
+      - name: Pack real Zero3 Electron Desktop
+        working-directory: upstream/hermes-agent
+        run: npm --workspace apps/desktop run pack
+
+      - name: Verify packaged Zero3 Node resource
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $node = 'upstream\hermes-agent\apps\desktop\release\win-unpacked\resources\zero3\zero3-pilot-node.exe'
+          $app = 'upstream\hermes-agent\apps\desktop\release\win-unpacked\Zero3Pilot.exe'
+          if (-not (Test-Path $node)) { throw "packaged Zero3 Node missing: $node" }
+          if (-not (Test-Path $app)) { throw "packaged Zero3 Pilot executable missing: $app" }
+
+      - name: Real packaged Electron owns Zero3 Node lifecycle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $port = 8797
+          $healthUrl = "http://127.0.0.1:$port/health"
+          $env:ZERO3_PILOT_NODE_PORT = [string]$port
+          $env:ZERO3_PILOT_DATA_DIR = Join-Path $env:RUNNER_TEMP 'zero3-electron-node-data'
+          $env:HERMES_HOME = Join-Path $env:RUNNER_TEMP 'zero3-electron-hermes-home'
+          $env:HERMES_DESKTOP_USER_DATA_DIR = Join-Path $env:RUNNER_TEMP 'zero3-electron-user-data'
+          $env:ZERO3_ELECTRON_SMOKE_MS = '8000'
+          New-Item -ItemType Directory -Force -Path $env:ZERO3_PILOT_DATA_DIR,$env:HERMES_HOME,$env:HERMES_DESKTOP_USER_DATA_DIR | Out-Null
+
+          $exe = (Resolve-Path 'upstream\hermes-agent\apps\desktop\release\win-unpacked\Zero3Pilot.exe').Path
+          $desktop = Start-Process -FilePath $exe -PassThru
+
+          $healthy = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            try {
+              $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 1
+              if ($health.status -eq 'ok' -and $health.runtime -eq 'zero3-pilot-node') {
+                $healthy = $true
+                break
+              }
+            } catch {}
+            Start-Sleep -Milliseconds 250
+          }
+          if (-not $healthy) {
+            Stop-Process -Id $desktop.Id -Force -ErrorAction SilentlyContinue
+            throw 'packaged Zero3 Electron Desktop did not start its bundled Zero3 Node'
+          }
+
+          if (-not $desktop.WaitForExit(25000)) {
+            Stop-Process -Id $desktop.Id -Force -ErrorAction SilentlyContinue
+            throw 'packaged Zero3 Electron Desktop did not exit through the smoke hook'
+          }
+          if ($desktop.ExitCode -ne 0) { throw "packaged Zero3 Electron Desktop exited with $($desktop.ExitCode)" }
+
+          $nodeStopped = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              Invoke-RestMethod -Uri $healthUrl -TimeoutSec 1 | Out-Null
+            } catch {
+              $nodeStopped = $true
+              break
+            }
+            Start-Sleep -Milliseconds 250
+          }
+          if (-not $nodeStopped) { throw 'bundled Zero3 Node survived after Electron quit; lifecycle ownership is broken' }
