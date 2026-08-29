@@ -125,6 +125,13 @@ const expandedToolPayload = String.raw`function toolPayload(item: JsonRecord, ph
   return null
 }`
 
+function recordR3BProvenance() {
+  const file = path.join(hermesDesktopDir, 'public', 'zero3-upstream.json')
+  const provenance = JSON.parse(fs.readFileSync(file, 'utf8'))
+  provenance.moreItemRenderingPhase = 'R3B-codex-more-items'
+  fs.writeFileSync(file, `${JSON.stringify(provenance, null, 2)}\n`)
+}
+
 export function applyZero3CodexMoreItems() {
   patchFile('src/app/zero3-codex/item-projection.ts', [
     {
@@ -144,4 +151,6 @@ export function applyZero3CodexMoreItems() {
       to: expandedToolPayload
     }
   ])
+  recordR3BProvenance()
+  console.log('R3B: Codex dynamicToolCall, plan and webSearch Items use the Hermes-derived presentation layer; opaque functionCallOutput remains hidden.')
 }
