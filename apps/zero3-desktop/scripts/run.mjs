@@ -59,7 +59,7 @@ async function nodeHealthy() {
     })
     if (!response.ok) return false
     const body = await response.json()
-    return body?.status === 'ok'
+    return body?.status === 'ok' && body?.runtime === 'zero3-pilot-node'
   } catch {
     return false
   } finally {
@@ -121,6 +121,29 @@ async function ensureZero3Node(env) {
 
   child.kill()
   throw new Error(`Zero3 Node did not become healthy on 127.0.0.1:${zero3Port}`)
+}
+
+function zero3ReleaseNodeBinary() {
+  const executable = process.platform === 'win32' ? 'zero3-pilot-node.exe' : 'zero3-pilot-node'
+  return path.join(repoRoot, 'target', 'release', executable)
+}
+
+function stageZero3NodeForElectronPackage() {
+  if (process.platform !== 'win32') {
+    throw new Error('Zero3 Desktop dist:win must run on Windows so the bundled Zero3 Node matches the package target.')
+  }
+
+  runSync('cargo', ['build', '--release', '-p', 'zero3-node'])
+  const source = zero3ReleaseNodeBinary()
+  if (!isFile(source)) {
+    throw new Error(`Release Zero3 Node binary was not produced at ${source}`)
+  }
+
+  const targetDir = path.join(hermesRoot, 'apps', 'desktop', 'build', 'zero3')
+  fs.mkdirSync(targetDir, { recursive: true })
+  const target = path.join(targetDir, path.basename(source))
+  fs.copyFileSync(source, target)
+  console.log(`Staged Zero3 Node for Electron package: ${target}`)
 }
 
 function ensureHermesDependencies(env) {
@@ -215,6 +238,7 @@ const env = {
 
 ensureHermesDependencies(env)
 if (mode === 'dev') ensureHermesPythonDependencies(env)
+if (mode === 'dist:win') stageZero3NodeForElectronPackage()
 
 let ownedNode = null
 try {
