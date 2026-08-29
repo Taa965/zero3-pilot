@@ -38,6 +38,7 @@ export type Zero3RemoteCodexMapping = {
   threadId: string
   turnIds: string[]
   workspace: string
+  pendingTurnClientId?: string
 }
 
 export type Zero3RemoteTaskState =
