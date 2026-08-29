@@ -70,14 +70,21 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/assets/icon.png',
     'apps/desktop/public/apple-touch-icon.png',
     'apps/desktop/src/app/chat/composer/status-stack/index.tsx',
+    'apps/desktop/src/app/command-palette/index.tsx',
+    'apps/desktop/src/app/context-menu/app-context-menu.tsx',
+    'apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts',
     'apps/desktop/src/app/contrib/wiring.tsx',
     'apps/desktop/src/app/settings/about-settings.tsx',
+    'apps/desktop/src/app/settings/connections-registry.tsx',
     'apps/desktop/src/app/settings/index.tsx',
     'apps/desktop/src/app/settings/providers-settings.tsx',
+    'apps/desktop/src/components/assistant-ui/thread/assistant-message.tsx',
     'apps/desktop/src/components/boot-failure-overlay.tsx',
+    'apps/desktop/src/components/brand-mark.tsx',
     'apps/desktop/src/components/chat/intro.tsx',
     'apps/desktop/src/components/onboarding/index.tsx',
     'apps/desktop/src/store/onboarding.ts',
+    'apps/desktop/src/store/updates.ts',
     ...brandedLocaleFiles.map(file => `apps/desktop/src/i18n/${file}`)
   ])
   const unexpected = trackedHermesChanges().filter(file => !allowed.has(file))
@@ -96,6 +103,11 @@ function applyBrandOverlay() {
 
   packageJson.productName = 'Zero3 Pilot'
   packageJson.description = 'Zero3 Pilot desktop shell based on the pinned Hermes Desktop architecture.'
+  packageJson.author = 'Zero3 Pilot'
+  packageJson.repository = {
+    type: 'git',
+    url: 'git+https://github.com/Taa965/zero3-pilot.git'
+  }
   packageJson.build = packageJson.build ?? {}
   packageJson.build.appId = 'ai.zero3.pilot'
   packageJson.build.productName = 'Zero3 Pilot'
@@ -145,6 +157,7 @@ function applyBrandOverlay() {
       .replaceAll('HERMES AGENT', 'ZERO3 PILOT')
       .replaceAll("Hermes couldn't start", "Zero3 Pilot couldn't start")
       .replaceAll('recommended way to run Hermes', 'recommended way to run Zero3 Pilot')
+      .replaceAll('Hermes', 'Zero3 Pilot')
     fs.writeFileSync(localePath, productBranded)
   }
 
@@ -162,7 +175,8 @@ function applyBrandOverlay() {
     ['zero3-pilot.png', path.join(hermesDesktopDir, 'assets', 'icon.png')],
     ['zero3-pilot.ico', path.join(hermesDesktopDir, 'assets', 'icon.ico')],
     ['zero3-pilot.icns', path.join(hermesDesktopDir, 'assets', 'icon.icns')],
-    ['zero3-pilot.png', path.join(publicDir, 'apple-touch-icon.png')]
+    ['zero3-pilot.png', path.join(publicDir, 'apple-touch-icon.png')],
+    ['zero3-pilot.png', path.join(publicDir, 'zero3-pilot.png')]
   ]
   for (const [sourceName, target] of brandFiles) {
     const source = path.join(brandAssetsDir, sourceName)
@@ -219,9 +233,9 @@ applyZero3ShellPolicy()
 installZero3HermesSkill()
 
 console.log('Zero3 Desktop upstream prepared successfully.')
-console.log(`Hermes Desktop: ${pins.hermes}`)
+console.log(`Hermes Desktop source pin: ${pins.hermes}`)
 console.log(`Codex app-server source: ${pins.codex}`)
 console.log(`DeepSeek Harness source: ${pins.deepseek}`)
-console.log('Zero3 shell policy: commercial account/billing/diagnostics surfaces disabled')
+console.log('Zero3 shell policy: upstream commercial, diagnostics and self-update surfaces disabled')
 console.log(`Zero3 Hermes home: ${resolveHermesHome()}`)
 console.log(`Zero3 Node endpoint: http://127.0.0.1:${zero3Port}`)
