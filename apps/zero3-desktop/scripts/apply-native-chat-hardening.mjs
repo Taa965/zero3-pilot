@@ -120,7 +120,7 @@ function boundNativeChatContent(value: string) {
   const half = Math.floor(MAX_NATIVE_CHAT_DISPLAY_CHARS / 2)
   return (
     value.slice(0, half) +
-    '\n\n[Zero3：回复过长，中间内容已截断]\n\n' +
+    '\\n\\n[Zero3：回复过长，中间内容已截断]\\n\\n' +
     value.slice(-half)
   )
 }
@@ -142,7 +142,9 @@ function nativeChatHistoryContent(value: string) {
         id: typeof item.id === 'string' ? item.id : 'restored-' + String(index),
         role: item.role as 'user' | 'assistant',
         content: boundNativeChatContent(String(item.content)),
-        failed: item.failed === true
+        failed:
+          item.failed === true ||
+          (item.role === 'assistant' && String(item.content).startsWith('执行失败：'))
       }))`
     },
     {
@@ -158,7 +160,8 @@ function nativeChatHistoryContent(value: string) {
       to: `  useEffect(() => {
     if (agents.length === 0) return
     const names = agents.map(agentName)
-    const preferred = names.find(name => name === 'hermes') ?? names[0]
+    const preferred = names.find(name => name === 'hermes') ?? names[0] ?? ''
+    if (!preferred) return
     if (!agentBackend) setAgentBackend(preferred)
     if (!chatBackend) setChatBackend(preferred)
   }, [agentBackend, agents, chatBackend])`
