@@ -314,8 +314,9 @@ export function applyZero3CodexAuthoritativeHistory() {
 
   patchFile('src/app/contrib/wiring.tsx', [
     {
-      label: 'R3F prevent historical edit from falling through Hermes Runtime',
-      from: '    onEdit: editMessage,',
+      label: 'R3F upgrade the R2 Codex-safe edit action to native history edit',
+      from: String.raw`    onEdit: message =>
+      codexPrimaryChat.enabled ? codexPrimaryChat.unsupportedAction('编辑历史消息') : editMessage(message),`,
       to: r3fWiring
     }
   ])
