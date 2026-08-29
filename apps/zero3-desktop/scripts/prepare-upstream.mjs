@@ -12,6 +12,8 @@ import {
   upstreamRoot
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
+import { applyZero3CodexItemRenderingHardening } from './apply-codex-item-rendering-hardening.mjs'
+import { applyZero3CodexItemRendering } from './apply-codex-item-rendering.mjs'
 import { applyZero3CodexPrimaryChat } from './apply-codex-primary-chat.mjs'
 import { applyZero3CodexPromptQueueHardening } from './apply-codex-prompt-queue-hardening.mjs'
 import { applyZero3CodexPrompts } from './apply-codex-prompts.mjs'
@@ -66,9 +68,9 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
-  // R2 permits only the reviewed shell transformations plus the typed Codex
-  // app-server boundary, primary-chat adapter and native prompt surfaces.
-  // Retired Zero3 Node runtime bridges stay disabled.
+  // R3A permits only the reviewed shell transformations plus the typed Codex
+  // app-server boundary, primary-chat adapter, native prompt surfaces and
+  // Codex Item presentation projection. Retired Zero3 Node bridges stay disabled.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -216,6 +218,7 @@ function applyBrandOverlay() {
         migrationPhase: 'R1A-codex-app-server-transport',
         primaryChatPhase: 'R2A-codex-primary-chat',
         promptPhase: 'R2B-codex-approval-input',
+        itemRenderingPhase: 'R3A-codex-item-rendering',
         upstream: pins
       },
       null,
@@ -251,12 +254,14 @@ applyZero3CodexTransport()
 applyZero3CodexPrimaryChat()
 applyZero3CodexPrompts()
 applyZero3CodexPromptQueueHardening()
+applyZero3CodexItemRendering()
+applyZero3CodexItemRenderingHardening()
 applyZero3CodexSessionListGuard()
 
-console.log('Zero3 Desktop R2B shell prepared successfully.')
+console.log('Zero3 Desktop R3A shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
 console.log(`Hermes UI shell source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
 console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel; Hermes is UI shell only.')
-console.log('R2B: main chat plus queued command/file approvals and request_user_input use Codex-native Thread/Turn server requests.')
-console.log('R2B safety: default Codex sandbox stays read-only; unsupported server requests are denied fail-closed until later execution UX phases.')
+console.log('R3A: Codex reasoning, commandExecution, fileChange and mcpToolCall Items project into the Hermes-derived presentation layer.')
+console.log('R3A safety: default Codex sandbox stays read-only; unsupported server requests remain denied fail-closed.')
