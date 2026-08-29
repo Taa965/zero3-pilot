@@ -39,6 +39,7 @@ const ZERO3_CODEX_REQUEST_TIMEOUT_MS = 30_000
 const ZERO3_CODEX_TURN_TIMEOUT_MS = 10 * 60_000
 const ZERO3_CODEX_MAX_LINE_BYTES = 8 * 1024 * 1024
 const ZERO3_CODEX_MAX_REPLY_BYTES = 256 * 1024
+const ZERO3_CODEX_MAX_SERVER_REQUESTS = 128
 
 function zero3CodexRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
@@ -66,10 +67,10 @@ function zero3CodexOptionalBoolean(value: unknown, label: string): boolean | und
 
 function zero3CodexOptionalPositiveInt(value: unknown, label: string, max: number): number | undefined {
   if (value == null) return undefined
-  if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > max) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) {
     throw new Error(label + ' must be an integer between 1 and ' + String(max))
   }
-  return Number(value)
+  return value
 }
 
 function zero3CodexApprovalPolicy(value: unknown): string | undefined {
@@ -298,6 +299,15 @@ class Zero3CodexAppServer {
     if (!method) return
 
     if (hasId) {
+      if (this.serverRequests.size >= ZERO3_CODEX_MAX_SERVER_REQUESTS) {
+        this.stop('too many pending Codex server requests')
+        broadcastZero3CodexEvent({
+          kind: 'lifecycle',
+          state: 'error',
+          detail: 'Codex app-server exceeded the pending server-request limit'
+        })
+        return
+      }
       const rpcId = id as Zero3CodexRpcId
       this.serverRequests.set(zero3CodexIdKey(rpcId), rpcId)
       broadcastZero3CodexEvent({
@@ -384,8 +394,19 @@ function zero3CodexThreadStartParams(value: unknown) {
 
 function zero3CodexThreadResumeParams(value: unknown) {
   const input = zero3CodexRecord(value)
-  const params = zero3CodexThreadStartParams(input)
-  params.threadId = zero3CodexRequiredString(input.threadId, 'threadId', 256)
+  const params: Record<string, unknown> = {
+    threadId: zero3CodexRequiredString(input.threadId, 'threadId', 256)
+  }
+  const cwd = zero3CodexOptionalString(input.cwd, 'cwd', 4096)
+  const model = zero3CodexOptionalString(input.model, 'model', 256)
+  const modelProvider = zero3CodexOptionalString(input.modelProvider, 'modelProvider', 128)
+  const approvalPolicy = zero3CodexApprovalPolicy(input.approvalPolicy)
+  const sandbox = zero3CodexSandbox(input.sandbox)
+  if (cwd) params.cwd = cwd
+  if (model) params.model = model
+  if (modelProvider) params.modelProvider = modelProvider
+  if (approvalPolicy) params.approvalPolicy = approvalPolicy
+  if (sandbox) params.sandbox = sandbox
   return params
 }
 
@@ -419,11 +440,9 @@ function zero3CodexTurnStartParams(value: unknown) {
   const cwd = zero3CodexOptionalString(input.cwd, 'cwd', 4096)
   const model = zero3CodexOptionalString(input.model, 'model', 256)
   const approvalPolicy = zero3CodexApprovalPolicy(input.approvalPolicy)
-  const sandbox = zero3CodexSandbox(input.sandbox)
   if (cwd) params.cwd = cwd
   if (model) params.model = model
   if (approvalPolicy) params.approvalPolicy = approvalPolicy
-  if (sandbox) params.sandboxPolicy = { type: sandbox }
   return params
 }
 
@@ -529,7 +548,15 @@ type Zero3CodexThreadStartRequest = {
   sandbox?: Zero3CodexSandbox
 }
 
-type Zero3CodexThreadResumeRequest = Zero3CodexThreadStartRequest & { threadId: string }
+type Zero3CodexThreadResumeRequest = {
+  approvalPolicy?: Zero3CodexApprovalPolicy
+  cwd?: string
+  model?: string
+  modelProvider?: string
+  sandbox?: Zero3CodexSandbox
+  threadId: string
+}
+
 type Zero3CodexThreadListRequest = { archived?: boolean; cursor?: string; limit?: number }
 type Zero3CodexThreadReadRequest = { includeTurns?: boolean; threadId: string }
 
@@ -537,7 +564,6 @@ type Zero3CodexTurnStartRequest = {
   approvalPolicy?: Zero3CodexApprovalPolicy
   cwd?: string
   model?: string
-  sandbox?: Zero3CodexSandbox
   text: string
   threadId: string
 }
