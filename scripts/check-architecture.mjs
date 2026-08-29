@@ -30,6 +30,8 @@ const codexPromptHardening = read('apps/zero3-desktop/scripts/apply-codex-prompt
 const codexItemRendering = read('apps/zero3-desktop/scripts/apply-codex-item-rendering.mjs')
 const codexItemRenderingHardening = read('apps/zero3-desktop/scripts/apply-codex-item-rendering-hardening.mjs')
 const codexMoreItems = read('apps/zero3-desktop/scripts/apply-codex-more-items.mjs')
+const codexStructuredInput = read('apps/zero3-desktop/scripts/apply-codex-structured-input.mjs')
+const codexStructuredInputHardening = read('apps/zero3-desktop/scripts/apply-codex-structured-input-hardening.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -126,6 +128,11 @@ requireText(
   "itemRenderingPhase: 'R3A-codex-item-rendering'",
   'Desktop provenance must identify the native Codex Item rendering phase.'
 )
+requireText(
+  prepare,
+  "structuredInputPhase: 'R3C-codex-structured-input'",
+  'Desktop provenance must identify the native Codex structured-input phase.'
+)
 requireText(prepare, 'applyZero3CodexTransport()', 'Target desktop must apply the typed Codex app-server transport.')
 requireText(prepare, 'applyZero3CodexPrimaryChat()', 'R2 target desktop must apply the Codex primary-chat adapter.')
 requireText(prepare, 'applyZero3CodexPrompts()', 'R2B target desktop must apply the Codex approval/input prompt adapter.')
@@ -148,6 +155,16 @@ requireText(
   codexItemRenderingHardening,
   'applyZero3CodexMoreItems()',
   'R3B native Item projection must be chained after the reviewed R3A projection hardening.'
+)
+requireText(
+  prepare,
+  'applyZero3CodexStructuredInput()',
+  'R3C target desktop must apply the strictly typed Codex structured-input adapter.'
+)
+requireText(
+  codexStructuredInput,
+  'applyZero3CodexStructuredInputHardening()',
+  'R3C structured input must chain the reviewed fail-closed hardening pass.'
 )
 requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the pinned open-source Codex core.')
 requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
@@ -264,6 +281,37 @@ for (const required of [
   requireText(codexMoreItems, required, `R3B Codex Item projection is missing required mapping/policy: ${required}`)
 }
 
+for (const required of [
+  'ZERO3_CODEX_MAX_TURN_INPUTS = 32',
+  "type === 'text'",
+  "type === 'localImage'",
+  'type must be text or localImage',
+  'text_elements: []',
+  'zero3CodexTurnInputs',
+  'CodexTurnInput',
+  'attachmentContextText',
+  'codexTurnInputs(text, attachments)',
+  'optimisticAttachmentRef',
+  'input: structuredInput',
+  'input,'
+]) {
+  requireText(codexStructuredInput, required, `R3C structured input is missing required typed mapping: ${required}`)
+}
+
+for (const required of [
+  "Object.prototype.hasOwnProperty.call(input, 'input')",
+  "Object.prototype.hasOwnProperty.call(input, 'text')",
+  'turn/start must contain exactly one of input or text',
+  'terminalContextBlocksFromDraft',
+  'terminalContexts'
+]) {
+  requireText(
+    codexStructuredInputHardening,
+    required,
+    `R3C structured-input hardening is missing required fail-closed/context behavior: ${required}`
+  )
+}
+
 for (const forbidden of [
   "ipcRenderer.invoke('zero3:codex:rpc'",
   "ipcRenderer.invoke('zero3:codex:request'",
@@ -312,4 +360,28 @@ for (const forbidden of ['respondToServerRequest', "item/tool/call", 'ipcRendere
   )
 }
 
-console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / R3A+R3B native Item projection / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
+for (const source of [codexStructuredInput, codexStructuredInputHardening]) {
+  for (const forbidden of ['ZERO3_PILOT_NODE_PORT', 'requestGateway(', 'zero3:chat:turn', 'ipcRenderer.invoke']) {
+    forbidText(
+      source,
+      forbidden,
+      `R3C structured input must stay inside the typed Codex boundary and must not regain legacy/generic runtime authority: ${forbidden}`
+    )
+  }
+}
+
+for (const forbidden of [
+  "inputs.push({ type: 'image'",
+  "inputs.push({ type: 'audio'",
+  "inputs.push({ type: 'localAudio'",
+  "inputs.push({ type: 'skill'",
+  "inputs.push({ type: 'mention'"
+]) {
+  forbidText(
+    codexStructuredInput,
+    forbidden,
+    `R3C Renderer input emitter must remain restricted to text/localImage: ${forbidden}`
+  )
+}
+
+console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / R3A+R3B native Item projection / R3C typed text+localImage input / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
