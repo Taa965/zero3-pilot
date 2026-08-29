@@ -79,14 +79,14 @@ export function applyZero3ShellPolicy() {
 
   patchFile('src/app/settings/providers-settings.tsx', [
     {
-      label: 'provider subview catalog',
-      from: "export const PROVIDER_VIEWS = ['accounts', 'keys', 'custom-endpoints'] as const",
-      to: "export const PROVIDER_VIEWS = ['keys', 'custom-endpoints'] as const"
-    },
-    {
       label: 'OAuth provider ordering',
       from: '  const ordered = useMemo(() => sortProviders(providers), [providers])',
       to: "  const ordered = useMemo(() => sortProviders(providers).filter(provider => provider.id !== 'nous'), [providers])"
+    },
+    {
+      label: 'accounts deep-link coercion',
+      from: "  const showApiKeys = view === 'keys' || (!hasOauth && view !== 'custom-endpoints')",
+      to: "  const showApiKeys = view === 'keys' || view === 'accounts' || (!hasOauth && view !== 'custom-endpoints')"
     }
   ])
 
@@ -128,9 +128,28 @@ export function applyZero3ShellPolicy() {
 
   patchFile('src/app/chat/composer/status-stack/index.tsx', [
     {
+      label: 'billing banner import',
+      from: "import { BillingBanner } from '@/components/billing-banner'\n",
+      to: '// Zero3 shell policy: upstream billing banner removed.\n'
+    },
+    {
+      label: 'billing store import',
+      from: "import { $billingBlock } from '@/store/billing-block'\n",
+      to: '// Zero3 shell policy: upstream billing store surface removed.\n'
+    },
+    {
+      label: 'billing store subscription',
+      from: '  const billing = useStore($billingBlock)\n',
+      to: '  // Zero3 shell policy: no billing-wall subscription in the product shell.\n'
+    },
+    {
       label: 'billing wall renderer',
-      from: '  if (billing && sessionId && billing.sessionId === sessionId) {',
-      to: '  if (false && billing && sessionId && billing.sessionId === sessionId) { // Zero3 shell policy: no billing CTA surface.'
+      from: `  if (billing && sessionId && billing.sessionId === sessionId) {
+    sections.push({ key: 'billing', node: <BillingBanner sessionId={sessionId} /> })
+  }
+`,
+      to: `  // Zero3 shell policy: no upstream billing / add-credits CTA in chat.
+`
     }
   ])
 
