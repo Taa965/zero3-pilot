@@ -14,7 +14,13 @@ if (!fs.isDirectory(hermesRoot)) {
 }
 
 exec('git', ['-C', hermesRoot, 'reset', '--hard', pins.hermes])
-const stamp = path.join(hermesDesktopDir, 'public', 'zero3-upstream.json')
-if (fs.existsSync(stamp)) fs.rmSync(stamp, { force: true })
+const generatedFiles = [
+  path.join(hermesDesktopDir, 'public', 'zero3-upstream.json'),
+  path.join(hermesDesktopDir, 'public', 'zero3-pilot.png'),
+  path.join(hermesDesktopDir, 'src', 'app', 'settings', 'zero3-control-settings.tsx')
+]
+for (const file of generatedFiles) {
+  if (fs.existsSync(file)) fs.rmSync(file, { force: true })
+}
 
 console.log(`Hermes upstream reset to ${pins.hermes}.`)
