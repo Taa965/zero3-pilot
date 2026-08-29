@@ -16,10 +16,11 @@ Exact SHAs live in `scripts/config.mjs`; preparation refuses to continue when a 
 
 ## Zero3 shell policy
 
-`npm run prepare` applies two deterministic overlays to the pinned Hermes Desktop source:
+`npm run prepare` applies three deterministic overlays to the pinned Hermes Desktop source:
 
 1. **Zero3 product branding** — app identity, wordmark, icons, renderer brand mark, installer metadata, package author/repository metadata and user-facing product copy become Zero3 Pilot. Locale branding is string-literal aware so TypeScript identifiers from the pinned upstream are never rewritten.
 2. **Zero3 product policy** — upstream commercial and distribution surfaces that do not belong in Zero3 are disabled while reusable open-source Agent functionality is retained.
+3. **Zero3 Chinese-first UI policy** — Simplified Chinese (`zh`) is the default locale for fresh or unset profiles, while the existing language switcher and explicitly selected supported languages remain available.
 
 The current policy removes these upstream product surfaces from the Zero3 user experience:
 
@@ -37,12 +38,27 @@ Provider authentication mechanics that are useful outside the upstream commercia
 
 Desktop updates are intentionally **Zero3-owned**. The pinned upstream shell must never silently advance itself to a different Hermes revision. Upstream updates happen only when Zero3 deliberately reviews and changes the pinned SHA, then passes the Zero3 Windows build/typecheck gate again.
 
+## Chinese-first UI
+
+Zero3 Desktop is a Chinese-first application. The pinned Hermes shell already has a typed Simplified Chinese catalog (`src/i18n/zh.ts`) and a persisted language switcher. Zero3 changes the default locale from English to Simplified Chinese rather than forking the whole translation system.
+
+Rules:
+
+- a fresh Zero3 profile defaults to Simplified Chinese;
+- a missing or invalid `display.language` falls back to Simplified Chinese;
+- an explicitly selected supported language is respected and persisted;
+- Zero3-owned product surfaces must include Chinese copy and must not introduce new English-only primary UI;
+- high-visibility upstream raw-English exceptions on Zero3's primary path are patched by `scripts/apply-chinese-ui.mjs`;
+- CI verifies the default locale is `zh`, verifies Chinese Zero3-owned About copy exists, and still runs the complete desktop TypeScript typecheck/build so the translation catalog shape remains valid.
+
+This does not mean technical identifiers, provider/model names, command names, code, logs, file paths, or external tool output are translated. Those stay in their native/technical form where translation would reduce accuracy.
+
 ## Current migration stage
 
 The current compatibility stage does the following:
 
 1. Initialize and verify pinned upstream repositories.
-2. Apply Zero3 branding and shell-policy overlays.
+2. Apply Zero3 branding, product-policy, and Chinese-first UI overlays.
 3. Use an isolated Hermes home under the Zero3 data area instead of mutating the user's normal Hermes profile.
 4. Install the Zero3 Pilot skill into that isolated profile.
 5. Start/reuse `zero3-pilot-node` on loopback before launching desktop development sessions.
@@ -61,7 +77,7 @@ npm run typecheck
 npm run dist:win
 ```
 
-`npm run prepare` initializes upstreams, verifies fixed SHAs, applies both Zero3 overlays, writes the build provenance stamp, and copies `.agents/skills/zero3-pilot/SKILL.md` into the isolated profile.
+`npm run prepare` initializes upstreams, verifies fixed SHAs, applies the Zero3 overlays, writes the build provenance stamp, and copies `.agents/skills/zero3-pilot/SKILL.md` into the isolated profile.
 
 `npm run dev` additionally builds/starts the local Zero3 Node when needed and launches the pinned desktop process with:
 
@@ -73,11 +89,11 @@ npm run dist:win
 
 ## Safety rule for upstream modifications
 
-Do not edit the pinned upstream submodules casually. `prepare-upstream.mjs` maintains an explicit allowlist of files owned by the Zero3 branding/product-policy overlays. Any other tracked upstream change causes preparation to fail instead of silently overwriting developer work.
+Do not edit the pinned upstream submodules casually. `prepare-upstream.mjs` maintains an explicit allowlist of files owned by the Zero3 branding/product-policy/localization overlays. Any other tracked upstream change causes preparation to fail instead of silently overwriting developer work.
 
-The shell-policy transformations are implemented in `scripts/apply-shell-policy.mjs`. Every replacement is fail-closed: if the pinned upstream source no longer contains the expected structure, preparation stops and requires an explicit review before the upstream pin can move.
+The product-policy transformations are implemented in `scripts/apply-shell-policy.mjs`; Chinese-first localization policy is implemented in `scripts/apply-chinese-ui.mjs`. Every replacement is fail-closed: if the pinned upstream source no longer contains the expected structure, preparation stops and requires an explicit review before the upstream pin can move.
 
-CI runs the actual Windows sequence `prepare → install → typecheck → build` and also asserts that the Zero3 public brand asset and Zero3-owned About page are present after preparation.
+CI runs the actual Windows sequence `prepare → install → typecheck → build` and also asserts that the Zero3 public brand asset, Zero3-owned About page, Chinese About copy, and Simplified Chinese default locale are present after preparation.
 
 ## Legacy desktop path
 
