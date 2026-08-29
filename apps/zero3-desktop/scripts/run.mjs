@@ -163,6 +163,7 @@ function runHermesDesktop(script, env) {
 }
 
 runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs')])
+runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])
 
 const hermesHome = resolveHermesHome()
 const codexHome = resolveCodexHome()
