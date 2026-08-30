@@ -9,10 +9,7 @@ use crate::control_plane::{RemoteTask, REMOTE_TASK_PROTOCOL};
 
 pub const MAX_REMOTE_CONTROL_BODY_BYTES: usize = 2 * 1024 * 1024;
 
-pub async fn validate_control_task_admission(
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn validate_control_task_admission(request: Request<Body>, next: Next) -> Response {
     if request.method() != Method::POST || request.uri().path() != "/api/control/v1/tasks" {
         return next.run(request).await;
     }
@@ -20,24 +17,39 @@ pub async fn validate_control_task_admission(
     let (parts, body) = request.into_parts();
     let bytes = match to_bytes(body, MAX_REMOTE_CONTROL_BODY_BYTES).await {
         Ok(bytes) => bytes,
-        Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "remote task request exceeds the 2 MiB limit"),
+        Err(_) => {
+            return error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "remote task request exceeds the 2 MiB limit",
+            )
+        }
     };
     let task: RemoteTask = match serde_json::from_slice(&bytes) {
         Ok(task) => task,
-        Err(_) => return error(StatusCode::BAD_REQUEST, "remote task request must be valid JSON matching the v1 schema"),
+        Err(_) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "remote task request must be valid JSON matching the v1 schema",
+            )
+        }
     };
     if let Err(message) = validate_remote_task(&task) {
         return error(StatusCode::BAD_REQUEST, message);
     }
 
-    next.run(Request::from_parts(parts, Body::from(bytes))).await
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
 }
 
 fn validate_remote_task(task: &RemoteTask) -> Result<(), &'static str> {
     if task.protocol != REMOTE_TASK_PROTOCOL {
         return Err("unsupported Zero3 remote task protocol");
     }
-    validate_text(&task.task_id, 128, "task_id is required and must be at most 128 characters")?;
+    validate_text(
+        &task.task_id,
+        128,
+        "task_id is required and must be at most 128 characters",
+    )?;
     validate_text(
         &task.execution_id,
         128,
@@ -54,13 +66,20 @@ fn validate_remote_task(task: &RemoteTask) -> Result<(), &'static str> {
         "target.workspace is required and must be at most 4096 characters",
     )?;
     if let Some(base_ref) = &task.target.base_ref {
-        validate_text(base_ref, 256, "target.base_ref must be at most 256 characters")?;
+        validate_text(
+            base_ref,
+            256,
+            "target.base_ref must be at most 256 characters",
+        )?;
     }
     validate_list(task.constraints.as_deref(), "constraints")?;
     validate_list(task.acceptance_criteria.as_deref(), "acceptance_criteria")?;
 
     let permission = task.permission_profile.as_deref().unwrap_or("standard");
-    if !matches!(permission, "read_only" | "standard" | "elevated" | "full_control") {
+    if !matches!(
+        permission,
+        "read_only" | "standard" | "elevated" | "full_control"
+    ) {
         return Err("unsupported remote permission_profile");
     }
 
@@ -79,7 +98,11 @@ fn validate_remote_task(task: &RemoteTask) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn validate_text<'a>(value: &'a str, max: usize, message: &'static str) -> Result<&'a str, &'static str> {
+fn validate_text<'a>(
+    value: &'a str,
+    max: usize,
+    message: &'static str,
+) -> Result<&'a str, &'static str> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.len() > max {
         return Err(message);
@@ -100,7 +123,9 @@ fn validate_list(values: Option<&[String]>, label: &'static str) -> Result<(), &
     for value in values {
         if value.trim().is_empty() || value.len() > 4096 {
             return Err(match label {
-                "constraints" => "each constraints item must be non-empty and at most 4096 characters",
+                "constraints" => {
+                    "each constraints item must be non-empty and at most 4096 characters"
+                }
                 _ => "each acceptance_criteria item must be non-empty and at most 4096 characters",
             });
         }
@@ -171,7 +196,8 @@ mod tests {
         assert!(validate_remote_task(&empty_objective).is_err());
 
         let mut too_many_constraints = valid_task();
-        too_many_constraints.constraints = Some((0..65).map(|i| format!("constraint-{i}")).collect());
+        too_many_constraints.constraints =
+            Some((0..65).map(|i| format!("constraint-{i}")).collect());
         assert_eq!(
             validate_remote_task(&too_many_constraints),
             Err("constraints must contain at most 64 items")
