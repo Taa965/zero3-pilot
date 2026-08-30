@@ -19,4 +19,6 @@ codex-zero3-output-retention = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+codex-utils-output-truncation = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
