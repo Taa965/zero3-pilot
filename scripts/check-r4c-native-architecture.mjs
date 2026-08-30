@@ -36,18 +36,31 @@ if (files.length === 0) {
 const forbiddenPatterns = [
   [/from\s+['"](?:node:)?fs(?:\/promises)?['"]/i, 'Native executor production code must not read credential files directly.'],
   [/\bauth\.json\b/i, 'Native executor production code must not reference auth.json.'],
-  [/\baccess[_-]?token\b/i, 'Native executor production code must not handle access tokens.'],
-  [/\brefresh[_-]?token\b/i, 'Native executor production code must not handle refresh tokens.'],
   [/\b(?:acpx|claude-agent-acp|openhands|goose)\b/i, 'R4C must not import or embed another Agent runtime.'],
   [/(?:^|[/'"])(?:acp|handoff|host-runtime)(?:[/'"]|$)/i, 'R4C must not cross into ACP, Handoff, or Remote Host ownership.'],
   [/child_process[^\n]*(?:exec|execSync|spawnSync)/i, 'R4C must not introduce shell/exec-style execution authority.'],
   [/\bnpx\b[^\n]*(?:latest|--yes)/i, 'R4C must not download or launch an unpinned runtime dynamically.']
 ]
 
+const credentialPatterns = [
+  [/\baccessToken\b|\baccess_token\b/i, 'Native executor production code must not handle access-token values.'],
+  [/\brefreshToken\b|\brefresh_token\b/i, 'Native executor production code must not handle refresh-token values.']
+]
+
 for (const file of files) {
   const source = fs.readFileSync(file, 'utf8')
   for (const [pattern, message] of forbiddenPatterns) {
     if (pattern.test(source)) {
+      throw new Error(`${relative(file)}: ${message}`)
+    }
+  }
+
+  // `account/read` legitimately accepts `refreshToken: false` to request a
+  // non-mutating account snapshot. Ignore only that exact fail-safe literal;
+  // any other token-shaped use remains forbidden.
+  const credentialScan = source.replace(/\brefreshToken\s*:\s*false\b/g, '')
+  for (const [pattern, message] of credentialPatterns) {
+    if (pattern.test(credentialScan)) {
       throw new Error(`${relative(file)}: ${message}`)
     }
   }
