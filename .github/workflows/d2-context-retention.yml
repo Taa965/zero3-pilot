@@ -23,6 +23,9 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      - name: Diff hygiene
+        run: git diff --check origin/main...HEAD
+
       - name: Initialize reviewed upstream pins
         run: |
           set -euo pipefail
