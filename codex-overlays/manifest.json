@@ -67,6 +67,61 @@
       "patch_dir": "codex-overlays/patches/workflow/"
     }
   },
-  "extensions": [],
-  "patches": []
+  "extensions": [
+    {
+      "id": "zero3-output-retention",
+      "feature": "output-retention",
+      "source": "codex-overlays/ext/zero3-output-retention/",
+      "destination": "codex-rs/ext/zero3/output-retention/",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "algorithm-derived",
+        "source_files": [
+          "packages/spill/spill/src/index.ts",
+          "packages/spill/spill-policy/README.md",
+          "packages/spill/spill-local/README.md"
+        ],
+        "license": "MIT",
+        "notes": "Native Rust reimplementation against Codex extension seams; DeepSeek-Harness is never launched."
+      }
+    }
+  ],
+  "patches": [
+    {
+      "id": "010-output-retention-tool-result-projection",
+      "feature": "output-retention",
+      "path": "codex-overlays/patches/output-retention/010-output-retention-tool-result-projection.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex has no post-tool model-projection hook that preserves the original ToolOutput as execution authority.",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "algorithm-derived",
+        "source_files": [
+          "packages/spill/spill/src/index.ts",
+          "packages/spill/spill-policy/README.md"
+        ],
+        "license": "MIT",
+        "notes": "Only retention/projection behavior is derived; Codex remains tool execution, Approval and Sandbox authority."
+      }
+    },
+    {
+      "id": "020-output-retention-app-server-install",
+      "feature": "output-retention",
+      "path": "codex-overlays/patches/output-retention/020-output-retention-app-server-install.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex app-server does not know how to install the Zero3 output-retention extension or provide its persistent host-owned spill root.",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "design-derived",
+        "source_files": [
+          "docs/subsystems/spill.md"
+        ],
+        "license": "MIT",
+        "notes": "Host integration is Zero3-authored against Codex ExtensionRegistryBuilder; donor informs persistence semantics only."
+      }
+    }
+  ]
 }
