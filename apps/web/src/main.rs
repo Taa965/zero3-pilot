@@ -1,10 +1,15 @@
-//! Zero3 Pilot control/web server (Phase 1: health endpoint only).
+//! Zero3 Pilot control/web server.
 //!
-//! This is the surface GitHub Actions deploy verification hits after a
-//! release: `GET /health` must return 200 with `{"status":"ok",...}`.
-//! No secrets are ever included in the response.
+//! `/health` remains the deployment verification surface. Remote Host control
+//! endpoints are mounted only with host/control token files configured; when
+//! they are absent the health surface still starts, while remote endpoints
+//! fail closed with 503.
 
-use axum::{routing::get, Json, Router};
+mod control_admission;
+mod control_plane;
+
+use axum::extract::DefaultBodyLimit;
+use axum::{middleware, routing::get, Json, Router};
 use serde_json::{json, Value};
 
 const GIT_SHA: &str = env!("ZERO3_GIT_SHA");
@@ -18,9 +23,22 @@ async fn health() -> Json<Value> {
     }))
 }
 
+fn app(remote_control: control_plane::RemoteControlRuntime) -> Router {
+    let remote = control_plane::router(remote_control)
+        .layer(DefaultBodyLimit::max(
+            control_admission::MAX_REMOTE_CONTROL_BODY_BYTES,
+        ))
+        .layer(middleware::from_fn(
+            control_admission::validate_control_task_admission,
+        ));
+
+    Router::new().route("/health", get(health)).merge(remote)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let app = Router::new().route("/health", get(health));
+    let remote_control = control_plane::RemoteControlRuntime::from_env()?;
+    let app = app(remote_control);
 
     let port: u16 = std::env::var("ZERO3_WEB_PORT")
         .ok()
@@ -42,9 +60,9 @@ mod tests {
     use tower::ServiceExt;
 
     #[tokio::test]
-    async fn health_returns_ok() {
-        let app = Router::new().route("/health", get(health));
-        let response = app
+    async fn health_returns_ok_even_when_remote_control_is_disabled() {
+        let remote_control = control_plane::RemoteControlRuntime::from_env().unwrap();
+        let response = app(remote_control)
             .oneshot(
                 Request::builder()
                     .uri("/health")
