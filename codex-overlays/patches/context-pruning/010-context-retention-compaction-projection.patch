@@ -12,7 +12,7 @@ diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/exten
 @@ -75,6 +76,20 @@ pub struct ToolResultInput<'a> {
      pub complete_text: Option<&'a str>,
  }
- 
+
 +/// Future returned by the cloned compaction-history projection seam.
 +pub type CompactionHistoryItemFuture<'a> =
 +    ExtensionFuture<'a, Result<Option<ResponseItem>, String>>;
@@ -48,7 +48,7 @@ diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/exten
 +    ) -> CompactionHistoryItemFuture<'a> {
 +        Box::pin(std::future::ready(Ok(None)))
 +    }
- 
+
      /// Called after the tool call returns, is blocked, fails, or is cancelled.
      ///
 diff --git a/codex-rs/ext/extension-api/src/lib.rs b/codex-rs/ext/extension-api/src/lib.rs
@@ -77,7 +77,7 @@ diff --git a/codex-rs/core/src/compact.rs b/codex-rs/core/src/compact.rs
 @@ -81,6 +82,43 @@ pub(crate) struct CompactedHistoryMetadata {
      pub(crate) window_ids: AutoCompactWindowIds,
  }
- 
+
 +/// Runs registered model-projection contributors against a private compaction
 +/// history clone. Authoritative session history and envelope metadata are never
 +/// mutated by this helper.
@@ -120,7 +120,7 @@ diff --git a/codex-rs/core/src/compact.rs b/codex-rs/core/src/compact.rs
      initial_context_injection: &InitialContextInjection,
 @@ -256,6 +293,7 @@ async fn run_compact_task_inner_impl(
      let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
- 
+
      let mut history = sess.clone_history().await;
 +    project_compaction_history(sess.as_ref(), &mut history).await;
      history.record_items(
@@ -130,16 +130,16 @@ diff --git a/codex-rs/core/src/compact_remote.rs b/codex-rs/core/src/compact_rem
 --- a/codex-rs/core/src/compact_remote.rs
 +++ b/codex-rs/core/src/compact_remote.rs
 @@ -49,6 +49,7 @@ use request::run_remote_compact_attempt;
- 
+
  const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
      "Output exceeded the available model context and was truncated";
 +const ZERO3_SPILL_LOCATOR_PREFIX: &str = "zero3-spill://v1/";
- 
+
  pub(crate) async fn run_inline_remote_auto_compact_task(
      sess: Arc<Session>,
 @@ -515,11 +516,61 @@ fn rewritten_output_for_context_window(
  }
- 
+
  fn truncated_output_payload(output: &FunctionCallOutputPayload) -> FunctionCallOutputPayload {
 +    let text = match &output.body {
 +        FunctionCallOutputBody::Text(text) => retained_zero3_spill_locator(text).map_or_else(
@@ -158,7 +158,7 @@ diff --git a/codex-rs/core/src/compact_remote.rs b/codex-rs/core/src/compact_rem
          success: output.success,
      }
  }
- 
+
 +/// Preserves only the bounded opaque D1 locator token when Codex's existing
 +/// fit-to-window fallback is already going to replace the entire output.
 +///
