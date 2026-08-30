@@ -1,102 +1,107 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
 
-const root = await fs.mkdtemp(path.join(os.tmpdir(), 'zero3-remote-publication-order-'))
-const workspace = path.join(root, 'workspace')
-const tokenFile = path.join(root, 'host.token')
-const mappingFile = path.join(root, 'task-mappings.json')
-const outboxDir = path.join(root, 'outbox')
+import { drainZero3RemoteOutboxInOrder } from '../apps/zero3-desktop/host-runtime/remote-outbox-drain.ts'
 
-await fs.mkdir(workspace, { recursive: true })
-await fs.writeFile(tokenFile, 'test-token\n', { encoding: 'utf8', mode: 0o600 })
+function event(deliveryId, sequence, eventType) {
+  return {
+    schemaVersion: 1,
+    kind: 'event',
+    deliveryId,
+    taskId: 'task-order-1',
+    executionId: 'exec-order-1',
+    leaseId: 'lease-order-1',
+    fencingToken: 11,
+    createdAt: `2026-08-30T00:00:0${sequence}.000Z`,
+    eventSequence: sequence,
+    eventType,
+    payload: { sequence }
+  }
+}
 
-process.env.ZERO3_REMOTE_HOST_ENABLED = 'true'
-process.env.ZERO3_REMOTE_HOST_BASE_URL = 'http://127.0.0.1:1'
-process.env.ZERO3_REMOTE_HOST_ALLOW_HTTP = 'true'
-process.env.ZERO3_REMOTE_HOST_TOKEN_FILE = tokenFile
-process.env.ZERO3_REMOTE_HOST_NODE_ID = 'ordered-publication-test'
-process.env.ZERO3_REMOTE_HOST_WORKSPACES = workspace
-process.env.ZERO3_REMOTE_HOST_MAPPING_STATE_FILE = mappingFile
-process.env.ZERO3_REMOTE_HOST_OUTBOX_DIR = outboxDir
+function terminal(deliveryId) {
+  return {
+    schemaVersion: 1,
+    kind: 'terminal',
+    deliveryId,
+    taskId: 'task-order-1',
+    executionId: 'exec-order-1',
+    leaseId: 'lease-order-1',
+    fencingToken: 11,
+    createdAt: '2026-08-30T00:00:09.000Z',
+    state: 'succeeded',
+    result: { summary: 'done' }
+  }
+}
 
-const { Zero3RemoteNode } = await import('../apps/zero3-desktop/host-runtime/remote-node.ts')
+const first = event('00000000-0000-4000-8000-000000000001', 1, 'evidence.one')
+const second = event('00000000-0000-4000-8000-000000000002', 2, 'evidence.two')
+const third = event('00000000-0000-4000-8000-000000000003', 3, 'evidence.three')
+const done = terminal('00000000-0000-4000-8000-000000000004')
 
-const codex = {
-  async startThread() {
-    return { thread: { id: 'unused-thread' } }
+const calls = []
+let transientFailuresRemaining = 1
+async function publish(envelope) {
+  calls.push(
+    envelope.kind === 'event'
+      ? `event:${envelope.eventSequence}:${envelope.eventType}`
+      : `terminal:${envelope.state}`
+  )
+  if (transientFailuresRemaining > 0) {
+    transientFailuresRemaining -= 1
+    throw new Error('simulated transient publication failure')
+  }
+  return 'published'
+}
+
+// A transient failure on event #1 must stop the drain immediately. Event #2
+// is present in the same durable snapshot but is not allowed to overtake it.
+await assert.rejects(
+  () => drainZero3RemoteOutboxInOrder([first, second], publish, second.deliveryId),
+  /simulated transient publication failure/
+)
+assert.deepEqual(calls, ['event:1:evidence.one'])
+
+// On retry the same oldest committed envelope is attempted first, followed by
+// event #2 only after event #1 succeeds.
+const eventResult = await drainZero3RemoteOutboxInOrder([first, second], publish, second.deliveryId)
+assert.equal(eventResult, 'published')
+assert.deepEqual(calls, [
+  'event:1:evidence.one',
+  'event:1:evidence.one',
+  'event:2:evidence.two'
+])
+
+// The same invariant applies to terminal publication: an older evidence
+// envelope must succeed before the terminal outcome is allowed onto the wire.
+transientFailuresRemaining = 1
+await assert.rejects(
+  () => drainZero3RemoteOutboxInOrder([third, done], publish, done.deliveryId),
+  /simulated transient publication failure/
+)
+assert.equal(calls.at(-1), 'event:3:evidence.three')
+
+transientFailuresRemaining = 0
+const terminalResult = await drainZero3RemoteOutboxInOrder([third, done], publish, done.deliveryId)
+assert.equal(terminalResult, 'published')
+assert.deepEqual(calls.slice(-3), [
+  'event:3:evidence.three',
+  'event:3:evidence.three',
+  'terminal:succeeded'
+])
+
+// If publication is disabled for the oldest envelope (shutdown or known stale
+// active lease), the drain stops before any later envelope can bypass it.
+const blockedCalls = []
+const blocked = await drainZero3RemoteOutboxInOrder(
+  [first, second],
+  async envelope => {
+    blockedCalls.push(envelope.deliveryId)
+    return 'published'
   },
-  async startTurn() {
-    return { turn: { id: 'unused-turn' } }
-  },
-  async readThread() {
-    return { thread: { id: 'unused-thread', turns: [] } }
-  }
-}
+  second.deliveryId,
+  envelope => envelope.deliveryId !== first.deliveryId
+)
+assert.equal(blocked, null)
+assert.deepEqual(blockedCalls, [])
 
-const lease = {
-  lease_id: 'lease-order-1',
-  fencing_token: 11,
-  task: {
-    protocol: 'zero3.pilot.remote-task.v1',
-    task_id: 'task-order-1',
-    execution_id: 'exec-order-1',
-    objective: 'verify ordered publication',
-    target: { workspace }
-  }
-}
-
-let node
-try {
-  node = new Zero3RemoteNode(codex)
-  const calls = []
-  let transientFailuresRemaining = 1
-
-  node.client.publishEnvelope = async envelope => {
-    calls.push(
-      envelope.kind === 'event'
-        ? `event:${envelope.eventSequence}:${envelope.eventType}`
-        : `terminal:${envelope.state}`
-    )
-    if (transientFailuresRemaining > 0) {
-      transientFailuresRemaining -= 1
-      throw new Error('simulated transient publication failure')
-    }
-  }
-
-  // Event #1 is durably stored but its first network attempt fails.
-  await node.durableEvent(lease, 'evidence.one', { value: 1 }, false)
-  assert.equal(await node.outbox.count(), 1)
-  assert.deepEqual(calls, ['event:1:evidence.one'])
-
-  // Event #2 must not bypass #1. The second durableEvent call must first
-  // replay #1, acknowledge it, and only then publish #2.
-  await node.durableEvent(lease, 'evidence.two', { value: 2 }, false)
-  assert.equal(await node.outbox.count(), 0)
-  assert.deepEqual(calls, [
-    'event:1:evidence.one',
-    'event:1:evidence.one',
-    'event:2:evidence.two'
-  ])
-
-  // Repeat the failure immediately before a terminal outcome. The terminal
-  // must drain the older evidence first rather than overtaking it.
-  transientFailuresRemaining = 1
-  await node.durableEvent(lease, 'evidence.three', { value: 3 }, false)
-  assert.equal(await node.outbox.count(), 1)
-
-  transientFailuresRemaining = 0
-  await node.durableTerminal(lease, 'succeeded', { summary: 'done' })
-  assert.equal(await node.outbox.count(), 0)
-  assert.deepEqual(calls.slice(-3), [
-    'event:3:evidence.three',
-    'event:3:evidence.three',
-    'terminal:succeeded'
-  ])
-
-  console.log('Zero3 Remote Host ordered publication behavior passed.')
-} finally {
-  node?.stop()
-  await fs.rm(root, { recursive: true, force: true })
-}
+console.log('Zero3 Remote Host ordered publication behavior passed.')
