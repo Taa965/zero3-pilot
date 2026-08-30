@@ -9,12 +9,13 @@ diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/exten
  use codex_protocol::protocol::ReviewDecision;
  use codex_protocol::protocol::TokenUsageInfo;
  use codex_tools::ToolCall;
-@@ -75,6 +76,19 @@ pub struct ToolResultInput<'a> {
+@@ -75,6 +76,20 @@ pub struct ToolResultInput<'a> {
      pub complete_text: Option<&'a str>,
  }
  
 +/// Future returned by the cloned compaction-history projection seam.
-+pub type CompactionHistoryItemFuture<'a> = ExtensionFuture<'a, Result<Option<ResponseItem>, String>>;
++pub type CompactionHistoryItemFuture<'a> =
++    ExtensionFuture<'a, Result<Option<ResponseItem>, String>>;
 +
 +/// One item from a private cloned history that is about to become compaction
 +/// model input. Replacements affect only that clone, never authoritative history.
@@ -29,7 +30,7 @@ diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/exten
  /// Extension contribution that resolves runtime MCP servers from host config.
  ///
  /// Contributors run in registration order. Later contributions for the same
-@@ -360,6 +374,20 @@ pub trait ToolLifecycleContributor: Send + Sync {
+@@ -360,6 +375,20 @@ pub trait ToolLifecycleContributor: Send + Sync {
      fn on_tool_result<'a>(&'a self, _input: ToolResultInput<'a>) -> ToolResultFuture<'a> {
          Box::pin(std::future::ready(Ok(None)))
      }
@@ -53,18 +54,15 @@ diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/exten
 diff --git a/codex-rs/ext/extension-api/src/lib.rs b/codex-rs/ext/extension-api/src/lib.rs
 --- a/codex-rs/ext/extension-api/src/lib.rs
 +++ b/codex-rs/ext/extension-api/src/lib.rs
-@@ -62,9 +62,11 @@ pub use contributors::TokenUsageContributor;
- pub use contributors::TokenUsageContributor;
- pub use contributors::ToolCallOutcome;
- pub use contributors::ToolContributor;
- pub use contributors::ToolFinishInput;
+@@ -42,6 +42,8 @@ pub use contributors::ApprovalReviewContributor;
+ pub use contributors::ApprovalReviewContributor;
+ pub use contributors::ApprovalReviewError;
+ pub use contributors::ApprovalReviewInput;
 +pub use contributors::CompactionHistoryItemFuture;
 +pub use contributors::CompactionHistoryItemInput;
- pub use contributors::ToolLifecycleContributor;
- pub use contributors::ToolLifecycleFuture;
- pub use contributors::ToolResultFuture;
- pub use contributors::ToolResultInput;
- pub use contributors::ToolStartInput;
+ pub use contributors::ConfigContributor;
+ pub use contributors::ContextContributor;
+ pub use contributors::ExtensionFuture;
 diff --git a/codex-rs/core/src/compact.rs b/codex-rs/core/src/compact.rs
 --- a/codex-rs/core/src/compact.rs
 +++ b/codex-rs/core/src/compact.rs
@@ -76,17 +74,14 @@ diff --git a/codex-rs/core/src/compact.rs b/codex-rs/core/src/compact.rs
  use crate::hook_runtime::PostCompactHookOutcome;
  use crate::hook_runtime::PreCompactHookOutcome;
  use crate::hook_runtime::run_post_compact_hooks;
-@@ -81,6 +82,46 @@ pub(crate) struct CompactedHistoryMetadata {
+@@ -81,6 +82,43 @@ pub(crate) struct CompactedHistoryMetadata {
      pub(crate) window_ids: AutoCompactWindowIds,
  }
  
 +/// Runs registered model-projection contributors against a private compaction
 +/// history clone. Authoritative session history and envelope metadata are never
 +/// mutated by this helper.
-+pub(crate) async fn project_compaction_history(
-+    sess: &Session,
-+    history: &mut ContextManager,
-+) {
++pub(crate) async fn project_compaction_history(sess: &Session, history: &mut ContextManager) {
 +    let contributors = sess.services.extensions.tool_lifecycle_contributors();
 +    if contributors.is_empty() {
 +        return;
@@ -123,7 +118,7 @@ diff --git a/codex-rs/core/src/compact.rs b/codex-rs/core/src/compact.rs
  pub(crate) async fn build_compaction_initial_context(
      sess: &Session,
      initial_context_injection: &InitialContextInjection,
-@@ -256,6 +296,7 @@ async fn run_compact_task_inner_impl(
+@@ -256,6 +293,7 @@ async fn run_compact_task_inner_impl(
      let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
  
      let mut history = sess.clone_history().await;
