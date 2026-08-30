@@ -35,6 +35,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'H4 outbox architecture guard failed' }
           node --experimental-transform-types scripts/test-remote-host-outbox.mjs
           if ($LASTEXITCODE -ne 0) { throw 'H4 outbox behavior test failed' }
+          node --experimental-transform-types scripts/test-remote-host-publication-order.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'H4 ordered publication behavior test failed' }
 
       - name: Prepare pinned desktop with H4 Remote Host
         shell: pwsh
@@ -49,8 +51,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $outbox = 'upstream/hermes-agent/apps/desktop/electron/zero3/remote-host/remote-outbox.ts'
           if (-not (Test-Path $outbox)) { throw 'generated Electron runtime is missing remote-outbox.ts' }
+          $drain = 'upstream/hermes-agent/apps/desktop/electron/zero3/remote-host/remote-outbox-drain.ts'
+          if (-not (Test-Path $drain)) { throw 'generated Electron runtime is missing remote-outbox-drain.ts' }
           $node = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/zero3/remote-host/remote-node.ts'
           if ($node -notmatch 'Zero3RemoteOutbox') { throw 'generated Remote Node is not wired to durable outbox' }
+          if ($node -notmatch 'drainZero3RemoteOutboxInOrder') { throw 'generated Remote Node is not wired to ordered outbox drain' }
           if ($node -notmatch 'flushOutbox') { throw 'generated Remote Node is missing replay path' }
           if ($node -notmatch 'terminalDurable') { throw 'generated Remote Node is missing durable terminal boundary' }
           if ($node -match 'ZERO3_PILOT_NODE_PORT') { throw 'legacy Zero3 Node leaked into H4 host runtime' }
