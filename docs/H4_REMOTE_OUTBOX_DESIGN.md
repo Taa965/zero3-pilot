@@ -39,12 +39,15 @@ For every envelope that matters to remote correctness:
 ```text
 create local envelope
   -> durable local persistence
+  -> ordered outbox drain
   -> network attempt
   -> control-plane acceptance
   -> local acknowledgement/removal
 ```
 
 Network publication must not happen before durable persistence.
+
+No newly created event or terminal envelope may bypass an older committed pending envelope. After persistence, all publication goes through the same ordered outbox drain. A transient failure on an older envelope therefore prevents later evidence or terminal state from overtaking it.
 
 ## Event identity
 
@@ -60,7 +63,7 @@ task_id + execution_id + lease_id + fencing_token + event_sequence
 
 A terminal result is written to the local outbox before the first `/complete`, `/fail`, or `/blocked` request. If publication fails, the terminal envelope remains replayable after reconnect.
 
-A terminal envelope never causes Codex execution to rerun.
+A terminal envelope never causes Codex execution to rerun and never bypasses older pending evidence from the outbox.
 
 ## Replay
 
@@ -68,9 +71,10 @@ On Remote Host startup and after control-plane reconnection:
 
 1. load durable pending envelopes;
 2. preserve the original lease/fencing identity;
-3. replay oldest-first;
-4. delete only envelopes explicitly accepted by the control plane;
-5. stop or quarantine an envelope when the control plane reports it stale/invalid rather than mutating its fencing identity.
+3. replay oldest-first using the same ordered drain used by newly created envelopes;
+4. stop at the first transient publication failure so later envelopes cannot overtake it;
+5. delete only envelopes explicitly accepted by the control plane;
+6. stop or quarantine an envelope when the control plane reports it stale/invalid rather than mutating its fencing identity.
 
 ## Storage
 
