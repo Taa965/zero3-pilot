@@ -71,6 +71,16 @@ diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/
                      ThreadExtensionDependencies {
                          event_sink: Arc::clone(&extension_event_sink),
                          auth_manager: auth_manager.clone(),
-+                        codex_home: config.codex_home.clone(),
++                        codex_home: config.codex_home.to_path_buf(),
                          state_db: state_db.clone(),
                          analytics_events_client: analytics_events_client.clone(),
+diff --git a/codex-rs/app-server/src/mcp_refresh.rs b/codex-rs/app-server/src/mcp_refresh.rs
+--- a/codex-rs/app-server/src/mcp_refresh.rs
++++ b/codex-rs/app-server/src/mcp_refresh.rs
+@@ -330,5 +330,6 @@ async fn setup_thread_manager_for_refresh_test(
+                     ThreadExtensionDependencies {
+                         event_sink: Arc::new(NoopExtensionEventSink),
+                         auth_manager: auth_manager.clone(),
++                        codex_home: good_config.codex_home.to_path_buf(),
+                         state_db: Some(state_db.clone()),
+                         analytics_events_client: codex_analytics::AnalyticsEventsClient::disabled(),
