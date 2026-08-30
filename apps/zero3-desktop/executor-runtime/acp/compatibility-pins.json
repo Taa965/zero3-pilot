@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "zero3.pilot.acp.compatibility.audit.v1",
+  "status": "audit-only",
+  "auditedAt": "2026-08-30",
+  "baseSha": "9f11c6e8c88283dbcaf8cc51e6a6fb35c5f25f7f",
+  "contractSha": null,
+  "protocol": {
+    "generation": "ACP v1",
+    "sdk": {
+      "package": "@agentclientprotocol/sdk",
+      "version": "1.4.0",
+      "sourceHead": "5dac09aaae3ebde1eaaf4a11840f7543f4806e20"
+    }
+  },
+  "runtime": {
+    "package": "acpx",
+    "version": "0.13.2",
+    "sourceHead": "ef6b81e717566a17439a096367f30948d1afd8d0",
+    "minimumNode": "22.13.0"
+  },
+  "adapters": {
+    "claude": {
+      "package": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.70.0",
+      "role": "optional-external-executor",
+      "launchPolicy": "exact-local-installed-bin-only"
+    },
+    "codexExternal": {
+      "package": "@agentclientprotocol/codex-acp",
+      "version": "1.7.0",
+      "role": "optional-compatibility-external-executor-only",
+      "launchPolicy": "exact-local-installed-bin-only",
+      "nativeAgentKernelAuthority": false
+    }
+  },
+  "hostCompatibility": {
+    "hermesDesktopPin": "f7c79efbac19ae18e8dee7c79a4e4c0935299b5f",
+    "declaredNode": "^22.22.0 || ^24.11.0 || >=26.0.0"
+  },
+  "constraints": [
+    "no-runtime-latest",
+    "no-runtime-semver-range-launch",
+    "no-acp-v2-before-dedicated-review",
+    "no-acp-or-acpx-type-leakage",
+    "persistent-resume-must-not-fallback-to-new-session",
+    "context-loss-must-escalate-to-handoff-gate",
+    "permissions-fail-closed",
+    "router-policy-outside-r4b",
+    "native-codex-authority-unchanged"
+  ]
+}
