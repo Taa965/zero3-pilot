@@ -1,0 +1,41 @@
+name: R4B ACP External Executor
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/executor-runtime/acp/**'
+      - 'scripts/check-r4b-acp-architecture.mjs'
+      - '.github/workflows/r4b-acp-executor.yml'
+
+jobs:
+  acp-executor:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24.11.0' }
+      - name: Diff hygiene
+        run: git diff --check origin/main...HEAD
+      - name: Architecture guards
+        run: |
+          node scripts/check-architecture.mjs
+          node scripts/check-r4b-acp-architecture.mjs
+      - name: Install exact TypeScript typecheck tools
+        run: npm install --no-save --package-lock=false --ignore-scripts typescript@5.9.2 @types/node@24.10.1
+      - name: Strict TypeScript check
+        run: >-
+          npx --no-install tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions --skipLibCheck
+          apps/zero3-desktop/executor-runtime/acp/acp-types.ts
+          apps/zero3-desktop/executor-runtime/acp/local-adapter.ts
+          apps/zero3-desktop/executor-runtime/acp/acp-session-store.ts
+          apps/zero3-desktop/executor-runtime/acp/acp-jsonl-client.ts
+          apps/zero3-desktop/executor-runtime/acp/acp-executor.ts
+          apps/zero3-desktop/executor-runtime/acp/acp-executor.test.ts
+      - name: ACP behavior tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/executor-runtime/acp/acp-executor.test.ts
