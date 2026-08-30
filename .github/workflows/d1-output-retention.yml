@@ -58,7 +58,18 @@ jobs:
         run: cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-zero3-output-retention
 
       - name: App-server integration check
-        run: cargo check --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-app-server
+        run: |
+          set -o pipefail
+          cargo check --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-app-server 2>&1 | tee app-server-check.log
+
+      - name: Upload app-server integration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-app-server-check
+          path: app-server-check.log
+          if-no-files-found: warn
+          retention-days: 1
 
       - name: Build pinned Codex CLI
         run: cargo build --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-cli --bin codex
