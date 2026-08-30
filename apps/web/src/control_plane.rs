@@ -287,7 +287,12 @@ impl RemoteControlRuntime {
     }
 
     #[cfg(test)]
-    fn test(root: PathBuf, host_token: &str, control_token: &str, lease_ttl: Duration) -> anyhow::Result<Self> {
+    fn test(
+        root: PathBuf,
+        host_token: &str,
+        control_token: &str,
+        lease_ttl: Duration,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             plane: Some(Arc::new(ControlPlane::open_with_ttl(root, lease_ttl)?)),
             auth: Some(Arc::new(AuthConfig {
@@ -301,7 +306,10 @@ impl RemoteControlRuntime {
 pub fn router(runtime: RemoteControlRuntime) -> Router {
     Router::new()
         .route("/api/host/v1/nodes/register", post(register_node))
-        .route("/api/host/v1/nodes/:node_id/heartbeat", post(heartbeat_node))
+        .route(
+            "/api/host/v1/nodes/:node_id/heartbeat",
+            post(heartbeat_node),
+        )
         .route("/api/host/v1/tasks/lease", post(lease_task))
         .route("/api/host/v1/tasks/:task_id/renew", post(renew_task))
         .route("/api/host/v1/tasks/:task_id/events", post(accept_event))
@@ -351,7 +359,9 @@ impl ControlPlane {
         let fingerprint = canonical_json(&task)?;
         let mut state = self.state.lock().unwrap();
         if let Some(existing) = state.tasks.get(&task.task_id) {
-            if existing.task.execution_id == task.execution_id && existing.task_fingerprint == fingerprint {
+            if existing.task.execution_id == task.execution_id
+                && existing.task_fingerprint == fingerprint
+            {
                 return Ok(existing.clone());
             }
             return Err(ApiError::new(
@@ -390,7 +400,11 @@ impl ControlPlane {
         Ok(record)
     }
 
-    fn register_node(&self, node_id: &str, capabilities: Vec<String>) -> Result<NodeRecord, ApiError> {
+    fn register_node(
+        &self,
+        node_id: &str,
+        capabilities: Vec<String>,
+    ) -> Result<NodeRecord, ApiError> {
         validate_id("node_id", node_id)?;
         require_capabilities(&capabilities)?;
         let now = Utc::now();
@@ -405,8 +419,15 @@ impl ControlPlane {
             capabilities: normalized_capabilities(capabilities),
             registered_at,
             last_heartbeat_at: now,
-            active_task_id: state.nodes.get(node_id).and_then(|node| node.active_task_id.clone()),
-            pending_deliveries: state.nodes.get(node_id).map(|node| node.pending_deliveries).unwrap_or(0),
+            active_task_id: state
+                .nodes
+                .get(node_id)
+                .and_then(|node| node.active_task_id.clone()),
+            pending_deliveries: state
+                .nodes
+                .get(node_id)
+                .map(|node| node.pending_deliveries)
+                .unwrap_or(0),
         };
         self.persist_node(&record).map_err(ApiError::internal)?;
         state.nodes.insert(node_id.to_string(), record.clone());
@@ -435,12 +456,19 @@ impl ControlPlane {
         Ok(record)
     }
 
-    fn try_lease(&self, node_id: &str, capabilities: &[String]) -> Result<Option<RemoteLease>, ApiError> {
+    fn try_lease(
+        &self,
+        node_id: &str,
+        capabilities: &[String],
+    ) -> Result<Option<RemoteLease>, ApiError> {
         validate_id("node_id", node_id)?;
         require_capabilities(capabilities)?;
         let mut state = self.state.lock().unwrap();
         let registered = state.nodes.get(node_id).ok_or_else(|| {
-            ApiError::new(StatusCode::NOT_FOUND, "node must register before leasing tasks")
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "node must register before leasing tasks",
+            )
         })?;
         require_capabilities(&registered.capabilities)?;
 
@@ -465,10 +493,9 @@ impl ControlPlane {
         };
         let record = state.tasks.get_mut(&task_id).unwrap();
         let before = record.clone();
-        record.fencing_token = record
-            .fencing_token
-            .checked_add(1)
-            .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "fencing token exhausted"))?;
+        record.fencing_token = record.fencing_token.checked_add(1).ok_or_else(|| {
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "fencing token exhausted")
+        })?;
         let lease = LeaseRecord {
             node_id: node_id.to_string(),
             lease_id: Uuid::new_v4().to_string(),
@@ -493,13 +520,25 @@ impl ControlPlane {
         }))
     }
 
-    fn renew(&self, task_id: &str, node_id: &str, body: &RenewBody) -> Result<RemoteLease, ApiError> {
+    fn renew(
+        &self,
+        task_id: &str,
+        node_id: &str,
+        body: &RenewBody,
+    ) -> Result<RemoteLease, ApiError> {
         validate_id("task_id", task_id)?;
         let mut state = self.state.lock().unwrap();
-        let record = state.tasks.get_mut(task_id).ok_or_else(|| {
-            ApiError::new(StatusCode::NOT_FOUND, "remote task not found")
-        })?;
-        validate_lease(record, node_id, &record.task.execution_id, &body.lease_id, body.fencing_token)?;
+        let record = state
+            .tasks
+            .get_mut(task_id)
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "remote task not found"))?;
+        validate_lease(
+            record,
+            node_id,
+            &record.task.execution_id,
+            &body.lease_id,
+            body.fencing_token,
+        )?;
         let before = record.clone();
         let now = Utc::now();
         let active = record.active_lease.as_mut().unwrap();
@@ -518,14 +557,20 @@ impl ControlPlane {
         })
     }
 
-    fn accept_event(&self, task_id: &str, node_id: &str, body: EventEnvelope) -> Result<TaskRecord, ApiError> {
+    fn accept_event(
+        &self,
+        task_id: &str,
+        node_id: &str,
+        body: EventEnvelope,
+    ) -> Result<TaskRecord, ApiError> {
         validate_id("task_id", task_id)?;
         validate_id("delivery_id", &body.delivery_id)?;
         let fingerprint = canonical_json(&body)?;
         let mut state = self.state.lock().unwrap();
-        let record = state.tasks.get_mut(task_id).ok_or_else(|| {
-            ApiError::new(StatusCode::NOT_FOUND, "remote task not found")
-        })?;
+        let record = state
+            .tasks
+            .get_mut(task_id)
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "remote task not found"))?;
 
         if let Some(previous) = record.delivery_fingerprints.get(&body.delivery_id) {
             if previous == &fingerprint {
@@ -537,7 +582,10 @@ impl ControlPlane {
             ));
         }
         if record.state.is_terminal() || record.terminal.is_some() {
-            return Err(ApiError::new(StatusCode::CONFLICT, "remote task is already terminal"));
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "remote task is already terminal",
+            ));
         }
         validate_lease(
             record,
@@ -568,7 +616,9 @@ impl ControlPlane {
         if body.event_type == "host.accepted" {
             record.state = RemoteTaskState::Running;
         }
-        record.delivery_fingerprints.insert(body.delivery_id, fingerprint);
+        record
+            .delivery_fingerprints
+            .insert(body.delivery_id, fingerprint);
         record.updated_at = Utc::now();
         if let Err(error) = self.persist_task(record) {
             *record = before;
@@ -589,9 +639,10 @@ impl ControlPlane {
         validate_terminal_route(body.state, route)?;
         let fingerprint = canonical_json(&body)?;
         let mut state = self.state.lock().unwrap();
-        let record = state.tasks.get_mut(task_id).ok_or_else(|| {
-            ApiError::new(StatusCode::NOT_FOUND, "remote task not found")
-        })?;
+        let record = state
+            .tasks
+            .get_mut(task_id)
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "remote task not found"))?;
 
         if let Some(previous) = record.delivery_fingerprints.get(&body.delivery_id) {
             if previous == &fingerprint {
@@ -603,7 +654,10 @@ impl ControlPlane {
             ));
         }
         if record.terminal.is_some() || record.state.is_terminal() {
-            return Err(ApiError::new(StatusCode::CONFLICT, "remote task is already terminal"));
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "remote task is already terminal",
+            ));
         }
         validate_lease(
             record,
@@ -624,7 +678,9 @@ impl ControlPlane {
             state: body.state,
             result: body.result,
         });
-        record.delivery_fingerprints.insert(body.delivery_id, fingerprint);
+        record
+            .delivery_fingerprints
+            .insert(body.delivery_id, fingerprint);
         record.active_lease = None;
         record.updated_at = Utc::now();
         if let Err(error) = self.persist_task(record) {
@@ -654,11 +710,23 @@ impl ControlPlane {
     }
 
     fn persist_task(&self, record: &TaskRecord) -> anyhow::Result<()> {
-        write_json_atomic(&self.root.join("tasks").join(format!("{}.json", record.task.task_id)), record)
+        write_json_atomic(
+            &self
+                .root
+                .join("tasks")
+                .join(format!("{}.json", record.task.task_id)),
+            record,
+        )
     }
 
     fn persist_node(&self, record: &NodeRecord) -> anyhow::Result<()> {
-        write_json_atomic(&self.root.join("nodes").join(format!("{}.json", record.node_id)), record)
+        write_json_atomic(
+            &self
+                .root
+                .join("nodes")
+                .join(format!("{}.json", record.node_id)),
+            record,
+        )
     }
 }
 
@@ -675,22 +743,34 @@ enum TerminalRoute {
     Blocked,
 }
 
-fn require_runtime(runtime: &RemoteControlRuntime, headers: &HeaderMap, role: AuthRole) -> Result<Arc<ControlPlane>, ApiError> {
+fn require_runtime(
+    runtime: &RemoteControlRuntime,
+    headers: &HeaderMap,
+    role: AuthRole,
+) -> Result<Arc<ControlPlane>, ApiError> {
     let plane = runtime.plane.clone().ok_or_else(|| {
-        ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "remote control plane is not configured")
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "remote control plane is not configured",
+        )
     })?;
     let auth = runtime.auth.as_ref().ok_or_else(|| {
-        ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "remote control plane is not configured")
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "remote control plane is not configured",
+        )
     })?;
     let expected = match role {
         AuthRole::Host => &auth.host_token,
         AuthRole::Control => &auth.control_token,
     };
-    let supplied = bearer_token(headers).ok_or_else(|| {
-        ApiError::new(StatusCode::UNAUTHORIZED, "missing bearer token")
-    })?;
+    let supplied = bearer_token(headers)
+        .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
     if supplied != expected {
-        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "invalid bearer token"));
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid bearer token",
+        ));
     }
     Ok(plane)
 }
@@ -713,7 +793,10 @@ async fn register_node(
     let plane = require_runtime(&runtime, &headers, AuthRole::Host)?;
     let header_node = host_node_id(&headers)?;
     if header_node != body.node_id {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "node header/body identity mismatch"));
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "node header/body identity mismatch",
+        ));
     }
     Ok(Json(plane.register_node(&body.node_id, body.capabilities)?))
 }
@@ -727,7 +810,10 @@ async fn heartbeat_node(
     let plane = require_runtime(&runtime, &headers, AuthRole::Host)?;
     let header_node = host_node_id(&headers)?;
     if header_node != node_id || body.node_id != node_id {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "node path/header/body identity mismatch"));
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "node path/header/body identity mismatch",
+        ));
     }
     Ok(Json(plane.heartbeat(
         &node_id,
@@ -744,9 +830,15 @@ async fn lease_task(
     let plane = require_runtime(&runtime, &headers, AuthRole::Host)?;
     let header_node = host_node_id(&headers)?;
     if header_node != body.node_id {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "node header/body identity mismatch"));
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "node header/body identity mismatch",
+        ));
     }
-    let wait_seconds = body.wait_seconds.unwrap_or(1).clamp(1, MAX_LONG_POLL_SECONDS);
+    let wait_seconds = body
+        .wait_seconds
+        .unwrap_or(1)
+        .clamp(1, MAX_LONG_POLL_SECONDS);
     let deadline = Instant::now() + StdDuration::from_secs(wait_seconds);
     loop {
         if let Some(lease) = plane.try_lease(&body.node_id, &body.capabilities)? {
@@ -768,7 +860,10 @@ async fn renew_task(
     let plane = require_runtime(&runtime, &headers, AuthRole::Host)?;
     let header_node = host_node_id(&headers)?;
     if header_node != body.node_id {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "node header/body identity mismatch"));
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "node header/body identity mismatch",
+        ));
     }
     Ok(Json(plane.renew(&task_id, &header_node, &body)?))
 }
@@ -840,9 +935,21 @@ async fn create_task(
     Json(task): Json<RemoteTask>,
 ) -> Result<(StatusCode, Json<TaskRecord>), ApiError> {
     let plane = require_runtime(&runtime, &headers, AuthRole::Control)?;
-    let existed = plane.state.lock().unwrap().tasks.contains_key(&task.task_id);
+    let existed = plane
+        .state
+        .lock()
+        .unwrap()
+        .tasks
+        .contains_key(&task.task_id);
     let record = plane.create_task(task)?;
-    Ok((if existed { StatusCode::OK } else { StatusCode::CREATED }, Json(record)))
+    Ok((
+        if existed {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        },
+        Json(record),
+    ))
 }
 
 async fn get_task(
@@ -872,15 +979,24 @@ async fn list_nodes(
 
 fn validate_task(task: &RemoteTask) -> Result<(), ApiError> {
     if task.protocol != REMOTE_TASK_PROTOCOL {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "unsupported remote task protocol"));
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "unsupported remote task protocol",
+        ));
     }
     validate_id("task_id", &task.task_id)?;
     validate_id("execution_id", &task.execution_id)?;
     if task.objective.trim().is_empty() {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "objective must not be empty"));
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "objective must not be empty",
+        ));
     }
     if task.target.workspace.trim().is_empty() {
-        return Err(ApiError::new(StatusCode::BAD_REQUEST, "target.workspace must not be empty"));
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "target.workspace must not be empty",
+        ));
     }
     Ok(())
 }
@@ -914,7 +1030,11 @@ fn require_capabilities(capabilities: &[String]) -> Result<(), ApiError> {
 }
 
 fn normalized_capabilities(capabilities: Vec<String>) -> Vec<String> {
-    capabilities.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
+    capabilities
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn validate_lease(
@@ -925,19 +1045,32 @@ fn validate_lease(
     fencing_token: u64,
 ) -> Result<(), ApiError> {
     if record.task.execution_id != execution_id {
-        return Err(ApiError::new(StatusCode::CONFLICT, "execution_id does not match task"));
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "execution_id does not match task",
+        ));
     }
-    let active = record.active_lease.as_ref().ok_or_else(|| {
-        ApiError::new(StatusCode::GONE, "remote task has no active lease")
-    })?;
+    let active = record
+        .active_lease
+        .as_ref()
+        .ok_or_else(|| ApiError::new(StatusCode::GONE, "remote task has no active lease"))?;
     if active.node_id != node_id || active.lease_id != lease_id {
-        return Err(ApiError::new(StatusCode::GONE, "remote task lease is stale"));
+        return Err(ApiError::new(
+            StatusCode::GONE,
+            "remote task lease is stale",
+        ));
     }
     if active.fencing_token != fencing_token || record.fencing_token != fencing_token {
-        return Err(ApiError::new(StatusCode::PRECONDITION_FAILED, "remote task fencing token is stale"));
+        return Err(ApiError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "remote task fencing token is stale",
+        ));
     }
     if active.lease_expires_at <= Utc::now() {
-        return Err(ApiError::new(StatusCode::GONE, "remote task lease has expired"));
+        return Err(ApiError::new(
+            StatusCode::GONE,
+            "remote task lease has expired",
+        ));
     }
     Ok(())
 }
@@ -997,7 +1130,9 @@ fn json_files(dir: &FsPath) -> anyhow::Result<Vec<PathBuf>> {
 }
 
 fn write_json_atomic<T: Serialize>(path: &FsPath, value: &T) -> anyhow::Result<()> {
-    let parent = path.parent().ok_or_else(|| anyhow::anyhow!("state path has no parent"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("state path has no parent"))?;
     fs::create_dir_all(parent)?;
     let file_name = path
         .file_name()
@@ -1071,7 +1206,9 @@ mod tests {
     #[test]
     fn expired_lease_is_sticky_to_original_node_and_increments_fencing() {
         let dir = tempfile::tempdir().unwrap();
-        let plane = ControlPlane::open_with_ttl(dir.path().to_path_buf(), Duration::milliseconds(10)).unwrap();
+        let plane =
+            ControlPlane::open_with_ttl(dir.path().to_path_buf(), Duration::milliseconds(10))
+                .unwrap();
         plane.register_node("node-a", caps()).unwrap();
         plane.register_node("node-b", caps()).unwrap();
         plane.create_task(task("task-a", "exec-a")).unwrap();
@@ -1104,7 +1241,9 @@ mod tests {
             created_at: Utc::now().to_rfc3339(),
             payload: json!({"node_id":"node-a"}),
         };
-        plane.accept_event("task-a", "node-a", accepted.clone()).unwrap();
+        plane
+            .accept_event("task-a", "node-a", accepted.clone())
+            .unwrap();
         plane.accept_event("task-a", "node-a", accepted).unwrap();
 
         let skipped = EventEnvelope {
@@ -1129,7 +1268,12 @@ mod tests {
             result: json!({"summary":"done"}),
         };
         plane
-            .accept_terminal("task-a", "node-a", terminal.clone(), TerminalRoute::Complete)
+            .accept_terminal(
+                "task-a",
+                "node-a",
+                terminal.clone(),
+                TerminalRoute::Complete,
+            )
             .unwrap();
         plane
             .accept_terminal("task-a", "node-a", terminal, TerminalRoute::Complete)
