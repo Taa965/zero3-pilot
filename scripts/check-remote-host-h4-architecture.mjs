@@ -25,6 +25,7 @@ const node = read('apps/zero3-desktop/host-runtime/remote-node.ts')
 const overlay = read('apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs')
 
 requireText(design, 'Network publication must not happen before durable persistence.', 'H4 must preserve outbox-before-network ordering.')
+requireText(design, 'No newly created event or terminal envelope may bypass an older committed pending envelope.', 'H4 must document ordered publication across new and replayed envelopes.')
 requireText(types, "kind: 'event'", 'H4 event envelope contract is missing.')
 requireText(types, "kind: 'terminal'", 'H4 terminal envelope contract is missing.')
 requireText(types, 'deliveryId: string', 'H4 deliveries need stable local identity.')
@@ -45,13 +46,21 @@ requireText(client, 'fencing_token: envelope.fencingToken', 'H4 replay must pres
 requireText(client, 'created_at: envelope.createdAt', 'H4 replay must preserve original envelope time.')
 requireText(client, 'zero3RemoteControlPlaneRejectedStaleEnvelope', 'H4 must distinguish stale fencing rejection from transient delivery failure.')
 requireText(node, 'private readonly outbox = new Zero3RemoteOutbox', 'Remote Node must own the durable H4 outbox.')
+requireText(node, 'private async flushOutbox(targetDeliveryId?: string)', 'H4 publication must have one ordered outbox drain with optional target tracking.')
 requireText(node, 'await this.flushOutbox()', 'Remote Node must replay durable envelopes after reconnect and before new leases.')
+requireText(node, 'await this.flushOutbox(envelope.deliveryId)', 'New durable envelopes must be published through the ordered outbox drain.')
+requireText(node, 'await this.flushOutbox(terminalEnvelope.deliveryId)', 'Successful terminal outcomes must drain older pending evidence before publication.')
 requireText(node, "await this.durableEvent(lease, 'host.accepted'", 'Task acceptance must enter the durable outbox before Codex side effects.')
 requireText(node, 'await this.outbox.enqueueTerminal(lease, result.state, result)', 'Successful/terminal Codex outcomes must be durable before publication.')
 requireText(node, 'terminalDurable = true', 'Terminal delivery failure must not be converted into a different local terminal outcome.')
 requireText(node, 'this.activeLeaseInvalid = true', 'Known stale fencing must stop further authoritative publication for the active lease.')
 requireText(node, "return 'quarantined'", 'Known stale envelopes must be quarantined rather than silently acknowledged.')
 requireText(overlay, "'remote-outbox.ts'", 'Prepared Electron runtime must ship the H4 outbox implementation.')
+
+const localPublishCalls = node.match(/await this\.publishEnvelope\(/g) ?? []
+if (localPublishCalls.length !== 1) {
+  throw new Error(`H4 Remote Node must call publishEnvelope only from the ordered flushOutbox drain; found ${localPublishCalls.length} direct calls.`)
+}
 
 for (const source of [outbox, node]) {
   for (const forbidden of ['child_process', 'exec(', 'spawn(', 'powershell.exe', 'cmd.exe /c', 'simple-git']) {
@@ -63,4 +72,4 @@ forbidText(outbox, 'authorization', 'Bearer credentials must never be persisted 
 forbidText(outbox, 'tokenFile', 'H4 outbox must not persist or read control-plane credentials.')
 forbidText(node, "ipcRenderer.invoke('zero3:codex:rpc'", 'H4 must not add a renderer-controlled generic Codex RPC channel.')
 
-console.log('Zero3 Remote Host H4 architecture guard passed: durable bounded outbox -> preserved delivery/fencing identity -> replay/ack/quarantine, with Codex remaining the sole Agent Kernel.')
+console.log('Zero3 Remote Host H4 architecture guard passed: durable bounded ordered outbox -> preserved delivery/fencing identity -> replay/ack/quarantine, with Codex remaining the sole Agent Kernel.')
