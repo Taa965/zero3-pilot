@@ -1,0 +1,212 @@
+diff --git a/codex-rs/tools/src/tool_output.rs b/codex-rs/tools/src/tool_output.rs
+--- a/codex-rs/tools/src/tool_output.rs
++++ b/codex-rs/tools/src/tool_output.rs
+@@ -20,5 +20,15 @@ pub trait ToolOutput: Send {
+     fn contains_external_context(&self) -> bool {
+         false
+     }
++
++    /// Returns the complete plain-text result before model-context truncation,
++    /// when this output can prove that such a representation is lossless.
++    ///
++    /// Multimodal, encrypted, already-omitted, or otherwise lossy outputs
++    /// should keep the default `None` so projection extensions cannot mistake
++    /// a diagnostic preview for an authoritative result.
++    fn complete_text_output(&self) -> Option<String> {
++        None
++    }
+ 
+     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
+@@ -51,6 +61,10 @@ where
+         (**self).contains_external_context()
+     }
+ 
++    fn complete_text_output(&self) -> Option<String> {
++        (**self).complete_text_output()
++    }
++
+     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+         (**self).to_response_item(call_id, payload)
+     }
+@@ -104,6 +118,10 @@ impl ToolOutput for JsonToolOutput {
+         self.contains_external_context
+     }
+ 
++    fn complete_text_output(&self) -> Option<String> {
++        Some(self.value.to_string())
++    }
++
+     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+         let output = FunctionCallOutputPayload {
+             body: FunctionCallOutputBody::Text(self.value.to_string()),
+@@ -141,6 +159,14 @@ impl ToolOutput for codex_protocol::mcp::CallToolResult {
+         self.success()
+     }
+ 
++    fn complete_text_output(&self) -> Option<String> {
++        let output = self.as_function_call_output_payload();
++        match output.body {
++            FunctionCallOutputBody::Text(text) => Some(text),
++            FunctionCallOutputBody::ContentItems(_) => None,
++        }
++    }
++
+     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+         ResponseInputItem::McpToolCallOutput {
+             call_id: call_id.to_string(),
+diff --git a/codex-rs/core/src/tools/context.rs b/codex-rs/core/src/tools/context.rs
+--- a/codex-rs/core/src/tools/context.rs
++++ b/codex-rs/core/src/tools/context.rs
+@@ -101,6 +101,20 @@ impl ToolOutput for McpToolOutput {
+         self.result.success()
+     }
+ 
++    fn complete_text_output(&self) -> Option<String> {
++        let payload = self.result.as_function_call_output_payload();
++        let FunctionCallOutputBody::Text(text) = payload.body else {
++            return None;
++        };
++        let wall_time_seconds = self.wall_time.as_secs_f64();
++        let header = format!("Wall time: {wall_time_seconds:.4} seconds\nOutput:");
++        if text.is_empty() {
++            Some(header)
++        } else {
++            Some(format!("{header}\n{text}"))
++        }
++    }
++
+     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+         ResponseInputItem::FunctionCallOutput {
+             call_id: call_id.to_string(),
+@@ -331,6 +345,19 @@ impl ToolOutput for ExecCommandToolOutput {
+         true
+     }
+ 
++    fn complete_text_output(&self) -> Option<String> {
++        // The unified-exec collector may itself have omitted bytes before a
++        // ToolOutput exists. Never advertise that partial snapshot as complete.
++        if self.output_omitted_bytes.is_some() {
++            return None;
++        }
++        Some(format!(
++            "{}\n{}",
++            self.response_header(),
++            String::from_utf8_lossy(&self.raw_output)
++        ))
++    }
++
+     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+         function_tool_response(
+             call_id,
+diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/extension-api/src/contributors.rs
+--- a/codex-rs/ext/extension-api/src/contributors.rs
++++ b/codex-rs/ext/extension-api/src/contributors.rs
+@@ -4,9 +4,12 @@ use std::sync::Arc;
+ use codex_context_fragments::ContextualUserFragment;
+ use codex_protocol::items::TurnItem;
++use codex_protocol::models::ResponseInputItem;
+ use codex_protocol::protocol::ReviewDecision;
+ use codex_protocol::protocol::TokenUsageInfo;
+ use codex_tools::ToolCall;
++use codex_tools::ToolCallSource;
+ use codex_tools::ToolExecutor;
++use codex_tools::ToolName;
+ 
+ use crate::ExtensionData;
+ use crate::ExtensionMetrics;
+@@ -55,3 +58,21 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
++/// Future returned by the post-execution model-projection seam.
++pub type ToolResultFuture<'a> = ExtensionFuture<'a, Result<Option<ResponseInputItem>, String>>;
++
++/// Immutable execution identity plus the current model-visible projection.
++///
++/// `complete_text` is present only when the owning ToolOutput can prove it has
++/// a complete plain-text representation before model-context truncation.
++pub struct ToolResultInput<'a> {
++    pub thread_store: &'a ExtensionData,
++    pub turn_store: &'a ExtensionData,
++    pub turn_id: &'a str,
++    pub call_id: &'a str,
++    pub tool_name: &'a ToolName,
++    pub source: ToolCallSource,
++    pub model_response: &'a ResponseInputItem,
++    pub complete_text: Option<&'a str>,
++}
++
+ /// Extension contribution that resolves runtime MCP servers from host config.
+ ///
+ /// Contributors run in registration order. Later contributions for the same
+@@ -329,6 +350,16 @@ pub trait ToolLifecycleContributor: Send + Sync {
+     fn on_mcp_tool_result<'a>(&'a self, _input: McpToolResultInput<'a>) -> ToolLifecycleFuture<'a> {
+         Box::pin(std::future::ready(()))
+     }
++
++    /// Optionally replaces only the model-visible result after execution and
++    /// PostToolUse processing have completed.
++    ///
++    /// The original ToolOutput remains authoritative for execution, hooks,
++    /// telemetry, approvals, sandboxing, and Code Mode. Returning `None`
++    /// preserves the current projection. Errors are fail-open at the host.
++    fn on_tool_result<'a>(&'a self, _input: ToolResultInput<'a>) -> ToolResultFuture<'a> {
++        Box::pin(std::future::ready(Ok(None)))
++    }
+ 
+     /// Called after the tool call returns, is blocked, fails, or is cancelled.
+     ///
+diff --git a/codex-rs/ext/extension-api/src/lib.rs b/codex-rs/ext/extension-api/src/lib.rs
+--- a/codex-rs/ext/extension-api/src/lib.rs
++++ b/codex-rs/ext/extension-api/src/lib.rs
+@@ -63,6 +63,8 @@ pub use contributors::ToolCallOutcome;
+ pub use contributors::ToolContributor;
+ pub use contributors::ToolFinishInput;
+ pub use contributors::ToolLifecycleContributor;
+ pub use contributors::ToolLifecycleFuture;
++pub use contributors::ToolResultFuture;
++pub use contributors::ToolResultInput;
+ pub use contributors::ToolStartInput;
+ pub use contributors::TurnAbortInput;
+diff --git a/codex-rs/core/src/tools/parallel.rs b/codex-rs/core/src/tools/parallel.rs
+--- a/codex-rs/core/src/tools/parallel.rs
++++ b/codex-rs/core/src/tools/parallel.rs
+@@ -64,10 +64,40 @@ impl ToolCallRuntime {
+     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+         let error_call = call.clone();
+         let source = call.direct_source();
++        let projection_call = call.clone();
++        let projection_source = crate::tools::lifecycle::extension_tool_call_source(source.clone());
++        let projection_session = Arc::clone(&self.session);
++        let projection_turn = Arc::clone(&self.step_context.turn);
+         let future = self.handle_tool_call_with_source(call, source, cancellation_token);
+         async move {
+             match future.await {
+-                Ok(response) => Ok(response.into_response()),
++                Ok(response) => {
++                    let complete_text = response.result.complete_text_output();
++                    let mut model_response = response.into_response();
++                    for contributor in projection_session.services.extensions.tool_lifecycle_contributors() {
++                        let input = codex_extension_api::ToolResultInput {
++                            thread_store: &projection_session.services.thread_extension_data,
++                            turn_store: projection_turn.extension_data.as_ref(),
++                            turn_id: projection_turn.sub_id.as_str(),
++                            call_id: projection_call.call_id.as_str(),
++                            tool_name: &projection_call.tool_name,
++                            source: projection_source.clone(),
++                            model_response: &model_response,
++                            complete_text: complete_text.as_deref(),
++                        };
++                        match contributor.on_tool_result(input).await {
++                            Ok(Some(projected)) => model_response = projected,
++                            Ok(None) => {}
++                            Err(error) => tracing::warn!(
++                                tool_name = %projection_call.tool_name,
++                                call_id = projection_call.call_id,
++                                %error,
++                                "tool result projection contributor failed; keeping current projection"
++                            ),
++                        }
++                    }
++                    Ok(model_response)
++                }
+                 Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
+                 Err(other) => Ok(Self::failure_response(error_call, other)),
+             }
