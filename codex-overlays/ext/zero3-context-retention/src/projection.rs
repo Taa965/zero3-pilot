@@ -23,14 +23,8 @@ pub(crate) async fn project_compaction_history_item(
     }
 
     let thread_id = input.thread_store.level_id().to_string();
-    let Some(locator) = verified_recovery_locator(
-        store,
-        current_text,
-        &thread_id,
-        input.turn_id,
-        call_id,
-    )
-    .await
+    let Some(locator) =
+        verified_recovery_locator(store, current_text, &thread_id, input.turn_id, call_id).await
     else {
         return Ok(None);
     };
@@ -253,14 +247,8 @@ mod tests {
     async fn accepts_only_a_real_sidecar_for_the_same_history_identity() {
         let store = fake_store("call-7");
         let text = format!("preview {} ; recover", store.locator);
-        let verified = verified_recovery_locator(
-            &store,
-            &text,
-            "thread-1",
-            Some("turn-1"),
-            "call-7",
-        )
-        .await;
+        let verified =
+            verified_recovery_locator(&store, &text, "thread-1", Some("turn-1"), "call-7").await;
         assert_eq!(verified.as_deref(), Some(store.locator.as_str()));
     }
 
@@ -270,15 +258,9 @@ mod tests {
         store.text_available = false;
         let text = format!("preview {} ; recover", store.locator);
         assert!(
-            verified_recovery_locator(
-                &store,
-                &text,
-                "thread-1",
-                Some("turn-1"),
-                "call-7",
-            )
-            .await
-            .is_none()
+            verified_recovery_locator(&store, &text, "thread-1", Some("turn-1"), "call-7",)
+                .await
+                .is_none()
         );
     }
 
@@ -287,15 +269,9 @@ mod tests {
         let store = fake_store("different-call");
         let text = format!("preview {} ; recover", store.locator);
         assert!(
-            verified_recovery_locator(
-                &store,
-                &text,
-                "thread-1",
-                Some("turn-1"),
-                "call-7",
-            )
-            .await
-            .is_none()
+            verified_recovery_locator(&store, &text, "thread-1", Some("turn-1"), "call-7",)
+                .await
+                .is_none()
         );
         assert!(
             verified_recovery_locator(
