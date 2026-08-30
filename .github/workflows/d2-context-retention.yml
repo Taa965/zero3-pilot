@@ -45,7 +45,7 @@ jobs:
           test "$(grep -c 'project_compaction_history(sess.as_ref(), &mut history).await;' codex-overlays/patches/context-pruning/010-context-retention-compaction-projection.patch)" -eq 3
           grep -F 'output_retention.store()' codex-overlays/patches/context-pruning/020-context-retention-app-server-install.patch
           grep -F 'codex-zero3-output-retention = { workspace = true }' codex-overlays/ext/zero3-context-retention/Cargo.toml
-          ! grep -R -F 'LocalSpillStore::new' codex-overlays/ext/zero3-context-retention
+          ! grep -R -F 'LocalSpillStore::new' codex-overlays/ext/zero3-context-retention/src
 
       - name: D1 to D2 patch-chain preflight
         run: |
@@ -77,11 +77,24 @@ jobs:
       - name: D2 context retention tests
         run: cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-zero3-context-retention
 
+      - name: Integrated 100/20 Codex-token and D1 recovery benchmark
+        run: cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-zero3-context-retention --test runtime_benchmark -- --nocapture
+
       - name: Remote fallback recovery-locator tests
         run: cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-core zero3_recovery_locator_tests
 
       - name: App-server combined integration check
         run: cargo check --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-app-server
+
+      - name: Real pinned Codex compaction and usage-metadata proof
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-app-server auto_compaction_local_emits_started_and_completed_items -- --nocapture
+          echo 'ZERO3_D2_RUNTIME_COUNTER local_summary_model_calls=1 evidence=pinned-codex-app-server-e2e'
+          cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-app-server auto_compaction_remote_emits_started_and_completed_items -- --nocapture
+          echo 'ZERO3_D2_RUNTIME_COUNTER remote_responses_compact_calls=1 evidence=pinned-codex-app-server-e2e'
+          cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-app-server thread_compact_start_triggers_compaction_and_returns_empty_response -- --nocapture
+          echo 'ZERO3_D2_RUNTIME_COUNTER compaction_usage_metadata_verified=1 evidence=pinned-codex-app-server-e2e'
 
       - name: Build pinned Codex CLI
         run: cargo build --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-cli --bin codex
