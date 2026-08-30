@@ -154,14 +154,9 @@ pub fn prune_content<Rich: Clone>(
                 let block_start = consumed;
                 let block_end = block_start + points.len();
 
-                let head_end = removed_start
-                    .saturating_sub(block_start)
-                    .min(points.len());
-                let tail_start = removed_end
-                    .saturating_sub(block_start)
-                    .min(points.len());
-                let intersects_removed =
-                    block_start < removed_end && block_end > removed_start;
+                let head_end = removed_start.saturating_sub(block_start).min(points.len());
+                let tail_start = removed_end.saturating_sub(block_start).min(points.len());
+                let intersects_removed = block_start < removed_end && block_end > removed_start;
 
                 let mut retained = String::new();
                 retained.extend(points[..head_end].iter());
