@@ -21,6 +21,7 @@ const types = read('apps/zero3-desktop/host-runtime/remote-types.ts')
 const config = read('apps/zero3-desktop/host-runtime/remote-config.ts')
 const client = read('apps/zero3-desktop/host-runtime/remote-client.ts')
 const outbox = read('apps/zero3-desktop/host-runtime/remote-outbox.ts')
+const drain = read('apps/zero3-desktop/host-runtime/remote-outbox-drain.ts')
 const node = read('apps/zero3-desktop/host-runtime/remote-node.ts')
 const overlay = read('apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs')
 
@@ -45,8 +46,13 @@ requireText(client, 'delivery_id: envelope.deliveryId', 'H4 replay must preserve
 requireText(client, 'fencing_token: envelope.fencingToken', 'H4 replay must preserve original fencing identity.')
 requireText(client, 'created_at: envelope.createdAt', 'H4 replay must preserve original envelope time.')
 requireText(client, 'zero3RemoteControlPlaneRejectedStaleEnvelope', 'H4 must distinguish stale fencing rejection from transient delivery failure.')
+requireText(drain, 'export async function drainZero3RemoteOutboxInOrder(', 'H4 ordered publication must live in one reusable coordinator.')
+requireText(drain, 'for (const envelope of envelopes)', 'H4 ordered drain must walk the durable snapshot in order.')
+requireText(drain, 'const result = await publish(envelope)', 'H4 ordered drain must await each publication before advancing.')
+requireText(drain, 'if (!canPublish(envelope)) return null', 'H4 ordered drain must stop before an envelope that is no longer publishable.')
 requireText(node, 'private readonly outbox = new Zero3RemoteOutbox', 'Remote Node must own the durable H4 outbox.')
-requireText(node, 'private async flushOutbox(targetDeliveryId?: string)', 'H4 publication must have one ordered outbox drain with optional target tracking.')
+requireText(node, 'drainZero3RemoteOutboxInOrder(', 'Remote Node must delegate publication ordering to the shared drain coordinator.')
+requireText(node, 'envelope => this.publishEnvelope(envelope)', 'Remote Node drain must use the one ack/quarantine publication boundary.')
 requireText(node, 'await this.flushOutbox()', 'Remote Node must replay durable envelopes after reconnect and before new leases.')
 requireText(node, 'await this.flushOutbox(envelope.deliveryId)', 'New durable envelopes must be published through the ordered outbox drain.')
 requireText(node, 'await this.flushOutbox(terminalEnvelope.deliveryId)', 'Successful terminal outcomes must drain older pending evidence before publication.')
@@ -56,13 +62,11 @@ requireText(node, 'terminalDurable = true', 'Terminal delivery failure must not 
 requireText(node, 'this.activeLeaseInvalid = true', 'Known stale fencing must stop further authoritative publication for the active lease.')
 requireText(node, "return 'quarantined'", 'Known stale envelopes must be quarantined rather than silently acknowledged.')
 requireText(overlay, "'remote-outbox.ts'", 'Prepared Electron runtime must ship the H4 outbox implementation.')
+requireText(overlay, "'remote-outbox-drain.ts'", 'Prepared Electron runtime must ship the H4 ordered drain coordinator.')
 
-const localPublishCalls = node.match(/await this\.publishEnvelope\(/g) ?? []
-if (localPublishCalls.length !== 1) {
-  throw new Error(`H4 Remote Node must call publishEnvelope only from the ordered flushOutbox drain; found ${localPublishCalls.length} direct calls.`)
-}
+forbidText(node, 'await this.publishEnvelope(', 'New or replayed envelopes must never bypass the shared ordered drain coordinator.')
 
-for (const source of [outbox, node]) {
+for (const source of [outbox, drain, node]) {
   for (const forbidden of ['child_process', 'exec(', 'spawn(', 'powershell.exe', 'cmd.exe /c', 'simple-git']) {
     forbidText(source, forbidden, `H4 delivery infrastructure must not become a shell/Git execution path: ${forbidden}`)
   }
@@ -70,6 +74,7 @@ for (const source of [outbox, node]) {
 
 forbidText(outbox, 'authorization', 'Bearer credentials must never be persisted in the H4 outbox.')
 forbidText(outbox, 'tokenFile', 'H4 outbox must not persist or read control-plane credentials.')
+forbidText(drain, 'authorization', 'H4 ordered drain must remain credential-agnostic.')
 forbidText(node, "ipcRenderer.invoke('zero3:codex:rpc'", 'H4 must not add a renderer-controlled generic Codex RPC channel.')
 
 console.log('Zero3 Remote Host H4 architecture guard passed: durable bounded ordered outbox -> preserved delivery/fencing identity -> replay/ack/quarantine, with Codex remaining the sole Agent Kernel.')
