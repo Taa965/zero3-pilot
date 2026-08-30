@@ -2,14 +2,15 @@
 
 Status: **AUDIT_READY / IMPLEMENTATION_BLOCKED**
 
-This directory is owned by Zero3 Pilot Session 3. The current commit is deliberately audit-only: it does not define shared Executor Contract types, does not implement Router policy, and does not make ACP an alternative Agent Kernel.
+This directory is owned by Zero3 Pilot Session 3. The current commits are deliberately audit-only: they do not define shared Executor Contract types, do not implement Router policy, and do not make ACP an alternative Agent Kernel.
 
 ## Baseline
 
 - Session branch: `feat/r4b-acp-executors`
 - Audit base: `main@9f11c6e8c88283dbcaf8cc51e6a6fb35c5f25f7f`
 - Required upstream dependency: frozen R4A Executor Contract SHA
-- Current blocker: `feat/r4a-executor-contract` still points at the audit base and no `BASELINE FREEZE` contract SHA has been issued.
+- R4A candidate observed: `29f72f47b1f18df54240c70a745c69e53822b4dd`
+- Current blocker: the R4A candidate is not merged/frozen and no integration-controller `BASELINE FREEZE` has been issued.
 
 Formal R4B implementation must not begin until the integration controller freezes the R4A contract and allowed/forbidden paths.
 
@@ -47,6 +48,22 @@ Current audit findings:
 5. `@agentclientprotocol/codex-acp` is an optional compatibility external executor only. It must not replace or redefine the Native Codex path owned by Session 4.
 6. `@agentclientprotocol/claude-agent-acp` remains an optional external executor. Its Claude Agent SDK dependency stays encapsulated behind the adapter package; Zero3 Pilot core must not vendor Claude SDK types or runtime behavior.
 7. The pinned Hermes desktop shell requires Node 22.22+ (or its declared alternatives), which satisfies the audited `acpx` Node 22.13+ floor.
+
+## R4A candidate compatibility review
+
+The observed, **unfrozen** R4A candidate already aligns with several R4B needs:
+
+- `ExecutorKind` contains `external-agent`;
+- failure taxonomy contains `quota_exhausted`, `rate_limited`, `auth_required`, `permission_denied`, `transport_lost`, `process_crash`, and `context_lost`;
+- `Zero3Executor` exposes `probe`, `start`, `resume`, `prompt`, `cancel`, and `close`;
+- `ExecutorEvent` contains message/reasoning/plan/tool/permission/usage/failure/completed projections.
+
+Two contract questions must be resolved by R4A/control **before freeze**; R4B will not invent parallel shared types to work around them:
+
+1. **Interactive permission response channel.** The candidate can emit `permission.requested`, but `Zero3Executor` currently exposes no method/input for returning the user/policy decision to the executor. ACP permission handling is bidirectional. R4B cannot safely implement this by auto-approving or by creating an ACP-only side channel outside the shared contract. The frozen contract needs an explicit decision path or an explicit controller-owned mechanism.
+2. **Unsupported negotiated protocol/capability after startup.** `ExecutorProbeStatus` has `unsupported`, but the runtime failure taxonomy has no dedicated unsupported protocol/capability failure code. If ACP initialize/session negotiation fails after a probe, R4B needs an authoritative frozen mapping rather than inventing one locally.
+
+These are producer-contract feedback items, not Session 3-owned changes.
 
 ## Target implementation after R4A freeze
 
