@@ -114,11 +114,14 @@ export class Zero3RemoteNode {
     }
   }
 
-  private async flushOutbox(): Promise<void> {
+  private async flushOutbox(targetDeliveryId?: string): Promise<PublishEnvelopeResult | null> {
     for (const envelope of await this.outbox.list()) {
-      if (this.stopped) return
-      await this.publishEnvelope(envelope)
+      if (this.stopped) return null
+      const result = await this.publishEnvelope(envelope)
+      if (targetDeliveryId === envelope.deliveryId) return result
+      if (this.activeLeaseInvalid && this.statusValue.activeTaskId === envelope.taskId) return null
     }
+    return null
   }
 
   private async durableEvent(
@@ -136,9 +139,12 @@ export class Zero3RemoteNode {
       return
     }
     try {
-      const result = await this.publishEnvelope(envelope)
+      const result = await this.flushOutbox(envelope.deliveryId)
       if (result === 'quarantined' && requireImmediateDelivery) {
         throw new Zero3RemoteDeliveryPendingError('required remote event was rejected as stale; local Codex execution was not started')
+      }
+      if (result == null && requireImmediateDelivery) {
+        throw new Zero3RemoteDeliveryPendingError('required remote event was not published in durable outbox order')
       }
     } catch (error) {
       if (error instanceof Zero3RemoteDeliveryPendingError) throw error
@@ -159,7 +165,7 @@ export class Zero3RemoteNode {
     await this.refreshPendingDeliveries()
     if (this.activeLeaseInvalid) return
     try {
-      await this.publishEnvelope(envelope)
+      await this.flushOutbox(envelope.deliveryId)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       throw new Zero3RemoteDeliveryPendingError(`terminal result is durably pending: ${reason}`)
@@ -203,7 +209,8 @@ export class Zero3RemoteNode {
           try {
             // The accepted event is persisted before publication, and Codex side
             // effects do not begin unless the current lease can be correlated to
-            // the control plane at least once.
+            // the control plane at least once. Every publication also drains older
+            // durable envelopes first, so accepted/evidence/terminal cannot overtake.
             await this.durableEvent(lease, 'host.accepted', { node_id: this.config.nodeId }, true)
 
             if (this.leaseRenewTimer) clearInterval(this.leaseRenewTimer)
@@ -223,7 +230,7 @@ export class Zero3RemoteNode {
             const terminalEnvelope = await this.outbox.enqueueTerminal(lease, result.state, result)
             terminalDurable = true
             await this.refreshPendingDeliveries()
-            if (!this.activeLeaseInvalid) await this.publishEnvelope(terminalEnvelope)
+            if (!this.activeLeaseInvalid) await this.flushOutbox(terminalEnvelope.deliveryId)
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error)
             const terminalState: Zero3RemoteTerminalState =
@@ -242,7 +249,7 @@ export class Zero3RemoteNode {
                 const envelope = await this.outbox.enqueueTerminal(lease, terminalState, { reason })
                 terminalDurable = true
                 await this.refreshPendingDeliveries()
-                if (!this.activeLeaseInvalid) await this.publishEnvelope(envelope)
+                if (!this.activeLeaseInvalid) await this.flushOutbox(envelope.deliveryId)
               } catch (terminalError) {
                 this.statusValue.lastError = `remote terminal persistence/publication failed: ${terminalError instanceof Error ? terminalError.message : String(terminalError)}`
               }
