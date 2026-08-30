@@ -1,0 +1,246 @@
+diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/extension-api/src/contributors.rs
+--- a/codex-rs/ext/extension-api/src/contributors.rs
++++ b/codex-rs/ext/extension-api/src/contributors.rs
+@@ -5,6 +5,7 @@ use codex_context_fragments::ContextualUserFragment;
+ use codex_context_fragments::ContextualUserFragment;
+ use codex_protocol::items::TurnItem;
+ use codex_protocol::models::ResponseInputItem;
++use codex_protocol::models::ResponseItem;
+ use codex_protocol::protocol::ReviewDecision;
+ use codex_protocol::protocol::TokenUsageInfo;
+ use codex_tools::ToolCall;
+@@ -75,6 +76,19 @@ pub struct ToolResultInput<'a> {
+     pub complete_text: Option<&'a str>,
+ }
+ 
++/// Future returned by the cloned compaction-history projection seam.
++pub type CompactionHistoryItemFuture<'a> = ExtensionFuture<'a, Result<Option<ResponseItem>, String>>;
++
++/// One item from a private cloned history that is about to become compaction
++/// model input. Replacements affect only that clone, never authoritative history.
++pub struct CompactionHistoryItemInput<'a> {
++    pub thread_store: &'a ExtensionData,
++    /// History-envelope turn id when one exists.
++    pub turn_id: Option<&'a str>,
++    /// Current model-visible item after earlier contributors in registration order.
++    pub item: &'a ResponseItem,
++}
++
+ /// Extension contribution that resolves runtime MCP servers from host config.
+ ///
+ /// Contributors run in registration order. Later contributions for the same
+@@ -360,6 +374,20 @@ pub trait ToolLifecycleContributor: Send + Sync {
+     fn on_tool_result<'a>(&'a self, _input: ToolResultInput<'a>) -> ToolResultFuture<'a> {
+         Box::pin(std::future::ready(Ok(None)))
+     }
++
++    /// Optionally replaces one item only in the private history clone used to
++    /// construct a compaction request.
++    ///
++    /// The host preserves history-envelope metadata and never writes this
++    /// replacement back to authoritative Thread/Turn/Item history. Errors are
++    /// fail-open at the host. Implementations must not use this seam as a second
++    /// execution, approval, sandbox, or persistence authority.
++    fn on_compaction_history_item<'a>(
++        &'a self,
++        _input: CompactionHistoryItemInput<'a>,
++    ) -> CompactionHistoryItemFuture<'a> {
++        Box::pin(std::future::ready(Ok(None)))
++    }
+ 
+     /// Called after the tool call returns, is blocked, fails, or is cancelled.
+     ///
+diff --git a/codex-rs/ext/extension-api/src/lib.rs b/codex-rs/ext/extension-api/src/lib.rs
+--- a/codex-rs/ext/extension-api/src/lib.rs
++++ b/codex-rs/ext/extension-api/src/lib.rs
+@@ -62,9 +62,11 @@ pub use contributors::TokenUsageContributor;
+ pub use contributors::TokenUsageContributor;
+ pub use contributors::ToolCallOutcome;
+ pub use contributors::ToolContributor;
+ pub use contributors::ToolFinishInput;
++pub use contributors::CompactionHistoryItemFuture;
++pub use contributors::CompactionHistoryItemInput;
+ pub use contributors::ToolLifecycleContributor;
+ pub use contributors::ToolLifecycleFuture;
+ pub use contributors::ToolResultFuture;
+ pub use contributors::ToolResultInput;
+ pub use contributors::ToolStartInput;
+diff --git a/codex-rs/core/src/compact.rs b/codex-rs/core/src/compact.rs
+--- a/codex-rs/core/src/compact.rs
++++ b/codex-rs/core/src/compact.rs
+@@ -7,6 +7,7 @@ use crate::context::CompactionSummary;
+ use crate::context::CompactionSummary;
+ use crate::context::ContextualUserFragment;
+ use crate::context::world_state::WorldState;
++use crate::context_manager::ContextManager;
+ use crate::hook_runtime::PostCompactHookOutcome;
+ use crate::hook_runtime::PreCompactHookOutcome;
+ use crate::hook_runtime::run_post_compact_hooks;
+@@ -81,6 +82,46 @@ pub(crate) struct CompactedHistoryMetadata {
+     pub(crate) window_ids: AutoCompactWindowIds,
+ }
+ 
++/// Runs registered model-projection contributors against a private compaction
++/// history clone. Authoritative session history and envelope metadata are never
++/// mutated by this helper.
++pub(crate) async fn project_compaction_history(
++    sess: &Session,
++    history: &mut ContextManager,
++) {
++    let contributors = sess.services.extensions.tool_lifecycle_contributors();
++    if contributors.is_empty() {
++        return;
++    }
++
++    let mut items = history.annotated_items().to_vec();
++    let mut changed = false;
++    for envelope in &mut items {
++        for contributor in contributors {
++            let input = codex_extension_api::CompactionHistoryItemInput {
++                thread_store: &sess.services.thread_extension_data,
++                turn_id: envelope.turn_id(),
++                item: &envelope.item,
++            };
++            match contributor.on_compaction_history_item(input).await {
++                Ok(Some(projected)) => {
++                    envelope.item = projected;
++                    changed = true;
++                }
++                Ok(None) => {}
++                Err(error) => tracing::warn!(
++                    %error,
++                    "compaction history projection contributor failed; keeping current item"
++                ),
++            }
++        }
++    }
++
++    if changed {
++        history.replace_annotated(items);
++    }
++}
++
+ pub(crate) async fn build_compaction_initial_context(
+     sess: &Session,
+     initial_context_injection: &InitialContextInjection,
+@@ -256,6 +296,7 @@ async fn run_compact_task_inner_impl(
+     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+ 
+     let mut history = sess.clone_history().await;
++    project_compaction_history(sess.as_ref(), &mut history).await;
+     history.record_items(
+         &[initial_input_for_turn.into()],
+         turn_context.model_info().truncation_policy.into(),
+diff --git a/codex-rs/core/src/compact_remote.rs b/codex-rs/core/src/compact_remote.rs
+--- a/codex-rs/core/src/compact_remote.rs
++++ b/codex-rs/core/src/compact_remote.rs
+@@ -49,6 +49,7 @@ use request::run_remote_compact_attempt;
+ 
+ const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
+     "Output exceeded the available model context and was truncated";
++const ZERO3_SPILL_LOCATOR_PREFIX: &str = "zero3-spill://v1/";
+ 
+ pub(crate) async fn run_inline_remote_auto_compact_task(
+     sess: Arc<Session>,
+@@ -515,11 +516,61 @@ fn rewritten_output_for_context_window(
+ }
+ 
+ fn truncated_output_payload(output: &FunctionCallOutputPayload) -> FunctionCallOutputPayload {
++    let text = match &output.body {
++        FunctionCallOutputBody::Text(text) => retained_zero3_spill_locator(text).map_or_else(
++            || CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string(),
++            |locator| {
++                format!(
++                    "{CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE}\nZero3 recovery locator retained from prior model projection: {locator}"
++                )
++            },
++        ),
++        FunctionCallOutputBody::ContentItems(_) => CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string(),
++    };
+     FunctionCallOutputPayload {
+-        body: FunctionCallOutputBody::Text(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string()),
++        body: FunctionCallOutputBody::Text(text),
+         success: output.success,
+     }
+ }
+ 
++/// Preserves only the bounded opaque D1 locator token when Codex's existing
++/// fit-to-window fallback is already going to replace the entire output.
++///
++/// Presence of a locator never decides whether fallback truncation happens;
++/// D2's extension performs real SpillStore sidecar verification before its own
++/// pruning. This helper only prevents the fallback replacement from erasing a
++/// recovery token that was already model-visible.
++fn retained_zero3_spill_locator(text: &str) -> Option<&str> {
++    let start = text.rfind(ZERO3_SPILL_LOCATOR_PREFIX)?;
++    let rest = &text[start..];
++    let end = rest
++        .find(|character: char| {
++            character.is_whitespace()
++                || matches!(character, ']' | ';' | ',' | ')' | '>' | '"' | '\'')
++        })
++        .unwrap_or(rest.len());
++    let locator = &rest[..end];
++    (locator.len() > ZERO3_SPILL_LOCATOR_PREFIX.len()).then_some(locator)
++}
++
++#[cfg(test)]
++mod zero3_recovery_locator_tests {
++    use super::*;
++
++    #[test]
++    fn remote_fallback_retains_only_the_locator_token() {
++        let text = "preview zero3-spill://v1/1a-2b-3c; recover with read_spill";
++        assert_eq!(
++            retained_zero3_spill_locator(text),
++            Some("zero3-spill://v1/1a-2b-3c")
++        );
++    }
++
++    #[test]
++    fn remote_fallback_has_no_zero3_suffix_without_locator() {
++        assert_eq!(retained_zero3_spill_locator("ordinary output"), None);
++    }
++}
++
+ #[cfg(test)]
+ #[path = "compact_remote_metadata_tests.rs"]
+ mod metadata_tests;
+diff --git a/codex-rs/core/src/compact_remote_request.rs b/codex-rs/core/src/compact_remote_request.rs
+--- a/codex-rs/core/src/compact_remote_request.rs
++++ b/codex-rs/core/src/compact_remote_request.rs
+@@ -5,6 +5,7 @@ use super::trim_function_call_history_to_fit_context_window;
+ use crate::Prompt;
+ use crate::client::CompactConversationRequestSettings;
+ use crate::compact::CompactionAnalyticsDetails;
++use crate::compact::project_compaction_history;
+ use crate::responses_metadata::CodexResponsesRequestKind;
+ use crate::responses_metadata::CompactionTurnMetadata;
+ use crate::session::session::Session;
+@@ -31,6 +32,7 @@ pub(super) async fn run_remote_compact_attempt(
+ ) -> CodexResult<RemoteCompactAttempt> {
+     let turn_context = &step_context.turn;
+     let mut history = sess.clone_history().await;
++    project_compaction_history(sess.as_ref(), &mut history).await;
+     let base_instructions = sess.get_base_instructions().await;
+     let (rewritten_outputs, estimated_deleted_tokens) =
+         trim_function_call_history_to_fit_context_window(
+diff --git a/codex-rs/core/src/compact_remote_v2_attempt.rs b/codex-rs/core/src/compact_remote_v2_attempt.rs
+--- a/codex-rs/core/src/compact_remote_v2_attempt.rs
++++ b/codex-rs/core/src/compact_remote_v2_attempt.rs
+@@ -5,6 +5,7 @@ use super::run_remote_compaction_request_v2;
+ use crate::Prompt;
+ use crate::client::ModelClientSession;
+ use crate::compact::CompactionAnalyticsDetails;
++use crate::compact::project_compaction_history;
+ use crate::compact_remote::trim_function_call_history_to_fit_context_window;
+ use crate::responses_metadata::CodexResponsesRequestKind;
+ use crate::responses_metadata::CompactionTurnMetadata;
+@@ -40,6 +41,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
+ ) -> CodexResult<RemoteCompactV2Attempt> {
+     let turn_context = &step_context.turn;
+     let mut history = sess.clone_history().await;
++    project_compaction_history(sess.as_ref(), &mut history).await;
+     let base_instructions = sess.get_base_instructions().await;
+     let (rewritten_outputs, estimated_deleted_tokens) =
+         trim_function_call_history_to_fit_context_window(

@@ -1,0 +1,98 @@
+name: D2 Context Retention
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'benchmarks/context-retention/**'
+      - 'codex-overlays/ext/zero3-context-retention/**'
+      - 'codex-overlays/ext/zero3-output-retention/**'
+      - 'codex-overlays/patches/context-pruning/**'
+      - 'codex-overlays/patches/output-retention/**'
+      - 'codex-overlays/manifest.json'
+      - 'scripts/codex-overlay.mjs'
+      - 'apps/zero3-desktop/**'
+      - '.github/workflows/d2-context-retention.yml'
+
+jobs:
+  context-retention:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Initialize reviewed upstream pins
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
+          test "$(git -C upstream/codex rev-parse HEAD)" = "94311d447587411789533c47601fd8bc9d81eb48"
+          test "$(git -C upstream/hermes-agent rev-parse HEAD)" = "f7c79efbac19ae18e8dee7c79a4e4c0935299b5f"
+          test "$(git -C upstream/deepseek-harness rev-parse HEAD)" = "cd5ef8148158c3a752a658978873241fdf8e2bbc"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Verify frozen D1/D2 integration contract
+        run: |
+          set -euo pipefail
+          test "$(grep -c 'project_compaction_history(sess.as_ref(), &mut history).await;' codex-overlays/patches/context-pruning/010-context-retention-compaction-projection.patch)" -eq 3
+          grep -F 'output_retention.store()' codex-overlays/patches/context-pruning/020-context-retention-app-server-install.patch
+          grep -F 'codex-zero3-output-retention = { workspace = true }' codex-overlays/ext/zero3-context-retention/Cargo.toml
+          ! grep -R -F 'LocalSpillStore::new' codex-overlays/ext/zero3-context-retention
+
+      - name: D1 to D2 patch-chain preflight
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/zero3-d2-patch-preflight
+          cp -a upstream/codex /tmp/zero3-d2-patch-preflight
+          rm -rf /tmp/zero3-d2-patch-preflight/.git
+          git -C /tmp/zero3-d2-patch-preflight init -q
+          git -C /tmp/zero3-d2-patch-preflight apply --verbose "$GITHUB_WORKSPACE/codex-overlays/patches/output-retention/010-output-retention-tool-result-projection.patch"
+          git -C /tmp/zero3-d2-patch-preflight apply --verbose "$GITHUB_WORKSPACE/codex-overlays/patches/output-retention/020-output-retention-app-server-install.patch"
+          git -C /tmp/zero3-d2-patch-preflight apply --check --verbose "$GITHUB_WORKSPACE/codex-overlays/patches/context-pruning/010-context-retention-compaction-projection.patch"
+          git -C /tmp/zero3-d2-patch-preflight apply --verbose "$GITHUB_WORKSPACE/codex-overlays/patches/context-pruning/010-context-retention-compaction-projection.patch"
+          git -C /tmp/zero3-d2-patch-preflight apply --check --verbose "$GITHUB_WORKSPACE/codex-overlays/patches/context-pruning/020-context-retention-app-server-install.patch"
+
+      - name: Prepare combined D1+D2 Codex overlay
+        run: npm --prefix apps/zero3-desktop run prepare
+
+      - name: Verify managed overlay and detached replay
+        run: |
+          node scripts/codex-overlay.mjs verify
+          node scripts/codex-overlay.mjs replay
+
+      - name: Codex format check
+        run: cargo fmt --manifest-path upstream/codex/codex-rs/Cargo.toml --all -- --check
+
+      - name: D1 output retention tests
+        run: cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-zero3-output-retention
+
+      - name: D2 context retention tests
+        run: cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-zero3-context-retention
+
+      - name: Remote fallback recovery-locator tests
+        run: cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-core zero3_recovery_locator_tests
+
+      - name: App-server combined integration check
+        run: cargo check --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-app-server
+
+      - name: Build pinned Codex CLI
+        run: cargo build --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-cli --bin codex
+
+      - name: Real app-server JSONL smoke
+        run: node apps/zero3-desktop/scripts/smoke-codex-app-server.mjs upstream/codex/codex-rs/target/debug/codex
+
+      - name: Synthetic 100/20 retention benchmark
+        run: node benchmarks/context-retention/run.mjs
+
+      - name: Architecture guards
+        run: |
+          node scripts/check-codex-overlay.mjs
+          node scripts/check-architecture.mjs

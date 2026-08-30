@@ -85,6 +85,24 @@
         "license": "MIT",
         "notes": "Native Rust reimplementation against Codex extension seams; DeepSeek-Harness is never launched."
       }
+    },
+    {
+      "id": "zero3-context-retention",
+      "feature": "context-pruning",
+      "source": "codex-overlays/ext/zero3-context-retention/",
+      "destination": "codex-rs/ext/zero3/context-retention/",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "algorithm-derived",
+        "source_files": [
+          "packages/compaction/compaction-tool-result-pruner/src/index.ts",
+          "packages/compaction/compaction-tool-result-pruner/src/config.ts",
+          "packages/compaction/compaction-tool-result-pruner/tests/tool-result-pruner.spec.ts"
+        ],
+        "license": "MIT",
+        "notes": "Deterministic pruning ideas are rewritten in Rust; Codex remains compaction authority and D1 remains spill/recovery authority."
+      }
     }
   ],
   "patches": [
@@ -121,6 +139,42 @@
         ],
         "license": "MIT",
         "notes": "Host integration is Zero3-authored against Codex ExtensionRegistryBuilder; donor informs persistence semantics only."
+      }
+    },
+    {
+      "id": "010-context-retention-compaction-projection",
+      "feature": "context-pruning",
+      "path": "codex-overlays/patches/context-pruning/010-context-retention-compaction-projection.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex exposes no typed hook for transforming only the private cloned history used to construct local, remote, and remote-v2 compaction model input.",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "algorithm-derived",
+        "source_files": [
+          "packages/compaction/compaction-tool-result-pruner/src/index.ts",
+          "packages/compaction/compaction-tool-result-pruner/src/config.ts",
+          "packages/compaction/compaction-tool-result-pruner/tests/tool-result-pruner.spec.ts"
+        ],
+        "license": "MIT",
+        "notes": "Only deterministic pruning behavior is derived; authoritative history and Codex compaction implementations remain unchanged."
+      }
+    },
+    {
+      "id": "020-context-retention-app-server-install",
+      "feature": "context-pruning",
+      "path": "codex-overlays/patches/context-pruning/020-context-retention-app-server-install.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex app-server does not install the Zero3 context-retention contributor or expose D1's installed SpillStore handle to it.",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "design-derived",
+        "source_files": [
+          "packages/compaction/compaction-tool-result-pruner/src/index.ts"
+        ],
+        "license": "MIT",
+        "notes": "Zero3-authored host wiring reuses the exact D1 SpillStore; no second persistence or compaction authority is introduced."
       }
     }
   ]

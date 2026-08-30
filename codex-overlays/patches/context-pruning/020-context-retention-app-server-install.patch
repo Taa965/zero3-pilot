@@ -1,0 +1,46 @@
+diff --git a/codex-rs/Cargo.toml b/codex-rs/Cargo.toml
+--- a/codex-rs/Cargo.toml
++++ b/codex-rs/Cargo.toml
+@@ -69,5 +69,6 @@ members = [
+     "ext/queue",
+     "ext/skills",
+     "ext/web-search",
++    "ext/zero3/context-retention",
+     "ext/zero3/output-retention",
+     "external-agent-migration",
+@@ -222,5 +223,6 @@ codex-login = { path = "login" }
+ codex-message-history = { path = "message-history" }
+ codex-memories-extension = { path = "ext/memories" }
+ codex-web-search-extension = { path = "ext/web-search" }
++codex-zero3-context-retention = { path = "ext/zero3/context-retention" }
+ codex-zero3-output-retention = { path = "ext/zero3/output-retention" }
+ codex-memories-read = { path = "memories/read" }
+diff --git a/codex-rs/app-server/Cargo.toml b/codex-rs/app-server/Cargo.toml
+--- a/codex-rs/app-server/Cargo.toml
++++ b/codex-rs/app-server/Cargo.toml
+@@ -71,5 +71,6 @@ codex-login = { workspace = true }
+ codex-image-generation-extension = { workspace = true }
+ codex-memories-extension = { workspace = true }
+ codex-web-search-extension = { workspace = true }
++codex-zero3-context-retention = { workspace = true }
+ codex-zero3-output-retention = { workspace = true }
+ codex-memories-write = { workspace = true }
+diff --git a/codex-rs/app-server/src/extensions.rs b/codex-rs/app-server/src/extensions.rs
+--- a/codex-rs/app-server/src/extensions.rs
++++ b/codex-rs/app-server/src/extensions.rs
+@@ -116,9 +116,14 @@ where
+     let spill_store = Arc::new(codex_zero3_output_retention::LocalSpillStore::new(
+         codex_home.join("zero3").join("spills"),
+     ));
+-    let _output_retention = codex_zero3_output_retention::install(
++    let output_retention = codex_zero3_output_retention::install(
+         &mut builder,
+         spill_store,
+         codex_zero3_output_retention::OutputRetentionConfig::default(),
+     );
++    let _context_retention = codex_zero3_context_retention::install(
++        &mut builder,
++        output_retention.store(),
++        codex_zero3_context_retention::PruneConfig::default(),
++    );
+     let skill_providers = codex_skills_extension::SkillProviders::new()
