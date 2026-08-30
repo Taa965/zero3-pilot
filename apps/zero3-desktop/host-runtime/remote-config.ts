@@ -30,8 +30,16 @@ function defaultNodeId(): string {
   return `zero3-${host}`
 }
 
+function defaultRemoteHostStateRoot(): string {
+  return path.join(os.homedir(), '.zero3-pilot', 'remote-host')
+}
+
 function defaultMappingStateFile(): string {
-  return path.join(os.homedir(), '.zero3-pilot', 'remote-host', 'task-mappings.json')
+  return path.join(defaultRemoteHostStateRoot(), 'task-mappings.json')
+}
+
+function defaultOutboxDir(): string {
+  return path.join(defaultRemoteHostStateRoot(), 'outbox')
 }
 
 export function loadZero3RemoteHostConfig(): Zero3RemoteHostConfig {
@@ -44,9 +52,19 @@ export function loadZero3RemoteHostConfig(): Zero3RemoteHostConfig {
   const mappingStateFile = path.resolve(
     process.env.ZERO3_REMOTE_HOST_MAPPING_STATE_FILE?.trim() || defaultMappingStateFile()
   )
+  const outboxDir = path.resolve(process.env.ZERO3_REMOTE_HOST_OUTBOX_DIR?.trim() || defaultOutboxDir())
 
   if (!enabled) {
-    return { enabled, baseUrl, tokenFile, nodeId, allowedWorkspaces, developmentAllowHttp, mappingStateFile }
+    return {
+      enabled,
+      baseUrl,
+      tokenFile,
+      nodeId,
+      allowedWorkspaces,
+      developmentAllowHttp,
+      mappingStateFile,
+      outboxDir
+    }
   }
   if (!baseUrl) throw new Error('ZERO3_REMOTE_HOST_BASE_URL is required when remote host is enabled')
   const parsed = new URL(baseUrl)
@@ -68,7 +86,8 @@ export function loadZero3RemoteHostConfig(): Zero3RemoteHostConfig {
     nodeId,
     allowedWorkspaces,
     developmentAllowHttp,
-    mappingStateFile
+    mappingStateFile,
+    outboxDir
   }
 }
 

@@ -1,12 +1,21 @@
 import { loadZero3RemoteHostConfig } from './remote-config'
-import { Zero3RemoteClient } from './remote-client'
+import {
+  Zero3RemoteClient,
+  zero3RemoteControlPlaneRejectedStaleEnvelope
+} from './remote-client'
+import { Zero3RemoteOutbox } from './remote-outbox'
 import {
   Zero3RemoteTaskBlockedError,
   Zero3RemoteTaskOutcomeUnknownError,
   Zero3RemoteTaskRunner,
   type Zero3CodexRuntime
 } from './remote-task-runner'
-import type { Zero3RemoteHostStatus } from './remote-types'
+import type {
+  Zero3RemoteHostStatus,
+  Zero3RemoteLease,
+  Zero3RemoteOutboxEnvelope,
+  Zero3RemoteTerminalState
+} from './remote-types'
 
 const HEARTBEAT_INTERVAL_MS = 15_000
 const LEASE_RENEW_INTERVAL_MS = 10_000
@@ -17,14 +26,25 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+class Zero3RemoteDeliveryPendingError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'Zero3RemoteDeliveryPendingError'
+  }
+}
+
+type PublishEnvelopeResult = 'published' | 'quarantined'
+
 export class Zero3RemoteNode {
   private readonly config = loadZero3RemoteHostConfig()
   private readonly client = new Zero3RemoteClient(this.config)
+  private readonly outbox = new Zero3RemoteOutbox(this.config.outboxDir)
   private readonly runner: Zero3RemoteTaskRunner
   private stopped = false
   private running: Promise<void> | null = null
   private heartbeatTimer: NodeJS.Timeout | null = null
   private leaseRenewTimer: NodeJS.Timeout | null = null
+  private activeLeaseInvalid = false
   private statusValue: Zero3RemoteHostStatus
 
   constructor(codex: Zero3CodexRuntime) {
@@ -34,6 +54,7 @@ export class Zero3RemoteNode {
       connected: false,
       nodeId: this.config.nodeId,
       activeTaskId: null,
+      pendingDeliveries: 0,
       lastError: null,
       lastHeartbeatAt: null
     }
@@ -62,10 +83,87 @@ export class Zero3RemoteNode {
     this.statusValue.connected = false
   }
 
+  private async refreshPendingDeliveries(): Promise<void> {
+    this.statusValue.pendingDeliveries = await this.outbox.count()
+  }
+
   private async heartbeat(): Promise<void> {
+    await this.refreshPendingDeliveries()
     await this.client.heartbeat(this.status())
     this.statusValue.connected = true
     this.statusValue.lastHeartbeatAt = new Date().toISOString()
+  }
+
+  private async publishEnvelope(envelope: Zero3RemoteOutboxEnvelope): Promise<PublishEnvelopeResult> {
+    try {
+      await this.client.publishEnvelope(envelope)
+      await this.outbox.ack(envelope.deliveryId)
+      await this.refreshPendingDeliveries()
+      return 'published'
+    } catch (error) {
+      if (zero3RemoteControlPlaneRejectedStaleEnvelope(error)) {
+        const reason = error instanceof Error ? error.message : String(error)
+        await this.outbox.quarantine(envelope, reason)
+        if (this.statusValue.activeTaskId === envelope.taskId) this.activeLeaseInvalid = true
+        await this.refreshPendingDeliveries()
+        this.statusValue.lastError = `remote outbox envelope quarantined after stale lease/fencing rejection: ${reason}`
+        return 'quarantined'
+      }
+      await this.refreshPendingDeliveries()
+      throw error
+    }
+  }
+
+  private async flushOutbox(): Promise<void> {
+    for (const envelope of await this.outbox.list()) {
+      if (this.stopped) return
+      await this.publishEnvelope(envelope)
+    }
+  }
+
+  private async durableEvent(
+    lease: Zero3RemoteLease,
+    eventType: string,
+    payload: unknown,
+    requireImmediateDelivery: boolean
+  ): Promise<void> {
+    const envelope = await this.outbox.enqueueEvent(lease, eventType, payload)
+    await this.refreshPendingDeliveries()
+    if (this.activeLeaseInvalid) {
+      if (requireImmediateDelivery) {
+        throw new Zero3RemoteDeliveryPendingError('required remote event cannot be published because the active lease is invalid')
+      }
+      return
+    }
+    try {
+      const result = await this.publishEnvelope(envelope)
+      if (result === 'quarantined' && requireImmediateDelivery) {
+        throw new Zero3RemoteDeliveryPendingError('required remote event was rejected as stale; local Codex execution was not started')
+      }
+    } catch (error) {
+      if (error instanceof Zero3RemoteDeliveryPendingError) throw error
+      const reason = error instanceof Error ? error.message : String(error)
+      if (requireImmediateDelivery) {
+        throw new Zero3RemoteDeliveryPendingError(`required remote event is durably pending: ${reason}`)
+      }
+      this.statusValue.lastError = `remote evidence is durably pending: ${reason}`
+    }
+  }
+
+  private async durableTerminal(
+    lease: Zero3RemoteLease,
+    state: Zero3RemoteTerminalState,
+    result: unknown
+  ): Promise<void> {
+    const envelope = await this.outbox.enqueueTerminal(lease, state, result)
+    await this.refreshPendingDeliveries()
+    if (this.activeLeaseInvalid) return
+    try {
+      await this.publishEnvelope(envelope)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Zero3RemoteDeliveryPendingError(`terminal result is durably pending: ${reason}`)
+    }
   }
 
   private async loop(): Promise<void> {
@@ -75,6 +173,7 @@ export class Zero3RemoteNode {
         await this.client.register(['codex', 'thread', 'turn', 'shell', 'file', 'git', 'mcp'])
         this.statusValue.connected = true
         this.statusValue.lastError = null
+        await this.flushOutbox()
         await this.heartbeat()
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
         this.heartbeatTimer = setInterval(() => {
@@ -86,69 +185,73 @@ export class Zero3RemoteNode {
 
         retryMs = LEASE_RETRY_MIN_MS
         while (!this.stopped) {
+          await this.flushOutbox()
           const lease = await this.client.lease(25)
           if (!lease) continue
           const taskId = lease.task?.task_id
           if (!taskId) throw new Error('leased remote task is missing task_id')
           if (this.statusValue.activeTaskId) {
-            await this.client.terminal(taskId, lease, 'blocked', {
+            await this.durableTerminal(lease, 'blocked', {
               reason: 'local Zero3 Remote Host already has an active remote task'
             })
             continue
           }
 
           this.statusValue.activeTaskId = taskId
-          let terminalSent = false
+          this.activeLeaseInvalid = false
+          let terminalDurable = false
           try {
-            // Do not start local side effects until the leased task can be
-            // correlated back to the control plane at least once.
-            await this.client.event(taskId, lease, 1, 'host.accepted', {
-              node_id: this.config.nodeId
-            })
+            // The accepted event is persisted before publication, and Codex side
+            // effects do not begin unless the current lease can be correlated to
+            // the control plane at least once.
+            await this.durableEvent(lease, 'host.accepted', { node_id: this.config.nodeId }, true)
 
             if (this.leaseRenewTimer) clearInterval(this.leaseRenewTimer)
             this.leaseRenewTimer = setInterval(() => {
               void this.client.renew(taskId, lease).catch(error => {
-                // The control plane remains authoritative for lease/fencing.
-                // A renewal failure is surfaced and later event/terminal writes
-                // still carry the same fencing token; stale writers are refused.
+                if (zero3RemoteControlPlaneRejectedStaleEnvelope(error)) {
+                  this.activeLeaseInvalid = true
+                }
                 this.statusValue.lastError = `remote task lease renewal failed: ${error instanceof Error ? error.message : String(error)}`
               })
             }, LEASE_RENEW_INTERVAL_MS)
 
-            const result = await this.runner.run(lease, async (sequence, method, payload) => {
-              try {
-                await this.client.event(taskId, lease, sequence + 1, `codex.${method}`, payload)
-              } catch (error) {
-                // Progress mirroring is observational and must not abandon an
-                // already-running Codex Turn. Lease renewal + terminal fencing
-                // remain the authority; H4 adds durable local event replay.
-                this.statusValue.lastError = `remote evidence publication failed: ${error instanceof Error ? error.message : String(error)}`
-              }
+            const result = await this.runner.run(lease, async (_sequence, method, payload) => {
+              await this.durableEvent(lease, `codex.${method}`, payload, false)
             })
-            await this.client.terminal(taskId, lease, result.state, result)
-            terminalSent = true
+
+            const terminalEnvelope = await this.outbox.enqueueTerminal(lease, result.state, result)
+            terminalDurable = true
+            await this.refreshPendingDeliveries()
+            if (!this.activeLeaseInvalid) await this.publishEnvelope(terminalEnvelope)
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error)
-            const terminalState =
+            const terminalState: Zero3RemoteTerminalState =
               error instanceof Zero3RemoteTaskBlockedError
                 ? 'blocked'
                 : error instanceof Zero3RemoteTaskOutcomeUnknownError
                   ? 'outcome_unknown'
                   : 'failed'
-            if (!terminalSent && !this.stopped) {
+
+            if (
+              !terminalDurable &&
+              !this.stopped &&
+              !(error instanceof Zero3RemoteDeliveryPendingError)
+            ) {
               try {
-                await this.client.terminal(taskId, lease, terminalState, { reason })
-              } catch {
-                // If terminal publication itself fails, keep the local error visible.
-                // The control plane's lease/fencing/reconciliation path must decide
-                // whether the remote outcome is unknown; do not invent success here.
+                const envelope = await this.outbox.enqueueTerminal(lease, terminalState, { reason })
+                terminalDurable = true
+                await this.refreshPendingDeliveries()
+                if (!this.activeLeaseInvalid) await this.publishEnvelope(envelope)
+              } catch (terminalError) {
+                this.statusValue.lastError = `remote terminal persistence/publication failed: ${terminalError instanceof Error ? terminalError.message : String(terminalError)}`
               }
             }
             this.statusValue.lastError = reason
           } finally {
             if (this.leaseRenewTimer) clearInterval(this.leaseRenewTimer)
             this.leaseRenewTimer = null
+            this.activeLeaseInvalid = false
             this.statusValue.activeTaskId = null
           }
         }
@@ -159,6 +262,7 @@ export class Zero3RemoteNode {
         if (this.leaseRenewTimer) clearInterval(this.leaseRenewTimer)
         this.heartbeatTimer = null
         this.leaseRenewTimer = null
+        this.activeLeaseInvalid = false
         if (!this.stopped) await delay(retryMs)
         retryMs = Math.min(retryMs * 2, LEASE_RETRY_MAX_MS)
       }
