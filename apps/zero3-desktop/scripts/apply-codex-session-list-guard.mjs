@@ -3,20 +3,30 @@ import path from 'node:path'
 
 import { hermesDesktopDir } from './config.mjs'
 
-export function applyZero3CodexSessionListGuard() {
-  const file = path.join(
-    hermesDesktopDir,
-    'src',
-    'app',
-    'session',
-    'hooks',
-    'use-session-list-actions.ts'
-  )
+function patchFile(relativePath, replacements) {
+  const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = fs.readFileSync(file, 'utf8')
 
-  const from = `      $sidebarFiltersActive.subscribe(active => {
-        if (active) {`
-  const to = `      $sidebarFiltersActive.subscribe(active => {
+  for (const replacement of replacements) {
+    if (source.includes(replacement.to)) continue
+    if (!source.includes(replacement.from)) {
+      throw new Error(
+        `Zero3 Codex session persistence drift in ${relativePath}: could not find ${replacement.label}.`
+      )
+    }
+    source = source.replace(replacement.from, replacement.to)
+  }
+
+  fs.writeFileSync(file, source)
+}
+
+export function applyZero3CodexSessionListGuard() {
+  patchFile('src/app/session/hooks/use-session-list-actions.ts', [
+    {
+      label: 'legacy Hermes sidebar filter refresh',
+      from: `      $sidebarFiltersActive.subscribe(active => {
+        if (active) {`,
+      to: `      $sidebarFiltersActive.subscribe(active => {
         // R2: recents are Codex Thread rows. The legacy Hermes list hook stays
         // mounted for messaging/cron compatibility, but sidebar filter depth
         // changes must never replace Codex recents with Hermes sessions.
@@ -25,15 +35,22 @@ export function applyZero3CodexSessionListGuard() {
         }
 
         if (active) {`
-
-  if (!source.includes(to)) {
-    if (!source.includes(from)) {
-      throw new Error(
-        'Zero3 Codex session-list guard drift: pinned Hermes sidebar filter refresh changed upstream.'
-      )
     }
-    source = source.replace(from, to)
-  }
+  ])
 
-  fs.writeFileSync(file, source)
+  patchFile('electron/main.ts', [
+    {
+      label: 'Codex thread/list source filter',
+      from: `function zero3CodexThreadListParams(value: unknown) {
+  const input = zero3CodexRecord(value)
+  const params: Record<string, unknown> = {}`,
+      to: `function zero3CodexThreadListParams(value: unknown) {
+  const input = zero3CodexRecord(value)
+  // Pinned Codex defaults thread/list to interactive CLI/VS Code sources when
+  // sourceKinds is omitted. Zero3-owned desktop conversations are app-server
+  // (CoreSessionSource::Mcp), so omitting this filter makes durable threads
+  // disappear from the sidebar after a renderer/app restart.
+  const params: Record<string, unknown> = { sourceKinds: ['appServer'] }`
+    }
+  ])
 }
