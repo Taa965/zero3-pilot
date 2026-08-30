@@ -2,6 +2,7 @@ name: Remote Host H4 Durable Outbox Smoke
 
 on:
   pull_request:
+    branches: [main]
 
 jobs:
   remote-host-h4:
