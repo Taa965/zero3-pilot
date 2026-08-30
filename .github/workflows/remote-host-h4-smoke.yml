@@ -1,0 +1,69 @@
+name: Remote Host H4 Durable Outbox Smoke
+
+on:
+  pull_request:
+
+jobs:
+  remote-host-h4:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize pinned desktop upstreams
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
+          if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Architecture and outbox behavior guards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/check-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'base architecture guard failed' }
+          node scripts/check-remote-host-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'H0-H3 remote host architecture guard failed' }
+          node scripts/check-remote-host-h4-architecture.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'H4 outbox architecture guard failed' }
+          node --experimental-transform-types scripts/test-remote-host-outbox.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'H4 outbox behavior test failed' }
+
+      - name: Prepare pinned desktop with H4 Remote Host
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node apps/zero3-desktop/scripts/prepare-upstream.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'desktop prepare failed' }
+
+      - name: Verify generated H4 runtime boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $outbox = 'upstream/hermes-agent/apps/desktop/electron/zero3/remote-host/remote-outbox.ts'
+          if (-not (Test-Path $outbox)) { throw 'generated Electron runtime is missing remote-outbox.ts' }
+          $node = Get-Content -Raw 'upstream/hermes-agent/apps/desktop/electron/zero3/remote-host/remote-node.ts'
+          if ($node -notmatch 'Zero3RemoteOutbox') { throw 'generated Remote Node is not wired to durable outbox' }
+          if ($node -notmatch 'flushOutbox') { throw 'generated Remote Node is missing replay path' }
+          if ($node -notmatch 'terminalDurable') { throw 'generated Remote Node is missing durable terminal boundary' }
+          if ($node -match 'ZERO3_PILOT_NODE_PORT') { throw 'legacy Zero3 Node leaked into H4 host runtime' }
+
+      - name: Install desktop dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --workspace apps/desktop
+        working-directory: upstream/hermes-agent
+
+      - name: Typecheck pinned desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm --workspace apps/desktop run typecheck
+        working-directory: upstream/hermes-agent

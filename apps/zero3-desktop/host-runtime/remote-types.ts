@@ -53,6 +53,40 @@ export type Zero3RemoteTaskState =
   | 'outcome_unknown'
   | 'quarantined'
 
+export type Zero3RemoteTerminalState = Extract<
+  Zero3RemoteTaskState,
+  'succeeded' | 'failed' | 'cancelled' | 'blocked' | 'outcome_unknown' | 'quarantined'
+>
+
+export type Zero3RemoteOutboxEventEnvelope = {
+  schemaVersion: 1
+  kind: 'event'
+  deliveryId: string
+  taskId: string
+  executionId: string
+  leaseId: string
+  fencingToken: number
+  createdAt: string
+  eventSequence: number
+  eventType: string
+  payload: unknown
+}
+
+export type Zero3RemoteOutboxTerminalEnvelope = {
+  schemaVersion: 1
+  kind: 'terminal'
+  deliveryId: string
+  taskId: string
+  executionId: string
+  leaseId: string
+  fencingToken: number
+  createdAt: string
+  state: Zero3RemoteTerminalState
+  result: unknown
+}
+
+export type Zero3RemoteOutboxEnvelope = Zero3RemoteOutboxEventEnvelope | Zero3RemoteOutboxTerminalEnvelope
+
 export type Zero3RemoteHostConfig = {
   enabled: boolean
   baseUrl: string | null
@@ -61,6 +95,7 @@ export type Zero3RemoteHostConfig = {
   allowedWorkspaces: string[]
   developmentAllowHttp: boolean
   mappingStateFile: string
+  outboxDir: string
 }
 
 export type Zero3RemoteHostStatus = {
@@ -68,6 +103,7 @@ export type Zero3RemoteHostStatus = {
   connected: boolean
   nodeId: string
   activeTaskId: string | null
+  pendingDeliveries: number
   lastError: string | null
   lastHeartbeatAt: string | null
 }

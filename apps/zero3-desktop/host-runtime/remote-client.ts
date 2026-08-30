@@ -4,6 +4,7 @@ import type {
   Zero3RemoteHostConfig,
   Zero3RemoteHostStatus,
   Zero3RemoteLease,
+  Zero3RemoteOutboxEnvelope,
   Zero3RemoteTaskState
 } from './remote-types'
 
@@ -34,6 +35,20 @@ async function responseJson(response: Response): Promise<unknown> {
   } catch {
     throw new Error(`Zero3 Remote Host control plane returned invalid JSON (HTTP ${response.status})`)
   }
+}
+
+export class Zero3RemoteControlPlaneError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message)
+    this.name = 'Zero3RemoteControlPlaneError'
+  }
+}
+
+export function zero3RemoteControlPlaneRejectedStaleEnvelope(error: unknown): boolean {
+  return error instanceof Zero3RemoteControlPlaneError && [409, 410, 412].includes(error.status)
 }
 
 export class Zero3RemoteClient {
@@ -75,7 +90,8 @@ export class Zero3RemoteClient {
           payload && typeof payload === 'object' && 'error' in payload
             ? String((payload as { error?: unknown }).error)
             : ''
-        throw new Error(
+        throw new Zero3RemoteControlPlaneError(
+          response.status,
           `Zero3 Remote Host control-plane request failed: HTTP ${response.status}${detail ? `: ${detail}` : ''}`
         )
       }
@@ -104,6 +120,7 @@ export class Zero3RemoteClient {
       body: JSON.stringify({
         node_id: this.config.nodeId,
         active_task_id: status.activeTaskId,
+        pending_deliveries: status.pendingDeliveries,
         at: new Date().toISOString()
       })
     })
@@ -137,6 +154,39 @@ export class Zero3RemoteClient {
         node_id: this.config.nodeId,
         lease_id: lease.lease_id,
         fencing_token: lease.fencing_token
+      })
+    })
+  }
+
+  async publishEnvelope(envelope: Zero3RemoteOutboxEnvelope): Promise<void> {
+    if (envelope.kind === 'event') {
+      await this.request(`/api/host/v1/tasks/${encodeURIComponent(envelope.taskId)}/events`, {
+        method: 'POST',
+        body: JSON.stringify({
+          delivery_id: envelope.deliveryId,
+          execution_id: envelope.executionId,
+          lease_id: envelope.leaseId,
+          fencing_token: envelope.fencingToken,
+          event_sequence: envelope.eventSequence,
+          event_type: envelope.eventType,
+          created_at: envelope.createdAt,
+          payload: envelope.payload
+        })
+      })
+      return
+    }
+
+    const suffix = envelope.state === 'succeeded' ? 'complete' : envelope.state === 'blocked' ? 'blocked' : 'fail'
+    await this.request(`/api/host/v1/tasks/${encodeURIComponent(envelope.taskId)}/${suffix}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        delivery_id: envelope.deliveryId,
+        execution_id: envelope.executionId,
+        lease_id: envelope.leaseId,
+        fencing_token: envelope.fencingToken,
+        created_at: envelope.createdAt,
+        state: envelope.state,
+        result: envelope.result
       })
     })
   }
