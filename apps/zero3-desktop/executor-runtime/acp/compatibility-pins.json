@@ -2,9 +2,18 @@
   "schemaVersion": "zero3.pilot.acp.compatibility.audit.v1",
   "status": "audit-only",
   "auditedAt": "2026-08-30",
-  "baseSha": "9f11c6e8c88283dbcaf8cc51e6a6fb35c5f25f7f",
+  "auditBranch": "feat/r4b-acp-executors",
+  "auditBaseSha": "9f11c6e8c88283dbcaf8cc51e6a6fb35c5f25f7f",
+  "observedMainSha": "32faf5e70076fc67035c8229729de035bd3a7f2a",
   "contractSha": null,
-  "candidateContractSha": "29f72f47b1f18df54240c70a745c69e53822b4dd",
+  "candidateContractPr": 44,
+  "candidateContractSha": "c786a591e140de403db3b0c885bf3af0305a3669",
+  "candidateContractBaseSha": "fd92a3fde463ecea04bb22c3a25b750fbf3deaa6",
+  "contractFeedback": {
+    "permissionResponseChannel": "resolved-in-candidate-via-Zero3Executor.respondPermission",
+    "unsupportedFailureCode": "resolved-in-candidate-via-ExecutorFailureCode.unsupported",
+    "freezeRequiredBeforeImplementation": true
+  },
   "protocol": {
     "generation": "ACP v1",
     "sdk": {
