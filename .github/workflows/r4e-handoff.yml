@@ -1,0 +1,43 @@
+name: R4E Handoff v1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/executor-runtime/handoff/**'
+      - 'scripts/check-r4e-handoff-architecture.mjs'
+      - '.github/workflows/r4e-handoff.yml'
+
+jobs:
+  handoff:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - name: Diff hygiene
+        run: git diff --check origin/main...HEAD
+      - name: Architecture guards
+        run: |
+          node scripts/check-architecture.mjs
+          node scripts/check-r4e-handoff-architecture.mjs
+      - name: Install exact TypeScript typecheck tools
+        run: npm install --no-save --package-lock=false --ignore-scripts typescript@5.9.2 @types/node@24.10.1
+      - name: Strict TypeScript check
+        run: >-
+          npx --no-install tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions --skipLibCheck
+          apps/zero3-desktop/executor-runtime/handoff/handoff-types.ts
+          apps/zero3-desktop/executor-runtime/handoff/handoff-hash.ts
+          apps/zero3-desktop/executor-runtime/handoff/handoff-builder.ts
+          apps/zero3-desktop/executor-runtime/handoff/handoff-store.ts
+          apps/zero3-desktop/executor-runtime/handoff/workspace-lease.ts
+          apps/zero3-desktop/executor-runtime/handoff/handoff-verifier.ts
+      - name: Handoff behavior tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts
