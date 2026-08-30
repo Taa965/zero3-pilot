@@ -27,7 +27,12 @@ fn oversized_text(index: usize) -> (String, String) {
     let fact_chars = fact.chars().count();
     let head_chars = (OVERSIZED_CHARS - fact_chars) / 2;
     let tail_chars = OVERSIZED_CHARS - fact_chars - head_chars;
-    let text = format!("{}{}{}", "A".repeat(head_chars), fact, "Z".repeat(tail_chars));
+    let text = format!(
+        "{}{}{}",
+        "A".repeat(head_chars),
+        fact,
+        "Z".repeat(tail_chars)
+    );
     assert_eq!(text.chars().count(), OVERSIZED_CHARS);
     (text, fact)
 }
@@ -68,7 +73,10 @@ async fn integrated_100_20_uses_codex_token_accounting_and_recovers_all_spills()
 
         match retained {
             RetentionOutcome::Inline(text) => {
-                assert!(index >= OVERSIZED_RESULTS, "oversized fixture must be D1-spilled");
+                assert!(
+                    index >= OVERSIZED_RESULTS,
+                    "oversized fixture must be D1-spilled"
+                );
                 d1_codex_tokens = d1_codex_tokens.saturating_add(approx_token_count(&text));
                 d2_codex_tokens = d2_codex_tokens.saturating_add(approx_token_count(&text));
                 let envelope = ToolResultEnvelope::<(), String> {
@@ -88,7 +96,10 @@ async fn integrated_100_20_uses_codex_token_accounting_and_recovers_all_spills()
                 reference,
                 ..
             } => {
-                assert!(index < OVERSIZED_RESULTS, "normal fixture must remain inline");
+                assert!(
+                    index < OVERSIZED_RESULTS,
+                    "normal fixture must remain inline"
+                );
                 spilled += 1;
                 assert!(projection.contains(&reference.locator));
                 d1_codex_tokens = d1_codex_tokens.saturating_add(approx_token_count(&projection));
