@@ -19,6 +19,10 @@ function threadIdFrom(result) {
   return id
 }
 
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 function createClient() {
   const child = spawn(binary, ['app-server', '--stdio'], {
     env: { ...process.env, CODEX_HOME: codexHome },
@@ -104,7 +108,11 @@ function createClient() {
   async function initialize() {
     const result = record(
       await request('initialize', {
-        clientInfo: { name: 'zero3_pilot_session_persistence_ci', title: 'Zero3 Pilot Session Persistence CI', version: '0.1.0' },
+        clientInfo: {
+          name: 'zero3_pilot_session_persistence_ci',
+          title: 'Zero3 Pilot Session Persistence CI',
+          version: '0.1.0'
+        },
         capabilities: { experimentalApi: true }
       })
     )
@@ -112,6 +120,23 @@ function createClient() {
       throw new Error('initialize did not return codexHome')
     }
     send({ method: 'initialized' })
+  }
+
+  async function listAppServerThreads() {
+    const result = record(
+      await request('thread/list', { archived: false, limit: 100, sourceKinds: ['appServer'] })
+    )
+    return new Set((Array.isArray(result.data) ? result.data : []).map(item => record(item).id))
+  }
+
+  async function waitForThreads(expectedIds, label) {
+    let actual = new Set()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      actual = await listAppServerThreads()
+      if (expectedIds.every(id => actual.has(id))) return actual
+      await delay(100)
+    }
+    throw new Error(`${label}: expected=${expectedIds.join(',')} actual=${JSON.stringify([...actual])}`)
   }
 
   async function close() {
@@ -127,7 +152,7 @@ function createClient() {
     })
   }
 
-  return { child, initialize, request, close }
+  return { child, initialize, request, waitForThreads, close }
 }
 
 async function main() {
@@ -144,27 +169,16 @@ async function main() {
     )
     if (first === second) throw new Error('two thread/start calls returned the same thread id')
 
-    const live = record(
-      await client.request('thread/list', { archived: false, limit: 100, sourceKinds: ['appServer'] })
-    )
-    const liveIds = new Set((Array.isArray(live.data) ? live.data : []).map(item => record(item).id))
-    if (!liveIds.has(first) || !liveIds.has(second)) {
-      throw new Error(`live appServer thread/list omitted created threads: ${JSON.stringify([...liveIds])}`)
-    }
+    await client.waitForThreads([first, second], 'live appServer thread/list omitted created threads')
 
     await client.close()
     client = createClient()
     await client.initialize()
 
-    const restored = record(
-      await client.request('thread/list', { archived: false, limit: 100, sourceKinds: ['appServer'] })
+    await client.waitForThreads(
+      [first, second],
+      'restart appServer thread/list did not restore both durable threads'
     )
-    const restoredIds = new Set((Array.isArray(restored.data) ? restored.data : []).map(item => record(item).id))
-    if (!restoredIds.has(first) || !restoredIds.has(second)) {
-      throw new Error(
-        `restart appServer thread/list did not restore both durable threads: expected=${first},${second} actual=${JSON.stringify([...restoredIds])}`
-      )
-    }
 
     for (const threadId of [first, second]) {
       const read = record(await client.request('thread/read', { threadId, includeTurns: false }))
