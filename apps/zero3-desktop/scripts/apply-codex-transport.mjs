@@ -35,6 +35,13 @@ type Zero3CodexEvent =
   | { kind: 'notification'; method: string; params: unknown }
   | { kind: 'request'; id: Zero3CodexRpcId; method: string; params: unknown }
 
+type Zero3CodexEventListener = (event: Zero3CodexEvent) => void
+
+type Zero3CodexAppServerOptions = {
+  env?: NodeJS.ProcessEnv
+  cwd?: string
+}
+
 const ZERO3_CODEX_REQUEST_TIMEOUT_MS = 30_000
 const ZERO3_CODEX_TURN_TIMEOUT_MS = 10 * 60_000
 const ZERO3_CODEX_MAX_LINE_BYTES = 8 * 1024 * 1024
@@ -119,6 +126,30 @@ class Zero3CodexAppServer {
   private stderrTail = ''
   private pending = new Map<number, Zero3CodexPendingRequest>()
   private serverRequests = new Map<string, Zero3CodexRpcId>()
+  private listeners = new Set<Zero3CodexEventListener>()
+  private readonly launchEnv: NodeJS.ProcessEnv
+  private readonly launchCwd?: string
+
+  constructor(options: Zero3CodexAppServerOptions = {}) {
+    this.launchEnv = options.env ?? process.env
+    this.launchCwd = options.cwd?.trim() || undefined
+  }
+
+  subscribe(listener: Zero3CodexEventListener) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  private emit(event: Zero3CodexEvent) {
+    for (const listener of this.listeners) {
+      try {
+        listener(event)
+      } catch (error) {
+        console.error('Zero3 Codex app-server listener failed', error)
+      }
+    }
+    broadcastZero3CodexEvent(event)
+  }
 
   status() {
     return {
@@ -152,7 +183,7 @@ class Zero3CodexAppServer {
   }
 
   private async start(): Promise<Record<string, unknown>> {
-    const executable = process.env.ZERO3_CODEX_BIN?.trim()
+    const executable = this.launchEnv.ZERO3_CODEX_BIN?.trim()
     if (!executable) {
       throw new Error(
         'ZERO3_CODEX_BIN is not configured. Zero3 must launch the pinned open-source Codex build, not an implicit external Agent.'
@@ -162,10 +193,11 @@ class Zero3CodexAppServer {
     this.stop('restart')
     this.stdoutBuffer = ''
     this.stderrTail = ''
+    const configuredCwd = this.launchCwd || this.launchEnv.ZERO3_CODEX_CWD?.trim()
 
     const child = spawn(executable, ['app-server', '--stdio'], {
-      cwd: process.env.ZERO3_CODEX_CWD?.trim() || process.cwd(),
-      env: process.env,
+      cwd: configuredCwd || process.cwd(),
+      env: this.launchEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
     })
@@ -199,7 +231,7 @@ class Zero3CodexAppServer {
       )
       this.initialization = zero3CodexRecord(result)
       this.writeLine({ method: 'initialized' })
-      broadcastZero3CodexEvent({ kind: 'lifecycle', state: 'started' })
+      this.emit({ kind: 'lifecycle', state: 'started' })
       return this.initialization
     } catch (error) {
       this.stop(error instanceof Error ? error.message : String(error))
@@ -230,7 +262,7 @@ class Zero3CodexAppServer {
       pending.reject(new Error('Codex app-server stopped: ' + detail))
     }
     this.pending.clear()
-    broadcastZero3CodexEvent({ kind: 'lifecycle', state: 'stopped', detail })
+    this.emit({ kind: 'lifecycle', state: 'stopped', detail })
   }
 
   private writeLine(message: unknown) {
@@ -248,7 +280,7 @@ class Zero3CodexAppServer {
     this.stdoutBuffer += chunk
     if (Buffer.byteLength(this.stdoutBuffer, 'utf8') > ZERO3_CODEX_MAX_LINE_BYTES * 2) {
       this.stop('stdout frame exceeded Zero3 transport limit')
-      broadcastZero3CodexEvent({
+      this.emit({
         kind: 'lifecycle',
         state: 'error',
         detail: 'Codex app-server stdout frame exceeded the Zero3 transport limit'
@@ -271,7 +303,7 @@ class Zero3CodexAppServer {
     try {
       parsed = JSON.parse(line)
     } catch {
-      broadcastZero3CodexEvent({
+      this.emit({
         kind: 'lifecycle',
         state: 'error',
         detail: 'Codex app-server emitted invalid JSONL'
@@ -301,7 +333,7 @@ class Zero3CodexAppServer {
     if (hasId) {
       if (this.serverRequests.size >= ZERO3_CODEX_MAX_SERVER_REQUESTS) {
         this.stop('too many pending Codex server requests')
-        broadcastZero3CodexEvent({
+        this.emit({
           kind: 'lifecycle',
           state: 'error',
           detail: 'Codex app-server exceeded the pending server-request limit'
@@ -310,7 +342,7 @@ class Zero3CodexAppServer {
       }
       const rpcId = id as Zero3CodexRpcId
       this.serverRequests.set(zero3CodexIdKey(rpcId), rpcId)
-      broadcastZero3CodexEvent({
+      this.emit({
         kind: 'request',
         id: rpcId,
         method,
@@ -319,7 +351,7 @@ class Zero3CodexAppServer {
       return
     }
 
-    broadcastZero3CodexEvent({
+    this.emit({
       kind: 'notification',
       method,
       params: message.params ?? null
@@ -372,7 +404,11 @@ class Zero3CodexAppServer {
   }
 }
 
-const zero3CodexAppServer = new Zero3CodexAppServer()
+function createZero3CodexAppServer(options: Zero3CodexAppServerOptions = {}) {
+  return new Zero3CodexAppServer(options)
+}
+
+const zero3CodexAppServer = createZero3CodexAppServer()
 
 function zero3CodexThreadStartParams(value: unknown) {
   const input = zero3CodexRecord(value)
