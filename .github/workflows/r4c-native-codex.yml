@@ -1,0 +1,51 @@
+name: R4C Native Codex
+
+on:
+  pull_request:
+    paths:
+      - 'apps/zero3-desktop/executor-runtime/native/**'
+      - 'scripts/check-r4c-native-architecture.mjs'
+      - '.github/workflows/r4c-native-codex.yml'
+  push:
+    branches:
+      - feat/r4c-native-auth-provider
+      - feat/r4c-native-codex-executor
+    paths:
+      - 'apps/zero3-desktop/executor-runtime/native/**'
+      - 'scripts/check-r4c-native-architecture.mjs'
+      - '.github/workflows/r4c-native-codex.yml'
+
+jobs:
+  native-codex:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Diff hygiene
+        if: github.event_name == 'pull_request'
+        run: git diff --check ${{ github.event.pull_request.base.sha }}...HEAD
+
+      - name: Shared architecture guard
+        run: node scripts/check-architecture.mjs
+
+      - name: R4C architecture guard
+        run: node scripts/check-r4c-native-architecture.mjs
+
+      - name: Native module syntax
+        run: |
+          node --check apps/zero3-desktop/executor-runtime/native/codex-native-probe.mjs
+          node --check apps/zero3-desktop/executor-runtime/native/native-provider-seam.mjs
+
+      - name: Native auth/provider tests
+        run: node --test apps/zero3-desktop/executor-runtime/native/*.test.mjs
