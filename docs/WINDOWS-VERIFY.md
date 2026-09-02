@@ -96,6 +96,28 @@ cargo test --workspace 2>&1 | tail -c 3500
 
 或者只跑单个 crate：`cargo test -p zero3-core`。
 
+## 先同步，再验证（最容易踩的坑）
+
+通道执行的是**本机工作树的当前状态**，不是 GitHub 上的最新代码。这台机器的克隆
+可能明显落后于 `origin/main`（本文档写作时落后 193 个提交），此时直接下发
+`cargo test` 验证的是旧代码，结论会误导人。
+
+所以验证最新代码前，先用一条 `git_status` 任务看清落差：
+
+```json
+{ "id": "wv-pilot-sync-check", "type": "git_status",
+  "workdir": "C:/Users/aaaa/Documents/zero3-pilot", "timeout_s": 120 }
+```
+
+确认干净后再下发同步命令，然后才是构建：
+
+```bash
+git fetch --prune origin && git status -sb | head -1
+```
+
+注意通道不会替你决定要不要同步：本机工作树可能有未提交的在途改动，盲目
+`git pull` 会和别的开发端冲突。落差大时先把 `git_status` 结果拿给人看。
+
 ## 边界
 
 - `workdir` 必须落在白名单前缀内（`C:/Users/aaaa/Documents/`、`C:/Users/aaaa/Desktop/0/`、
