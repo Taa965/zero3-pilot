@@ -65,5 +65,10 @@ jobs:
           node apps/zero3-desktop/scripts/smoke-codex-app-server.mjs \
             upstream/codex/codex-rs/target/debug/codex
 
+      - name: Real app-server session restart persistence
+        run: |
+          node apps/zero3-desktop/scripts/smoke-codex-session-persistence.mjs \
+            upstream/codex/codex-rs/target/debug/codex
+
       - name: Common Zero3 architecture guard
         run: node scripts/check-architecture.mjs
