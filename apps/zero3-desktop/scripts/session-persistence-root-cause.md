@@ -1,21 +1,23 @@
 # Zero3 Codex session persistence root cause
 
-Two independent pinned-Codex defaults combined to hide Zero3 conversations after restart:
+Two independent pinned-Codex behaviors combined to hide Zero3 conversations after restart:
 
-1. `codex app-server` defaults `--session-source` to `vscode` unless the launcher sets it explicitly.
+1. The packaged `codex app-server` wrapper did not expose the standalone app-server's existing `--session-source` startup argument and instead passed `SessionSource::VSCode` unconditionally into `run_main_with_transport_options`.
 2. `thread/list` defaults to interactive session sources when `sourceKinds` is omitted.
 
-Zero3 was launching the AppServer transport without an explicit session source, while the persistence repair initially queried `sourceKinds: ['appServer']`. In pinned Codex these are deliberately separate concepts: `SessionSource::from_startup_arg('app-server')` maps to `SessionSource::Mcp`, and `ThreadSourceKind::AppServer` matches `CoreSessionSource::Mcp`. Merely using the AppServer transport does not make a Thread an AppServer-source Thread.
+Zero3 therefore could not claim an explicit AppServer/MCP persistence namespace through the same reviewed `codex.exe` that is shipped with the desktop package. In pinned Codex the transport and persisted source identity are deliberately separate concepts: `SessionSource::from_startup_arg('app-server')` maps to `SessionSource::Mcp`, and `ThreadSourceKind::AppServer` matches `CoreSessionSource::Mcp`. Merely using the AppServer transport does not make a Thread an AppServer-source Thread.
 
 Observable consequences:
 
 - a durable, already-materialized Zero3 Thread could remain on disk but be absent from the source namespace Zero3 expected to rehydrate;
 - because the primary-chat list refresh is authoritative, a refresh that returns no Zero3 rows can collapse visible recents to only the currently selected optimistic row, making an older conversation appear to vanish after creating another one;
-- a persistence smoke that launches Codex with its default source while filtering for `appServer` correctly returns an empty list, so it cannot prove the desired Zero3 contract.
+- a persistence smoke that launches the packaged Codex wrapper in its original hardcoded VS Code source while filtering for `appServer` correctly returns an empty list, so it cannot prove the desired Zero3 contract;
+- attempting to add `--session-source app-server` only in the Electron launcher or smoke is insufficient unless the pinned `codex app-server` wrapper itself exposes and forwards that argument.
 
 Fix:
 
-- the production Zero3 launcher explicitly starts pinned Codex with `--session-source app-server`;
+- a reviewed foundation overlay exposes `--session-source` on the pinned `codex app-server` wrapper using the exact parser already present in pinned Codex's standalone app-server; the upstream-compatible default remains `vscode`;
+- the production Zero3 launcher explicitly starts the reviewed/patched pinned Codex with `--session-source app-server`;
 - the Zero3-owned `thread/list` transport always requests `sourceKinds: ['appServer']`;
 - legacy Hermes session-list refresh remains blocked from overwriting Codex recents;
 - a real pinned-Codex smoke mirrors the production launcher, creates two non-ephemeral AppServer-source Threads, starts a first Turn on each, restarts app-server with the same `CODEX_HOME`, lists `sourceKinds: ['appServer']`, and requires both original Thread IDs plus `thread/read` to succeed.
