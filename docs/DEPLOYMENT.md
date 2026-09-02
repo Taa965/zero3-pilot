@@ -57,7 +57,9 @@ Remote Host work in this repository is an integration/control-plane capability, 
 
 ## Historical server deployment
 
-Earlier Zero3 Pilot revisions included an independently deployed Rust web/control prototype and repository automation for a Linux host. That work is part of project history and may still exist in legacy code, deployment scripts or old commits, but it is **not the current desktop product deployment model and not the `v0.1.0-alpha` distribution path**.
+Earlier Zero3 Pilot revisions included an independently deployed Rust web/control prototype and repository automation for a Linux host. That work is part of project history and may still exist in legacy code and deployment scripts, but it is **not the current desktop product deployment model and not the `v0.1.0-alpha` distribution path**.
+
+The legacy `.github/workflows/deploy.yml` path is therefore **manual-only**. Moving `main` must not automatically build or deploy `zero3-web`; a maintainer has to explicitly dispatch the legacy workflow when investigating or maintaining that historical server path.
 
 Old host addresses, service-unit procedures and prototype DNS/certificate instructions are intentionally not treated as current release documentation here. Maintainers investigating that legacy path should use the relevant historical commit rather than applying old server instructions to the Codex-native desktop product.
 
