@@ -1,14 +1,22 @@
 # Zero3 Desktop v3 Architecture
 
-## Decision
+> **Historical migration document — superseded.**
+>
+> This file records an earlier desktop-v3 migration design in which Zero3 Pilot Node was still described as the durable control-plane/runtime boundary and Codex was treated as an adapter/engine. That is **not the current architecture authority**.
+>
+> Current rule: open-source Codex is the only authoritative native Agent Kernel/runtime. Hermes is a desktop UI/UX shell source with temporary compatibility scaffolding for unported surfaces; legacy Zero3 Node must not become the hidden native core for migrated behavior. See [`ARCHITECTURE_CONSTITUTION.md`](ARCHITECTURE_CONSTITUTION.md), [`ARCHITECTURE.md`](ARCHITECTURE.md) and the repository [`README`](../README.md).
+>
+> The remainder is retained for migration-history/provenance only. Statements below such as “Zero3 Pilot Node remains the durable local control plane” or “Codex app-server adapter” describe the earlier design stage and must not be used to override the current architecture constitution.
 
-Zero3 Pilot will own its desktop product surface. The UI foundation is the open-source Hermes Desktop Electron/React application, not the proprietary Codex Desktop application and not the Codex Ratatui TUI.
+## Historical decision
 
-Codex remains an execution engine through its open-source CLI / `app-server` source. DeepSeek Harness is pinned as an additional engine/plugin/UI architecture source. Zero3 Pilot Node remains the durable local control plane for jobs, scheduling, memory, browser automation, computer control, policy enforcement, and cross-agent orchestration.
+Zero3 Pilot planned to own its desktop product surface. The UI foundation was selected from the open-source Hermes Desktop Electron/React application, not the proprietary Codex Desktop application and not the Codex Ratatui TUI.
 
-## Fixed upstream source versions
+At this historical stage, Codex was described as an execution engine through its open-source CLI / `app-server` source, DeepSeek Harness as an additional engine/plugin/UI architecture source, and Zero3 Pilot Node as the durable local control plane for jobs, scheduling, memory, browser automation, computer control, policy enforcement, and cross-agent orchestration. **This runtime-authority split has since been superseded by the Codex-native architecture.**
 
-The migration branch pins:
+## Fixed upstream source versions at this migration stage
+
+The migration branch pinned:
 
 ```text
 openai/codex                  94311d447587411789533c47601fd8bc9d81eb48
@@ -18,7 +26,7 @@ deepseek-ai/deepseek-harness  cd5ef8148158c3a752a658978873241fdf8e2bbc
 
 Do not silently float these SHAs. Upstream updates are explicit review events because renderer, transport, permissions, packaging, and plugin contracts can all change.
 
-## Target boundary
+## Historical target boundary
 
 ```text
 Zero3 Desktop
@@ -38,9 +46,9 @@ Zero3 Pilot Node (loopback only)
           +-- Computer Use provider
 ```
 
-The desktop owns presentation and interaction. The Node owns durable state and side effects. Agent engines do not own product UI state.
+This diagram is retained as historical context. The current architecture instead gives Codex native Agent Kernel/runtime authority and constrains legacy Node/Hermes behavior to non-authoritative compatibility or extension roles.
 
-## Migration phases
+## Historical migration phases
 
 ### Phase A — shell proof
 
@@ -51,13 +59,13 @@ The desktop owns presentation and interaction. The Node owns durable state and s
 - Start/reuse Zero3 Pilot Node before the desktop development session.
 - Route Zero3-specific actions through the existing loopback REST API and policy seam.
 
-This proves that the desktop packaging, React surface, file/project UX, transcript UX, terminal, preview panes, and platform lifecycle can be reused without depending on the proprietary Codex Desktop renderer.
+This phase proved that the desktop packaging, React surface, file/project UX, transcript UX, terminal, preview panes, and platform lifecycle could be reused without depending on the proprietary Codex Desktop renderer.
 
 ### Phase B — native Zero3 transport
 
-Replace the compatibility skill bridge for first-class UI actions with a dedicated desktop transport. The renderer must receive a stable bootstrap/capabilities model from Zero3 Node and subscribe to job/event changes without polling every panel independently.
+The historical design proposed replacing the compatibility skill bridge for first-class UI actions with a dedicated desktop transport, while receiving bootstrap/capabilities data from Zero3 Node.
 
-Expected first-class surfaces:
+Expected first-class surfaces included:
 
 - conversations / execution threads
 - projects / workspaces / worktrees
@@ -70,26 +78,23 @@ Expected first-class surfaces:
 - approvals and permission prompts
 - logs / diagnostics
 
-Hermes-specific backend assumptions must be progressively moved behind adapters instead of spreading through the Zero3 renderer.
+This phase description predates the current Codex-native Thread/Turn/Item transport and should be read as migration history.
 
 ### Phase C — Codex app-server adapter
 
-Use the pinned open-source Codex `app-server` as the preferred Codex integration boundary. CLI dispatch remains a fallback during migration. Do not invoke the proprietary Codex AppX as a hidden dependency of the Zero3 desktop product.
+The historical plan used the pinned open-source Codex `app-server` as the preferred Codex integration boundary, with CLI dispatch as a migration fallback. Current Zero3 has since elevated Codex from an adapter role to the authoritative native Agent Kernel/runtime.
 
 ### Phase D — DeepSeek Harness adapter
 
-Integrate DeepSeek Harness behind the same engine abstraction. Reuse concepts from its plugin-oriented architecture where they improve Zero3, but do not make the renderer depend directly on DeepSeek-specific state shapes.
+The historical design considered DeepSeek Harness behind the same engine abstraction. In the current architecture DeepSeek-Harness is a capability donor/reference source rather than an alternate native engine.
 
 ### Phase E — remove legacy shell
 
-After the v3 desktop passes Windows packaging, startup, local Node, Agent, browser, computer-use, persistence, and recovery acceptance tests:
+The historical acceptance plan called for removing Tao/Wry from the primary desktop path after the Electron target passed Windows packaging/startup and recovery gates. The current target shell is the Hermes-derived Electron/React path; legacy Wry/Node installer documentation must not be treated as the first-alpha distribution model.
 
-- remove Tao/Wry from the primary desktop path;
-- update the Windows installer to package the Electron application;
-- retain the old Node HTML dashboard only as a diagnostic/recovery surface;
-- delete the legacy desktop launcher when no rollback requirement remains.
+## Historical acceptance gates
 
-## Acceptance gates before merging to main
+The original migration document listed:
 
 1. The Electron/React desktop builds from the pinned Hermes source on Windows.
 2. The app launches without requiring the proprietary Codex Desktop/AppX.
@@ -100,6 +105,8 @@ After the v3 desktop passes Windows packaging, startup, local Node, Agent, brows
 7. The build exposes the exact upstream SHAs used for provenance.
 8. No upstream submodule floats to an unreviewed commit.
 9. The old Tao/Wry shell is not extended with new product UI.
+
+Items 3–5 are especially historical and do not define current runtime authority. Current release gates are tracked in [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md), [`../ROADMAP.md`](../ROADMAP.md) and the first-alpha readiness issue.
 
 ## License / attribution handling
 

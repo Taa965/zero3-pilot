@@ -1,87 +1,68 @@
-# Deployment
+# Deployment and distribution
 
-## Target
+## Current product target
 
-Shared AWS Lightsail host `34.218.104.186` (also runs an unrelated,
-independently-developed "Zero3 自媒体管理系统"). Both projects are in active
-development; the host is shared by an explicit decision, isolated by
-construction — see the isolation table in
-[`deployment/README.md`](../deployment/README.md).
+Zero3 Pilot's current public product target is a **local desktop application**, not the legacy `zero3-web` server prototype.
 
-## How a deploy happens
+The authoritative native Agent Kernel/runtime is the repository's reviewed open-source Codex pin, reached through the Zero3-owned typed `codex app-server` boundary. The first public distribution target is the Codex-native Windows Electron/React package documented in [`WINDOWS_INSTALL.md`](WINDOWS_INSTALL.md).
 
-`.github/workflows/deploy.yml` is one workflow run with three sequential
-jobs (`test -> build -> deploy`, each `needs:` the previous), so they
-always share the same `$GITHUB_SHA` and a failure at any stage stops the
-ones after it — GitHub Actions skips downstream jobs automatically when a
-`needs:` dependency fails. `.github/workflows/ci.yml` only runs on pull
-requests (a separate, faster feedback loop); it is not part of the deploy
-gate and cannot race it.
+For `v0.1.0-alpha`, release/distribution means:
 
+1. choose one exact reviewed repository SHA;
+2. require the release-blocking architecture/Codex/Windows/feature gates on that candidate;
+3. build the exact pinned Codex source used by that candidate;
+4. package the Windows desktop shell with that `codex.exe` under application resources;
+5. verify the binary **inside the package** with a real app-server smoke;
+6. verify required upstream license/NOTICE material is present;
+7. produce the actual NSIS installer and SHA-256;
+8. publish only that evidence-matched artifact as a GitHub pre-release.
+
+A build from a standalone feature branch is useful validation but is not release evidence until the combined candidate containing all first-alpha blockers has been revalidated.
+
+## Runtime authority
+
+The desktop distribution must preserve the architecture constitution:
+
+- Codex is the only native Agent Kernel/runtime authority;
+- the Renderer does not receive a generic arbitrary Codex JSON-RPC tunnel;
+- migrated core behavior does not silently fall back to Hermes Runtime or legacy Zero3 Node;
+- Hermes-derived runtime behavior may remain temporarily only as compatibility scaffolding for unported UI surfaces;
+- external executors, Remote Host integrations and capability donors do not acquire native-kernel authority by being present in the repository.
+
+See [`ARCHITECTURE_CONSTITUTION.md`](ARCHITECTURE_CONSTITUTION.md), [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`../SECURITY.md`](../SECURITY.md).
+
+## Windows distribution
+
+The first-alpha candidate path is tracked by the dedicated Windows Alpha Artifact gate. The intended package includes:
+
+```text
+Zero3Pilot.exe
+resources/
+  app.asar
+  zero3-codex/
+    codex.exe
+  legal/
+    ...reviewed license and NOTICE files...
 ```
-push to main
-  -> job "test":  fmt, clippy, build --all-targets, test --workspace
-       (fails here -> build/deploy never run, nothing reaches AWS)
-  -> job "build": cargo build --release -p zero3-web (GitHub-hosted runner)
-  -> job "deploy":
-       scp binary + deployment/deploy.sh to the host, as `zero3pilot`
-       ssh: deployment/deploy.sh
-         - releases/<sha>/bin/zero3-web
-         - current -> releases/<sha> (atomic symlink swap)
-         - sudo zero3pilot-deploy-release   (only privileged step: daemon-reload + restart)
-         - curl 127.0.0.1:8788/health, retry up to 10x
-         - on failure: symlink back to the previous release, restart again, exit 1
-       external health check step re-curls /health over SSH and parses the
-       JSON response, and only passes if BOTH `status == "ok"` AND
-       `git_sha` matches `git rev-parse --short HEAD` for this exact
-       workflow run — a stale or wrong binary responding 200 is not enough
-```
 
-No GitHub-hosted step, and no code running under the `zero3pilot` account,
-ever has: the existing Zero3 system's sudo entries, its `.env`, its
-database credentials, its GitHub deploy key, or its Commander token. The
-only sudo `zero3pilot` can run is
-`/usr/local/sbin/zero3pilot-deploy-release`, which does exactly two things
-(`systemctl daemon-reload`, `systemctl restart zero3-pilot.service`) and
-nothing else.
+Packaged mode must not replace the reviewed core with PATH, `@latest`, a runtime download or an arbitrary external binary override.
 
-The existing self-hosted GitHub Actions runner on this host is registered
-to `Taa965/zero3-commander-bridge` only — it does not pick up
-`zero3-pilot` workflow runs, and this project does not register a runner
-on it either. All zero3-pilot CI/CD runs on GitHub-hosted `ubuntu-latest`.
+The final installer filename, tag SHA and SHA-256 belong in the final release record only after the exact combined candidate has passed.
 
-## GitHub secrets (repository-level, set via `gh secret set`)
+## Update / hosting status
 
-| Secret | Value |
-|---|---|
-| `DEPLOY_HOST` | `34.218.104.186` |
-| `DEPLOY_PORT` | `22` |
-| `DEPLOY_USER` | `zero3pilot` |
-| `DEPLOY_SSH_KEY` | private half of a dedicated ed25519 keypair generated only for this purpose; the matching public key is the only line added to `zero3pilot`'s `authorized_keys` |
-| `DEPLOY_PATH` | `/opt/zero3-pilot-runtime` |
+`v0.1.0-alpha` does not claim a production auto-update service, cloud control plane or hosted SaaS deployment. Any future update channel must preserve exact-version provenance, signing/integrity evidence and the Codex-core authority boundary.
 
-## HTTPS / public domain
+Remote Host work in this repository is an integration/control-plane capability, not a declaration that the Zero3 desktop product itself is centrally hosted.
 
-`03.336r.com` already resolves to this host with a working Let's Encrypt
-certificate (used by the existing, unrelated site). No subdomain for Zero3
-Pilot (`pilot.03.336r.com`) exists in DNS yet. Per the no-loop-certbot
-rule: the Nginx site for `pilot.03.336r.com` is installed and passes
-`nginx -t` (HTTP only, port 80), but Certbot has **not** been run and
-external HTTPS is **not** live — this is intentionally listed under
-Remaining below rather than blocking the rest of the pipeline.
+## Historical server deployment
 
-## Status
+Earlier Zero3 Pilot revisions included an independently deployed Rust web/control prototype and repository automation for a Linux host. That work is part of project history and may still exist in legacy code, deployment scripts or old commits, but it is **not the current desktop product deployment model and not the `v0.1.0-alpha` distribution path**.
 
-First automated deploy (exact-SHA, atomic, health-checked) verified
-2026-08-28. Isolation confirmed: the existing five Zero3 self-media
-systemd units stayed active throughout, and its public health endpoint
-kept returning 200 before, during, and after.
+Old host addresses, service-unit procedures and prototype DNS/certificate instructions are intentionally not treated as current release documentation here. Maintainers investigating that legacy path should use the relevant historical commit rather than applying old server instructions to the Codex-native desktop product.
 
-## Remaining (real gaps, not deferred-by-choice)
+## Release evidence source of truth
 
-- DNS record for `pilot.03.336r.com` -> `34.218.104.186` (not something
-  this environment can create — needs whoever controls `336r.com`'s DNS).
-- `certbot --nginx -d pilot.03.336r.com` once that DNS record exists.
-- Everything past the control/web server (computer use, browser
-  automation, scheduler, memory) — Phase 1 scope, tracked in
-  `docs/ARCHITECTURE.md`.
+Before publication, use [`../docs/RELEASE_PROCESS.md`](RELEASE_PROCESS.md), [`../ROADMAP.md`](../ROADMAP.md), [`../CHANGELOG.md`](../CHANGELOG.md), the `v0.1.0-alpha` readiness issue, and the exact candidate's GitHub Actions results as the source of truth.
+
+If those sources disagree with an older design/migration document, the architecture constitution plus the exact release-candidate evidence wins; stale documentation must be corrected before the tag is presented as a release.

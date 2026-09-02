@@ -28,19 +28,28 @@ The project is intended to provide a practical implementation/reference surface 
 
 ## What is already on `main`
 
-The repository is young, but the current `main` is beyond a transport-only prototype. The table below intentionally lists only merged work; open/deferred PRs are shown separately.
+The repository is young, but the current `main` is beyond a transport-only prototype. The table below intentionally lists only merged work; deferred work is shown separately.
 
 | Area | Current merged baseline | Evidence |
 | --- | --- | --- |
 | Codex desktop path | Typed app-server transport; Thread/Turn/Item primary chat; native approval/input; tool/reasoning presentation; structured input; native thread actions; authoritative Turn mapping/history | [R1A-R3F PR history](https://github.com/Taa965/zero3-pilot/pulls?q=is%3Apr+is%3Amerged+R3) |
+| Session persistence | Explicit Zero3 AppServer session-source identity plus real first-Turn cold-restart discovery/read verification | [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) |
 | Codex integration resilience | Deterministic overlay/replay infrastructure; lossless oversized tool-output spill/recovery (D1); recoverable compaction-input pruning without authoritative-history mutation (D2) | [PR #30](https://github.com/Taa965/zero3-pilot/pull/30), [#33](https://github.com/Taa965/zero3-pilot/pull/33), [#31](https://github.com/Taa965/zero3-pilot/pull/31) |
 | Remote Host | Narrow Codex-backed host runtime, crash-safe durable outbox, strict publication ordering, durable authenticated control plane with leases/fencing/replay/terminal validation | [PR #36](https://github.com/Taa965/zero3-pilot/pull/36), [#37](https://github.com/Taa965/zero3-pilot/pull/37), [#38](https://github.com/Taa965/zero3-pilot/pull/38), [#39](https://github.com/Taa965/zero3-pilot/pull/39) |
 | Executor control | Provider-neutral Executor contract, durable Git/workspace handoff, automatic failover controller, Native Codex executor | [PR #44](https://github.com/Taa965/zero3-pilot/pull/44), [#45](https://github.com/Taa965/zero3-pilot/pull/45), [#46](https://github.com/Taa965/zero3-pilot/pull/46), [#47](https://github.com/Taa965/zero3-pilot/pull/47) |
+| Windows alpha packaging | Exact reviewed pinned Codex release build, bundled `resources/zero3-codex/codex.exe`, packaged-runtime fail-closed resolver, legal notices, NSIS artifact gate and real bundled app-server smoke | [PR #51](https://github.com/Taa965/zero3-pilot/pull/51) |
 | Public maintenance/security | Architecture constitution, contribution rules, governance, release process, security policy/private reporting, issue/PR templates, Linux + Windows and feature-specific CI gates | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`GOVERNANCE.md`](GOVERNANCE.md), [`SECURITY.md`](SECURITY.md), [workflows](.github/workflows) |
 
-### First-alpha blocker
+### First-alpha closeout status
 
-- [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) — durable AppServer conversation discovery after restart. Its corrected credential-free smoke materializes two AppServer Threads through Codex's documented persistence path, cold-restarts app-server with the same `CODEX_HOME`, and requires both original IDs to remain listable/readable. It remains a `v0.1.0-alpha` blocker until that real gate is green.
+The two implementation blockers tracked for the first alpha are now merged:
+
+- [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) — Zero3 explicitly launches Codex with `--session-source app-server`, lists the matching `sourceKinds: ['appServer']` namespace, and verifies two first-Turn durable Threads across an app-server cold restart with the same `CODEX_HOME`.
+- [PR #51](https://github.com/Taa965/zero3-pilot/pull/51) — the Windows packaging path builds the exact reviewed Codex pin, bundles it under application resources, carries required legal notices, refuses arbitrary packaged-runtime substitution, produces an NSIS installer, and verifies the packaged binary with a real app-server smoke.
+
+The #51 pull-request merge candidate already combined the merged #49 tree with #51 and passed the Windows Alpha Artifact workflow. That is useful integrated pre-tag evidence, but it is **not** substituted for final evidence on the exact release SHA.
+
+Before `v0.1.0-alpha` is presented as published software, the final documentation-closeout tree still needs its exact-candidate release gates, Windows artifact/checksum evidence, tag and GitHub pre-release publication. Until those facts exist, the repository remains pre-release and no installer/checksum is presented here as the final public release artifact.
 
 ### Explicitly deferred from the first alpha
 
@@ -103,6 +112,7 @@ Zero3 Pilot uses small, focused PRs and explicit integration gates. Current work
 - Linux Rust format/lint/build/test checks;
 - Windows preparation/typecheck/build of the Hermes-derived Codex-core target shell;
 - a **real Codex Core Smoke** that builds the pinned open-source Codex CLI and exercises `codex app-server` JSONL flow;
+- a **Windows Alpha Artifact** gate that builds the packaged pinned Codex runtime, checks legal resources, performs a real bundled-binary app-server smoke and uploads the NSIS candidate;
 - milestone-specific R3/D/H/R4 architecture and behavior gates;
 - Remote Host durability and control-plane smokes;
 - Codex overlay verify/replay gates;
@@ -158,9 +168,11 @@ npm run dev
 
 `npm run dev` builds/resolves the pinned open-source Codex CLI when needed and points the desktop path at that exact binary. During migration, parts of the Hermes backend may still boot only to support UI surfaces that have not yet been ported; new or migrated Zero3 core capabilities must use Codex-owned/reviewed boundaries.
 
+The Windows packaging implementation is merged, but the public alpha installer is not considered shipped until the exact release candidate passes the final release gates and a GitHub pre-release is published. See [`docs/WINDOWS_INSTALL.md`](docs/WINDOWS_INSTALL.md).
+
 ## Releases and roadmap
 
-- [`ROADMAP.md`](ROADMAP.md) — what is merged, what blocks the first alpha, what is explicitly deferred and what comes after it.
+- [`ROADMAP.md`](ROADMAP.md) — what is merged, what remains before the first alpha, what is explicitly deferred and what comes after it.
 - [`CHANGELOG.md`](CHANGELOG.md) — public pre-release/release history.
 - [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) — evidence required before a tag is presented as a release.
 - [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md) — draft first-alpha release notes and release checklist.
