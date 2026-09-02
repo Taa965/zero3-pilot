@@ -33,9 +33,12 @@ export function resolveCodexHome() {
   return path.join(os.homedir(), '.local', 'share', 'zero3-pilot', 'codex')
 }
 
-export function pinnedCodexBinary() {
+export function pinnedCodexBinary(profile = 'debug') {
+  if (profile !== 'debug' && profile !== 'release') {
+    throw new Error(`Unsupported Codex build profile: ${profile}`)
+  }
   const exe = process.platform === 'win32' ? 'codex.exe' : 'codex'
-  return path.join(codexRoot, 'codex-rs', 'target', 'debug', exe)
+  return path.join(codexRoot, 'codex-rs', 'target', profile, exe)
 }
 
 export function commandName(base) {
