@@ -139,6 +139,24 @@ function createClient() {
     throw new Error(`${label}: expected=${expectedIds.join(',')} actual=${JSON.stringify([...actual])}`)
   }
 
+  async function materializeThread(threadId) {
+    // Pinned Codex deliberately materializes a fresh non-ephemeral Thread on its
+    // first Turn. This credential-free smoke must test cold-store filtering, not
+    // model/auth access, so use Codex's documented section-move path to force the
+    // same rollout materialization before restart. A null sectionId keeps the
+    // Thread unsectioned while still persisting it.
+    await request('thread/section/move', {
+      threadId,
+      sectionId: null,
+      beforeThreadId: null
+    })
+
+    const read = record(await request('thread/read', { threadId, includeTurns: false }))
+    if (record(read.thread).id !== threadId) {
+      throw new Error(`thread/read failed after materializing ${threadId}`)
+    }
+  }
+
   async function close() {
     if (child.exitCode != null || child.killed) return
     await new Promise(resolve => {
@@ -152,7 +170,7 @@ function createClient() {
     })
   }
 
-  return { child, initialize, request, waitForThreads, close }
+  return { child, initialize, request, waitForThreads, materializeThread, close }
 }
 
 async function main() {
@@ -169,7 +187,9 @@ async function main() {
     )
     if (first === second) throw new Error('two thread/start calls returned the same thread id')
 
-    await client.waitForThreads([first, second], 'live appServer thread/list omitted created threads')
+    await client.materializeThread(first)
+    await client.materializeThread(second)
+    await client.waitForThreads([first, second], 'live appServer thread/list omitted materialized threads')
 
     await client.close()
     client = createClient()
@@ -186,7 +206,7 @@ async function main() {
     }
 
     console.log(
-      `Zero3 Codex session persistence smoke passed: two appServer threads survived app-server restart (${first}, ${second}).`
+      `Zero3 Codex session persistence smoke passed: two materialized appServer threads survived app-server restart (${first}, ${second}).`
     )
   } finally {
     await client.close().catch(() => {})
