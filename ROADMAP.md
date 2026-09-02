@@ -42,19 +42,15 @@ The primary desktop path has progressed through R1A-R3F:
 
 ### Release blocker: durable primary-session restart
 
-[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) fixes AppServer Thread discovery after restart and adds a real pinned-Codex persistence smoke. This should be resolved before the first alpha tag because durable conversation restoration is a basic desktop-agent expectation.
+[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) fixes AppServer Thread discovery after restart and adds a real pinned-Codex cold-restart persistence smoke. This must be resolved before the first alpha tag because durable conversation restoration is a basic desktop-agent expectation.
 
-### External executor runtime
-
-[PR #48](https://github.com/Taa965/zero3-pilot/pull/48) is the formal R4B ACP external-executor implementation. It is useful for the first alpha but is not allowed to delay a Codex-native alpha indefinitely: if its final integration gates are not clean, it can ship in the next pre-release instead.
-
-Older audit/POC PRs must be closed or clearly marked superseded once their formal implementations have landed. Open history should not make contributors guess which branch is authoritative.
+The smoke deliberately materializes non-ephemeral Threads before restart because pinned Codex normally materializes a fresh Thread on its first Turn. Credential-free CI uses Codex's documented `thread/section/move` persistence path so the regression test isolates cold-store AppServer source filtering rather than model/auth availability.
 
 ### Public alpha productization
 
 Before `v0.1.0-alpha` is published:
 
-- all release-blocking CI and architecture gates must be green on the tag candidate;
+- all release-blocking CI and architecture gates must be green on the exact tag candidate;
 - the current Windows target desktop path must have a documented reproducible build path;
 - known limitations must be explicit rather than hidden behind roadmap language;
 - release notes and changelog must match the exact tagged SHA;
@@ -64,11 +60,27 @@ Before `v0.1.0-alpha` is published:
 
 Draft release notes live at [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md).
 
+## Explicitly deferred from `v0.1.0-alpha`
+
+### R4B ACP external executor
+
+[PR #48](https://github.com/Taa965/zero3-pilot/pull/48) is the formal ACP external-executor runtime, but it is **not part of the first public alpha**.
+
+The decision is evidence-driven:
+
+- the branch predates the merged Native Codex R4C path and currently requires replay/rebase onto the authoritative `main` stack;
+- its dedicated R4B workflow passes architecture guards and strict TypeScript checks but fails ACP behavior tests on both Ubuntu and Windows;
+- the observed failures include a deny path ending as `succeeded` instead of `cancelled`, and an ACP protocol-version mismatch being classified as `unavailable` instead of `unsupported`.
+
+Those are contract/semantics issues, not cosmetic CI noise. R4B will be repaired, replayed onto current `main`, and revalidated in a later pre-release rather than weakening the first-alpha gate.
+
+Older audit/POC PRs should be closed or clearly marked superseded once their formal implementation path exists. Open history should not make contributors guess which branch is authoritative.
+
 ## After `v0.1.0-alpha`
 
 ### R4 / collaboration completion
 
-- finish and integrate the external-agent executor boundary;
+- repair/rebase/revalidate the formal ACP external-agent executor (#48), including deny/cancellation and protocol-version classification semantics;
 - connect Remote Host task execution to the frozen Executor Manager / Handoff / Failover contracts without weakening H5 lease/fencing/outbox invariants;
 - expose executor selection, failover and handoff evidence in the desktop UI;
 - continue to keep external Codex/Claude/Hermes applications as collaborators, not alternate native kernels.
@@ -108,6 +120,7 @@ Zero3 Pilot will not improve apparent feature count by:
 - copying credentials or parsing Codex auth files to bypass supported account APIs;
 - exposing a generic Renderer-controlled Codex JSON-RPC tunnel;
 - silently falling back to Hermes Runtime or legacy Zero3 Node for migrated core operations;
-- claiming broad adoption, production readiness or release status before public evidence exists.
+- claiming broad adoption, production readiness or release status before public evidence exists;
+- merging a provider integration whose own cross-platform behavior contract is red merely to increase first-release scope.
 
 See [`docs/ARCHITECTURE_CONSTITUTION.md`](docs/ARCHITECTURE_CONSTITUTION.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`SECURITY.md`](SECURITY.md) for the detailed authority and security boundaries.
