@@ -202,6 +202,7 @@ if (mode === 'dev') {
 } else if (mode === 'dist:win') {
   codexBinary = ensurePinnedCodexBinary(baseEnv, 'release')
   stagePinnedCodexForWindowsPackage(codexBinary)
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-windows-package.mjs')])
 } else {
   codexBinary = pinnedCodexBinary('debug')
 }
