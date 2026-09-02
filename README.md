@@ -52,7 +52,7 @@ See [`ROADMAP.md`](ROADMAP.md) for release criteria and the post-alpha direction
 
 The roles are intentionally asymmetric:
 
-- **Open-source Codex = authoritative native Agent Kernel/runtime.**
+- **Open-source Codex = the only core Agent Kernel / runtime authority.** In the current product architecture it is the authoritative native Agent Kernel/runtime.
 - **Hermes Agent = desktop UI/UX shell source.** Remaining runtime use is compatibility scaffolding for unported surfaces, not a second Zero3 core.
 - **DeepSeek-Harness = capability donor/reference.** Useful capabilities may be audited and re-expressed through Codex-native extension seams.
 - **Installed Codex / Claude / Hermes applications = external collaborators.** They may participate through reviewed executor/collaboration boundaries but do not define the Zero3 native runtime.
