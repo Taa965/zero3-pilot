@@ -1,0 +1,34 @@
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@ -571,3 +571,13 @@
++    /// Session source used to derive product restrictions and persisted metadata.
++    /// Keep the upstream wrapper default unchanged unless a caller opts in.
++    #[arg(
++        long = "session-source",
++        value_name = "SOURCE",
++        default_value = "vscode",
++        value_parser = codex_protocol::protocol::SessionSource::from_startup_arg
++    )]
++    session_source: codex_protocol::protocol::SessionSource,
++
+     /// Enable remote control for this app-server process without changing persistence.
+     #[arg(long = "remote-control", hide = true)]
+     remote_control: bool,
+@@ -1248,6 +1258,7 @@
+                 strict_config: app_server_strict_config,
+                 listen,
+                 stdio,
++                session_source,
+                 remote_control,
+                 analytics_default_enabled,
+                 auth,
+@@ -1290,7 +1301,7 @@
+                         strict_config,
+                         analytics_default_enabled,
+                         transport,
+-                        codex_protocol::protocol::SessionSource::VSCode,
++                        session_source,
+                         auth,
+                         runtime_options,
+                     )
