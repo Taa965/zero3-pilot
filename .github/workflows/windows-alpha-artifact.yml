@@ -25,8 +25,18 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # Zero3 overlay patches are reviewed as LF text. Hosted Windows Git
+          # can inherit core.autocrlf=true, which rewrites the freshly-cloned
+          # Codex worktree before git-apply sees it and makes a valid reviewed
+          # patch look like unmanaged upstream drift. Disable conversion before
+          # the submodule checkout so Windows validates the exact same bytes as
+          # Linux instead of weakening patch checks with whitespace ignores.
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'failed to disable Git CRLF conversion' }
           git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
           if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
+          $codexAutocrlf = git -C upstream/codex config --get core.autocrlf
+          if ($LASTEXITCODE -eq 0 -and $codexAutocrlf -eq 'true') { throw 'Codex submodule inherited core.autocrlf=true' }
 
       - uses: actions/setup-node@v4
         with:
