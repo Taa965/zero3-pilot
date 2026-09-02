@@ -7,9 +7,17 @@ if (process.platform !== 'win32') {
   throw new Error('prepare-windows-package.mjs must run on Windows.')
 }
 
-const stagedCodex = path.join(hermesDesktopDir, 'build', 'zero3-codex', 'codex.exe')
-if (!fs.existsSync(stagedCodex) || !fs.statSync(stagedCodex).isFile() || fs.statSync(stagedCodex).size === 0) {
-  throw new Error(`Pinned Codex release binary is not staged for packaging: ${stagedCodex}`)
+for (const required of [
+  path.join(hermesDesktopDir, 'build', 'zero3-codex', 'codex.exe'),
+  path.join(hermesDesktopDir, 'build', 'zero3-legal', 'LICENSE-Zero3-Pilot.txt'),
+  path.join(hermesDesktopDir, 'build', 'zero3-legal', 'NOTICE-Zero3-Pilot.txt'),
+  path.join(hermesDesktopDir, 'build', 'zero3-legal', 'LICENSE-OpenAI-Codex.txt'),
+  path.join(hermesDesktopDir, 'build', 'zero3-legal', 'NOTICE-OpenAI-Codex.txt'),
+  path.join(hermesDesktopDir, 'build', 'zero3-legal', 'LICENSE-Hermes-Agent.txt')
+]) {
+  if (!fs.existsSync(required) || !fs.statSync(required).isFile() || fs.statSync(required).size === 0) {
+    throw new Error(`Required Windows release resource is not staged: ${required}`)
+  }
 }
 
 const packagePath = path.join(hermesDesktopDir, 'package.json')
@@ -19,13 +27,20 @@ packageJson.scripts = packageJson.scripts ?? {}
 packageJson.scripts['dist:win'] = 'npm run build && npm run builder -- --win nsis --publish never'
 packageJson.build = packageJson.build ?? {}
 packageJson.build.win = packageJson.build.win ?? {}
+const managedTargets = new Set(['zero3-codex/codex.exe', 'legal'])
 const extraResources = Array.isArray(packageJson.build.win.extraResources)
-  ? packageJson.build.win.extraResources.filter(item => item?.to !== 'zero3-codex/codex.exe')
+  ? packageJson.build.win.extraResources.filter(item => !managedTargets.has(item?.to))
   : []
-extraResources.push({
-  from: 'build/zero3-codex/codex.exe',
-  to: 'zero3-codex/codex.exe'
-})
+extraResources.push(
+  {
+    from: 'build/zero3-codex/codex.exe',
+    to: 'zero3-codex/codex.exe'
+  },
+  {
+    from: 'build/zero3-legal',
+    to: 'legal'
+  }
+)
 packageJson.build.win.extraResources = extraResources
 fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
 
@@ -41,4 +56,4 @@ if (!main.includes(newResolver)) {
   fs.writeFileSync(mainPath, main)
 }
 
-console.log('Zero3 Windows package prepared: v0.1.0-alpha, NSIS publish disabled, pinned Codex bundled in resources.')
+console.log('Zero3 Windows package prepared: v0.1.0-alpha, NSIS publish disabled, pinned Codex and legal notices bundled.')
