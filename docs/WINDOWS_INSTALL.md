@@ -1,72 +1,124 @@
 # Windows installation
 
-Zero3 Pilot ships three Windows binaries as one per-user Inno Setup package:
+> **Pre-release documentation.** Zero3 Pilot has not published a GitHub Release yet. The Windows distribution described here is the `v0.1.0-alpha` candidate path and must not be treated as shipped until the release-readiness gates in Issue #50 are complete.
 
-- `zero3-pilot.exe` — native Tao/Wry/WebView2 desktop shell.
-- `zero3-pilot-node.exe` — local-first runtime authority on `127.0.0.1:8790`.
-- `zero3-pilot-weixin.exe` — optional Weixin ClawBot channel connector.
+## Current target package
 
-## One-click installer
+The Codex-native Windows target is a Zero3-branded **Electron + React** desktop application packaged with NSIS.
 
-Tagged releases publish `Zero3Pilot-Setup.exe`. PR CI and the Windows Release workflow both build the same installer from `installer/Zero3Pilot.iss`.
+The first-alpha packaging design is intentionally self-contained around the reviewed Codex core:
 
-The installer uses a per-user destination by default:
+- Zero3 builds the repository's exact pinned open-source Codex revision for Windows;
+- the package carries that binary at `resources/zero3-codex/codex.exe`;
+- packaged mode uses the bundled reviewed binary rather than PATH, `@latest`, runtime download or an arbitrary host override;
+- the package carries the relevant Zero3/OpenAI Codex/Hermes license and NOTICE material under application resources;
+- CI verifies the **packaged** Codex binary with `--version` and a real `codex app-server` JSONL smoke before the artifact is accepted.
 
-```text
-%LOCALAPPDATA%\Programs\Zero3 Pilot
-```
+This replaces the legacy Tao/Wry + `zero3-node` + Inno Setup distribution described by older development documents. Those paths are not the current desktop release architecture.
 
-No administrator elevation is required for the normal install path.
+## Public alpha install
 
-During setup a runtime-check page reports whether the following are detected:
+When `v0.1.0-alpha` is actually published, use the Windows installer attached to that GitHub pre-release and verify its SHA-256 against the checksum recorded in the final release notes.
 
-- Microsoft Edge WebView2 / Edge runtime (desktop UI)
-- Chrome or Edge (browser/CDP provider)
-- Codex CLI
-- Claude CLI
-- Hermes CLI
-- Open Computer Use
+The exact installer filename/checksum are intentionally omitted from this pre-release document until a combined release candidate containing both session-persistence (#49) and bundled-runtime (#51) fixes has passed the final artifact gate.
 
-The Agent CLIs and Open Computer Use are optional at installation time: install only the backends you intend to use. Missing optional dependencies do not prevent the desktop/runtime from installing.
+The installer is intended to be per-user and not require users to separately install Codex just to provide Zero3's native Agent Kernel.
 
-The setup creates Start Menu entries for Zero3 Pilot and the Weixin ClawBot login/status commands. A desktop shortcut is optional.
+### Signing / SmartScreen
 
-## Build the installer from source
+The current alpha CI disables automatic code-signing identity discovery. Unless the final release evidence explicitly records a Windows signing step, expect the first alpha installer to be **unsigned** and Windows may show SmartScreen or an unknown-publisher warning.
 
-On Windows with Rust and Inno Setup 6:
+An unsigned status is a distribution limitation, not permission to ignore integrity checks: verify the installer SHA-256 against the final release record before running it.
+
+## First launch
+
+Zero3's migrated primary conversation path runs through the bundled pinned Codex app-server.
+
+During migration, some UI surfaces derived from Hermes may still initialize a local Hermes-derived compatibility backend. That compatibility backend exists to support unported UI behavior; it is **not** the authoritative native Agent Kernel and migrated core behavior must not silently fall back to it.
+
+Development sessions created before explicit Zero3 AppServer source tagging are not guaranteed to appear in the first public alpha. Older development builds may have persisted those Threads using Codex's `vscode` session source. Automatically importing every `vscode` row would risk mixing unrelated VS Code Codex history into Zero3, so the alpha does not claim automatic migration of that pre-release state.
+
+## Build the Windows candidate from source
+
+### Prerequisites
+
+Use a Windows development environment with:
+
+- Git;
+- Node.js 24;
+- a stable Rust MSVC toolchain and the native build prerequisites required by the pinned Codex source;
+- sufficient disk space for a full pinned-Codex release build plus Electron packaging.
+
+Clone the reviewed upstream pins:
 
 ```powershell
 git clone --recurse-submodules https://github.com/Taa965/zero3-pilot.git
 cd zero3-pilot
-cargo build --release -p zero3-node -p zero3-weixin -p zero3-desktop
-& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\Zero3Pilot.iss
 ```
 
-The installer is written to:
-
-```text
-dist\Zero3Pilot-Setup.exe
-```
-
-## Runtime data
-
-By default the local Node and Weixin connector share:
-
-```text
-%LOCALAPPDATA%\Zero3Pilot
-```
-
-This contains the append-only event log, scheduler SQLite database, memory SQLite database, and (when enabled) the Weixin ClawBot credential state. Set `ZERO3_PILOT_DATA_DIR` before launch to move all local runtime state elsewhere.
-
-## Optional backend overrides
-
-If a CLI is not on PATH, point Zero3 Pilot at it explicitly:
+Build the target package:
 
 ```powershell
-$env:ZERO3_CODEX_BIN='D:\Tools\codex.exe'
-$env:ZERO3_CLAUDE_BIN='D:\Tools\claude.exe'
-$env:ZERO3_HERMES_BIN='D:\Tools\hermes.exe'
-$env:ZERO3_OCU_BIN='D:\Tools\open-computer-use.cmd'
+cd apps/zero3-desktop
+npm run dist:win
 ```
 
-The desktop starts/reuses the sibling local Node automatically. The Weixin connector is a separate channel process so connecting/disconnecting WeChat never changes the core runtime or desktop lifecycle.
+The release workflow uses this Zero3-owned command path rather than an independent legacy installer script. It prepares the reviewed Hermes-derived shell, applies the managed Codex overlay, builds the pinned Codex CLI in release mode, stages the bundled runtime and legal notices, and invokes the desktop package build with publishing disabled.
+
+Expected build outputs are under:
+
+```text
+upstream/hermes-agent/apps/desktop/release/
+```
+
+The NSIS artifact uses the Zero3 product naming pattern:
+
+```text
+Zero3Pilot-*.exe
+```
+
+The unpacked package used by CI must contain at least:
+
+```text
+win-unpacked/
+  Zero3Pilot.exe
+  resources/
+    app.asar
+    zero3-codex/
+      codex.exe
+    legal/
+      LICENSE-Zero3-Pilot.txt
+      NOTICE-Zero3-Pilot.txt
+      LICENSE-OpenAI-Codex.txt
+      NOTICE-OpenAI-Codex.txt
+      LICENSE-Hermes-Agent.txt
+```
+
+The exact final artifact layout remains evidence-gated by the Windows Alpha Artifact workflow; this document should be updated if the verified package differs.
+
+## Development mode
+
+For contributors working from source:
+
+```powershell
+cd apps/zero3-desktop
+npm run prepare
+npm run typecheck
+npm run dev
+```
+
+Development mode may resolve/build the pinned Codex binary from the repository and pass its exact path explicitly to the desktop process. That development override is not the packaged-release trust model.
+
+## Troubleshooting principles
+
+For the public alpha:
+
+- do not fix a packaged-runtime problem by downloading an arbitrary `codex.exe` and replacing the bundled core;
+- do not switch the packaged app to `@latest` or an unreviewed PATH binary;
+- preserve the exact installer and checksum when reporting packaging/runtime bugs;
+- include the Zero3 version, exact release SHA, Windows version and whether SmartScreen/unknown-publisher UI appeared;
+- report security-boundary concerns privately according to [`../SECURITY.md`](../SECURITY.md).
+
+## Historical note
+
+Older repository revisions shipped or documented a Tao/Wry shell, a local `zero3-node` authority and an Inno Setup package. That architecture is retained only in history/legacy code while migration completes. It is not the install path documented for the Codex-native first public alpha.

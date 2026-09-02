@@ -38,9 +38,14 @@ The repository is young, but the current `main` is beyond a transport-only proto
 | Executor control | Provider-neutral Executor contract, durable Git/workspace handoff, automatic failover controller, Native Codex executor | [PR #44](https://github.com/Taa965/zero3-pilot/pull/44), [#45](https://github.com/Taa965/zero3-pilot/pull/45), [#46](https://github.com/Taa965/zero3-pilot/pull/46), [#47](https://github.com/Taa965/zero3-pilot/pull/47) |
 | Public maintenance/security | Architecture constitution, contribution rules, governance, release process, security policy/private reporting, issue/PR templates, Linux + Windows and feature-specific CI gates | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`GOVERNANCE.md`](GOVERNANCE.md), [`SECURITY.md`](SECURITY.md), [workflows](.github/workflows) |
 
-### First-alpha blocker
+### First-alpha blockers
 
-- [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) — durable AppServer conversation discovery after restart. Its corrected credential-free smoke materializes two AppServer Threads through Codex's documented persistence path, cold-restarts app-server with the same `CODEX_HOME`, and requires both original IDs to remain listable/readable. It remains a `v0.1.0-alpha` blocker until that real gate is green.
+The first public alpha intentionally remains blocked until both of these focused PRs have real evidence on the release candidate:
+
+- [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) — durable Zero3 conversation discovery after restart. Pinned Codex separates AppServer transport from persisted session source: `codex app-server` defaults its session source to `vscode`. The repair explicitly launches Zero3's Codex child with `--session-source app-server`, lists the matching `sourceKinds: ['appServer']` namespace, and cold-restarts a real first-Turn persistence smoke with the same `CODEX_HOME`.
+- [PR #51](https://github.com/Taa965/zero3-pilot/pull/51) — Codex-native Windows distribution. The intended alpha package must contain the exact reviewed pinned `codex.exe` under its application resources, carry the required upstream license/NOTICE files, refuse PATH/`@latest`/runtime-download substitution in packaged mode, and pass a Windows artifact gate against the binary that is actually inside the package.
+
+Neither PR is counted as merged capability until its required gates are green and the PR is merged. The final release candidate must contain both changes and be revalidated as one exact SHA.
 
 ### Explicitly deferred from the first alpha
 
@@ -157,6 +162,8 @@ npm run dev
 ```
 
 `npm run dev` builds/resolves the pinned open-source Codex CLI when needed and points the desktop path at that exact binary. During migration, parts of the Hermes backend may still boot only to support UI surfaces that have not yet been ported; new or migrated Zero3 core capabilities must use Codex-owned/reviewed boundaries.
+
+The Windows pre-release distribution is tracked by #51 and is not presented as shipped until the real packaged artifact gate passes on the combined release candidate. See [`docs/WINDOWS_INSTALL.md`](docs/WINDOWS_INSTALL.md) for the candidate packaging model and current limitations.
 
 ## Releases and roadmap
 

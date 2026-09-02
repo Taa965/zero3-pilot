@@ -40,23 +40,45 @@ The primary desktop path has progressed through R1A-R3F:
 
 ## Active work before the first public alpha
 
-### Release blocker: durable primary-session restart
+### Release blocker: durable primary-session restart (#49)
 
-[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) fixes AppServer Thread discovery after restart and adds a real pinned-Codex cold-restart persistence smoke. This must be resolved before the first alpha tag because durable conversation restoration is a basic desktop-agent expectation.
+[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) addresses durable Zero3 conversation discovery across app-server restart.
 
-The smoke deliberately materializes non-ephemeral Threads before restart because pinned Codex normally materializes a fresh Thread on its first Turn. Credential-free CI uses Codex's documented `thread/section/move` persistence path so the regression test isolates cold-store AppServer source filtering rather than model/auth availability.
+Pinned Codex separates the AppServer transport from the persisted session source. The `codex app-server` command defaults `--session-source` to `vscode`; Zero3 therefore must explicitly launch its child with `--session-source app-server`. The matching Zero3 list boundary requests `sourceKinds: ['appServer']`, which maps to the pinned Codex `Mcp` session source rather than mixing unrelated VS Code Codex history into the desktop sidebar.
+
+The corrected credential-free regression smoke mirrors the real Zero3 launch arguments, creates two non-ephemeral Threads, starts a first Turn on each so Codex materializes normal durable conversation history, restarts app-server with the same `CODEX_HOME`, and requires both original IDs to remain listable and readable in the AppServer source namespace.
+
+#49 remains a blocker until that exact real smoke and its surrounding required gates are green.
+
+### Release blocker: Codex-native Windows artifact (#51)
+
+[PR #51](https://github.com/Taa965/zero3-pilot/pull/51) establishes the first distributable Windows path for the Codex-native target shell.
+
+The release package is required to:
+
+- build the exact reviewed pinned Codex source for Windows rather than resolve an arbitrary installed CLI;
+- carry that `codex.exe` under application resources;
+- use the bundled binary in packaged mode instead of PATH, `@latest`, runtime download or arbitrary host override;
+- carry Zero3, OpenAI Codex and Hermes license/NOTICE material required by the packaged inputs;
+- produce a real NSIS artifact;
+- exercise `--version` and a real app-server JSONL smoke against the binary inside the package;
+- record a SHA-256 for the actual installer artifact.
+
+A green standalone #51 run proves the packaging mechanism, but the final release candidate must be revalidated after #49 is merged so one exact candidate contains both durable AppServer source identity and bundled pinned Codex distribution.
 
 ### Public alpha productization
 
 Before `v0.1.0-alpha` is published:
 
 - all release-blocking CI and architecture gates must be green on the exact tag candidate;
-- the current Windows target desktop path must have a documented reproducible build path;
+- #49 and #51 must be merged/revalidated together rather than treated as independent release evidence;
+- the Windows target desktop path must produce a documented reproducible real artifact;
+- public installation/deployment docs must describe the current Electron + bundled-Codex architecture, not legacy Wry/Node/Inno paths;
 - known limitations must be explicit rather than hidden behind roadmap language;
 - release notes and changelog must match the exact tagged SHA;
 - no known critical security-boundary regression may remain open;
-- public screenshots or a short demo should be added once they can be captured from the real target desktop build;
-- stale/superseded draft PRs should be cleaned up so the repository presents one current implementation path.
+- public screenshots or a short demo should be added only if captured from the real target desktop build;
+- stale/superseded draft PRs and historical architecture docs should be clearly marked so the repository presents one current implementation path.
 
 Draft release notes live at [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md).
 
@@ -87,11 +109,11 @@ Older audit/POC PRs should be closed or clearly marked superseded once their for
 
 ### Productization
 
-- provider-neutral self-host packaging;
+- code-signing and release/update-channel hardening for Windows distribution;
 - secure pairing/rotation/revocation flow;
-- reproducible Windows distribution for the Codex-native target shell;
 - onboarding and diagnostics for Codex pin/runtime/auth compatibility;
-- release/update channel that preserves upstream provenance and security boundaries.
+- remove remaining Hermes compatibility-backend assumptions as UI surfaces are migrated;
+- CI concurrency/caching improvements that preserve release-gate strength while cancelling superseded PR runs.
 
 ### Codex-native extensions
 

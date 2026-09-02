@@ -23,11 +23,12 @@ Zero3 Pilot has not published a GitHub Release yet. The first planned public tag
 - Crash-safe, fail-closed Git/workspace handoff protocol (R4E).
 - Automatic executor failover controller with retry, cooldown, circuit-breaker and recovery-first behavior (R4F).
 - Native Codex `Zero3Executor` using the pinned app-server path, explicit permission forwarding and supported account/rate-limit APIs rather than credential-file parsing (R4C).
-- Public `SECURITY.md`, private vulnerability-reporting path, `CONTRIBUTING.md`, PR/issue templates and extensive architecture/CI gates.
+- Public `SECURITY.md`, private vulnerability-reporting path, `CONTRIBUTING.md`, governance/release documentation, PR/issue templates and extensive architecture/CI gates.
 
-### Release blocker
+### Release blockers — not counted as shipped until merged
 
-- Durable AppServer conversation discovery and restart persistence fix: [PR #49](https://github.com/Taa965/zero3-pilot/pull/49). It is not included until its real cold-restart smoke and required surrounding gates pass.
+- Durable Zero3 AppServer-source conversation discovery and restart persistence: [PR #49](https://github.com/Taa965/zero3-pilot/pull/49). Pinned Codex defaults `codex app-server` session identity to `vscode`; the candidate fix explicitly launches `--session-source app-server`, filters the matching `sourceKinds: ['appServer']` namespace, and verifies two first-Turn durable Threads across an app-server cold restart with the same `CODEX_HOME`. It is not included until that exact real smoke and required surrounding gates pass.
+- Codex-native Windows distribution: [PR #51](https://github.com/Taa965/zero3-pilot/pull/51). The candidate builds the exact reviewed Codex pin for Windows, bundles `codex.exe` into application resources, carries required Zero3/Codex/Hermes legal notices, disallows arbitrary external Codex substitution in packaged mode, builds an NSIS artifact and verifies the bundled binary with a real app-server smoke. It is not included until the Windows Alpha Artifact gate passes and the packaging path is revalidated on a combined candidate that also contains #49.
 
 ### Deferred from this alpha
 
@@ -39,8 +40,10 @@ Zero3 Pilot has not published a GitHub Release yet. The first planned public tag
 - No GitHub Release/tag has been published yet.
 - The project is not production-ready and does not claim broad external adoption.
 - Parts of the Hermes-derived backend may still exist as compatibility scaffolding for unported UI surfaces; new/migrated core runtime behavior must use Codex-owned boundaries.
+- Conversations created by development builds before explicit Zero3 AppServer source tagging may have been stored under Codex's `vscode` source. The first public alpha does not promise automatic migration of those pre-release sessions because importing all `vscode` rows could mix unrelated VS Code Codex history into Zero3.
 - ACP external-agent execution is intentionally not part of the `v0.1.0-alpha` scope.
-- Release-quality screenshots/demo and a final Codex-native Windows distribution still need to be produced from the real release candidate.
+- The Windows alpha candidate is expected to be unsigned unless the final release evidence explicitly records a signing step; Windows SmartScreen or an unknown-publisher warning may therefore appear.
+- Release-quality screenshots/demo and the final Windows installer checksum must come from the exact combined release candidate, not from a standalone blocker branch.
 
 ### Security / architecture invariants
 
@@ -50,5 +53,6 @@ Zero3 Pilot has not published a GitHub Release yet. The first planned public tag
 - Codex authentication material is not copied or parsed from credential files by the Native executor.
 - External executors do not gain Handoff/Router/task authority merely by being providers.
 - Provider integrations with incorrect deny/failure semantics are deferred rather than treated as release-ready.
+- A packaged Windows build must use the reviewed bundled Codex pin rather than PATH, `@latest`, runtime download or an arbitrary host override.
 
 See [`ROADMAP.md`](ROADMAP.md) and [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md) for the release-readiness plan and draft release narrative.
