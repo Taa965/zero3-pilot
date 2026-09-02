@@ -1,0 +1,98 @@
+name: Windows Alpha Artifact
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/**'
+      - '.github/workflows/windows-alpha-artifact.yml'
+  workflow_dispatch: {}
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  package-windows-alpha:
+    runs-on: windows-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize reviewed upstream pins
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
+          if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+          cache: npm
+          cache-dependency-path: upstream/hermes-agent/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: upstream/codex/codex-rs
+
+      - name: Static release-path guards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/check-architecture.mjs
+          node --check apps/zero3-desktop/scripts/config.mjs
+          node --check apps/zero3-desktop/scripts/run.mjs
+          node --check apps/zero3-desktop/scripts/prepare-windows-package.mjs
+
+      - name: Build Codex-native Windows alpha package
+        working-directory: apps/zero3-desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run dist:win
+          if ($LASTEXITCODE -ne 0) { throw 'Codex-native Windows package build failed' }
+
+      - name: Verify packaged pinned Codex and real app-server protocol
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $desktop = 'upstream/hermes-agent/apps/desktop'
+          $package = Get-Content -Raw "$desktop/package.json" | ConvertFrom-Json
+          if ($package.productName -ne 'Zero3 Pilot') { throw 'package lost Zero3 product identity' }
+          if ($package.version -ne '0.1.0-alpha') { throw "unexpected alpha package version: $($package.version)" }
+          if ($package.build.appId -ne 'ai.zero3.pilot') { throw 'package lost Zero3 appId' }
+          if ($package.scripts.'dist:win' -notmatch '--publish never') { throw 'Windows package must not auto-publish from CI' }
+
+          $resource = @($package.build.win.extraResources) | Where-Object { $_.to -eq 'zero3-codex/codex.exe' }
+          if ($resource.Count -ne 1) { throw 'Windows package must contain exactly one managed Codex extraResource' }
+
+          $bundledCodex = "$desktop/release/win-unpacked/resources/zero3-codex/codex.exe"
+          if (-not (Test-Path $bundledCodex -PathType Leaf)) { throw 'packaged pinned Codex binary is missing' }
+          $bundledCodex = (Resolve-Path $bundledCodex).Path
+          & $bundledCodex --version
+          if ($LASTEXITCODE -ne 0) { throw 'packaged Codex --version failed' }
+          node apps/zero3-desktop/scripts/smoke-codex-app-server.mjs $bundledCodex
+          if ($LASTEXITCODE -ne 0) { throw 'packaged Codex real app-server smoke failed' }
+
+          $installer = Get-ChildItem "$desktop/release" -File -Filter 'Zero3Pilot-*.exe' | Where-Object { $_.Name -notmatch '^Zero3Pilot\.exe$' } | Select-Object -First 1
+          if (-not $installer) { throw 'Zero3 Pilot NSIS installer artifact was not produced' }
+          $hash = Get-FileHash $installer.FullName -Algorithm SHA256
+          "ZERO3_ALPHA_INSTALLER=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ZERO3_ALPHA_SHA256=$($hash.Hash)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "installer=$($installer.Name)"
+          Write-Host "sha256=$($hash.Hash)"
+
+      - name: Upload Windows alpha artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zero3Pilot-v0.1.0-alpha-windows-${{ github.sha }}
+          path: |
+            upstream/hermes-agent/apps/desktop/release/Zero3Pilot-*.exe
+            upstream/hermes-agent/apps/desktop/release/latest*.yml
+          if-no-files-found: error
+          retention-days: 14
