@@ -5,6 +5,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import {
   codexRoot,
   commandName,
+  hermesDesktopDir,
   hermesRoot,
   pinnedCodexBinary,
   repoRoot,
@@ -59,29 +60,43 @@ function ensureHermesDependencies(env) {
   })
 }
 
-function ensurePinnedCodexBinary(env) {
-  const binary = pinnedCodexBinary()
+function ensurePinnedCodexBinary(env, profile = 'debug') {
+  const binary = pinnedCodexBinary(profile)
   if (isFile(binary)) return binary
 
-  console.log('[Zero3 R1A] Building pinned open-source Codex core...')
-  runSync(
-    'cargo',
-    [
-      'build',
-      '--manifest-path',
-      path.join(codexRoot, 'codex-rs', 'Cargo.toml'),
-      '-p',
-      'codex-cli',
-      '--bin',
-      'codex'
-    ],
-    { cwd: codexRoot, env }
-  )
+  console.log(`[Zero3] Building pinned open-source Codex core (${profile})...`)
+  const args = [
+    'build',
+    '--manifest-path',
+    path.join(codexRoot, 'codex-rs', 'Cargo.toml'),
+    '-p',
+    'codex-cli',
+    '--bin',
+    'codex'
+  ]
+  if (profile === 'release') args.push('--release')
+  runSync('cargo', args, { cwd: codexRoot, env })
 
   if (!isFile(binary)) {
     throw new Error(`Pinned Codex binary was not produced at ${binary}`)
   }
   return binary
+}
+
+function stagePinnedCodexForWindowsPackage(binary) {
+  if (process.platform !== 'win32') {
+    throw new Error('dist:win must run on Windows so the packaged Codex binary matches the target platform.')
+  }
+  const targetDir = path.join(hermesDesktopDir, 'build', 'zero3-codex')
+  const target = path.join(targetDir, 'codex.exe')
+  fs.rmSync(targetDir, { recursive: true, force: true })
+  fs.mkdirSync(targetDir, { recursive: true })
+  fs.copyFileSync(binary, target)
+  if (!isFile(target) || fs.statSync(target).size === 0) {
+    throw new Error(`Failed to stage pinned Codex binary for packaging at ${target}`)
+  }
+  console.log(`[Zero3] Staged pinned Codex release binary for Windows package: ${target}`)
+  return target
 }
 
 function hermesVenvPython() {
@@ -181,12 +196,22 @@ const baseEnv = {
   ZERO3_DESKTOP_SHELL: 'hermes-ui-compat'
 }
 
+let codexBinary
+if (mode === 'dev') {
+  codexBinary = ensurePinnedCodexBinary(baseEnv, 'debug')
+} else if (mode === 'dist:win') {
+  codexBinary = ensurePinnedCodexBinary(baseEnv, 'release')
+  stagePinnedCodexForWindowsPackage(codexBinary)
+} else {
+  codexBinary = pinnedCodexBinary('debug')
+}
+
 const env = {
   ...baseEnv,
-  // The target runtime always points at the binary built from upstream/codex's
-  // pinned source tree. Host-installed Codex/Claude/Hermes applications remain
-  // external collaborators and never satisfy this core-runtime path.
-  ZERO3_CODEX_BIN: mode === 'dev' ? ensurePinnedCodexBinary(baseEnv) : pinnedCodexBinary()
+  // Development/build orchestration points only at the binary built from the
+  // reviewed upstream/codex pin. The packaged Windows app has a separate
+  // fail-closed resolver for its bundled resources/zero3-codex/codex.exe.
+  ZERO3_CODEX_BIN: codexBinary
 }
 
 ensureHermesDependencies(env)
