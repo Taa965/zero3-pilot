@@ -83,20 +83,37 @@ function ensurePinnedCodexBinary(env, profile = 'debug') {
   return binary
 }
 
+function copyRequiredFile(source, target) {
+  if (!isFile(source)) throw new Error(`Required release file is missing: ${source}`)
+  fs.copyFileSync(source, target)
+  if (!isFile(target) || fs.statSync(target).size === 0) {
+    throw new Error(`Failed to stage release file: ${target}`)
+  }
+}
+
 function stagePinnedCodexForWindowsPackage(binary) {
   if (process.platform !== 'win32') {
     throw new Error('dist:win must run on Windows so the packaged Codex binary matches the target platform.')
   }
-  const targetDir = path.join(hermesDesktopDir, 'build', 'zero3-codex')
-  const target = path.join(targetDir, 'codex.exe')
-  fs.rmSync(targetDir, { recursive: true, force: true })
-  fs.mkdirSync(targetDir, { recursive: true })
-  fs.copyFileSync(binary, target)
-  if (!isFile(target) || fs.statSync(target).size === 0) {
-    throw new Error(`Failed to stage pinned Codex binary for packaging at ${target}`)
-  }
-  console.log(`[Zero3] Staged pinned Codex release binary for Windows package: ${target}`)
-  return target
+
+  const codexTargetDir = path.join(hermesDesktopDir, 'build', 'zero3-codex')
+  const codexTarget = path.join(codexTargetDir, 'codex.exe')
+  fs.rmSync(codexTargetDir, { recursive: true, force: true })
+  fs.mkdirSync(codexTargetDir, { recursive: true })
+  copyRequiredFile(binary, codexTarget)
+
+  const legalTargetDir = path.join(hermesDesktopDir, 'build', 'zero3-legal')
+  fs.rmSync(legalTargetDir, { recursive: true, force: true })
+  fs.mkdirSync(legalTargetDir, { recursive: true })
+  copyRequiredFile(path.join(repoRoot, 'LICENSE'), path.join(legalTargetDir, 'LICENSE-Zero3-Pilot.txt'))
+  copyRequiredFile(path.join(repoRoot, 'NOTICE'), path.join(legalTargetDir, 'NOTICE-Zero3-Pilot.txt'))
+  copyRequiredFile(path.join(codexRoot, 'LICENSE'), path.join(legalTargetDir, 'LICENSE-OpenAI-Codex.txt'))
+  copyRequiredFile(path.join(codexRoot, 'NOTICE'), path.join(legalTargetDir, 'NOTICE-OpenAI-Codex.txt'))
+  copyRequiredFile(path.join(hermesRoot, 'LICENSE'), path.join(legalTargetDir, 'LICENSE-Hermes-Agent.txt'))
+
+  console.log(`[Zero3] Staged pinned Codex release binary for Windows package: ${codexTarget}`)
+  console.log(`[Zero3] Staged Zero3/Codex/Hermes release notices: ${legalTargetDir}`)
+  return codexTarget
 }
 
 function hermesVenvPython() {
