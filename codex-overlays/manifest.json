@@ -107,6 +107,24 @@
   ],
   "patches": [
     {
+      "id": "010-foundation-app-server-session-source",
+      "feature": "foundation",
+      "path": "codex-overlays/patches/foundation/010-foundation-app-server-session-source.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex CLI's codex app-server wrapper hardcodes SessionSource::VSCode and does not expose the standalone app-server's existing --session-source startup contract, so Zero3 cannot claim an explicit durable AppServer/Mcp namespace through the packaged codex binary.",
+      "donor": {
+        "repo": "https://github.com/openai/codex.git",
+        "sha": "94311d447587411789533c47601fd8bc9d81eb48",
+        "mode": "design-derived",
+        "source_files": [
+          "codex-rs/app-server/src/main.rs",
+          "codex-rs/cli/src/main.rs"
+        ],
+        "license": "Apache-2.0",
+        "notes": "Zero3 exposes on the pinned CLI wrapper the same session-source parser already present in pinned Codex's standalone app-server; the default remains vscode and Codex remains runtime authority."
+      }
+    },
+    {
       "id": "010-output-retention-tool-result-projection",
       "feature": "output-retention",
       "path": "codex-overlays/patches/output-retention/010-output-retention-tool-result-projection.patch",
