@@ -1,0 +1,38 @@
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@
+     /// Use stdio as the transport (equivalent to `--listen stdio://`).
+     #[arg(long = "stdio", conflicts_with = "listen")]
+     stdio: bool,
++
++    /// Session source used to derive product restrictions and persisted metadata.
++    /// Keep the upstream wrapper default unchanged unless a caller opts in.
++    #[arg(
++        long = "session-source",
++        value_name = "SOURCE",
++        default_value = "vscode",
++        value_parser = codex_protocol::protocol::SessionSource::from_startup_arg
++    )]
++    session_source: codex_protocol::protocol::SessionSource,
+ 
+     /// Enable remote control for this app-server process without changing persistence.
+     #[arg(long = "remote-control", hide = true)]
+     remote_control: bool,
+@@
+                 strict_config: app_server_strict_config,
+                 listen,
+                 stdio,
++                session_source,
+                 remote_control,
+                 analytics_default_enabled,
+                 auth,
+@@
+                         strict_config,
+                         analytics_default_enabled,
+                         transport,
+-                        codex_protocol::protocol::SessionSource::VSCode,
++                        session_source,
+                         auth,
+                         runtime_options,
+                     )
