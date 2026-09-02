@@ -56,10 +56,24 @@ function createClient() {
   let stderr = ''
   let nextId = 1
   const pending = new Map()
+  const notifications = []
+  const notificationWaiters = new Set()
 
   child.stderr.on('data', chunk => {
     stderr = (stderr + String(chunk)).slice(-16_000)
   })
+
+  function dispatchNotification(message) {
+    notifications.push(message)
+    if (notifications.length > 500) notifications.splice(0, notifications.length - 500)
+
+    for (const waiter of [...notificationWaiters]) {
+      if (waiter.method !== message.method || !waiter.predicate(record(message.params))) continue
+      notificationWaiters.delete(waiter)
+      clearTimeout(waiter.timer)
+      waiter.resolve(record(message.params))
+    }
+  }
 
   child.stdout.on('data', chunk => {
     buffer += String(chunk)
@@ -86,6 +100,11 @@ function createClient() {
         continue
       }
 
+      if (typeof message.method === 'string' && message.id == null) {
+        dispatchNotification(message)
+        continue
+      }
+
       if (typeof message.id !== 'number') continue
       const item = pending.get(message.id)
       if (!item) continue
@@ -97,15 +116,19 @@ function createClient() {
   })
 
   child.once('exit', (code, signal) => {
+    const exitError = new Error(
+      `Codex app-server exited: code=${String(code)} signal=${String(signal)} stderr=${stderr}`
+    )
     for (const item of pending.values()) {
       clearTimeout(item.timer)
-      item.reject(
-        new Error(
-          `Codex app-server exited with pending RPC: code=${String(code)} signal=${String(signal)} stderr=${stderr}`
-        )
-      )
+      item.reject(exitError)
     }
     pending.clear()
+    for (const waiter of notificationWaiters) {
+      clearTimeout(waiter.timer)
+      waiter.reject(exitError)
+    }
+    notificationWaiters.clear()
   })
 
   function send(message) {
@@ -122,6 +145,32 @@ function createClient() {
       timer.unref?.()
       pending.set(id, { resolve, reject, timer })
       send({ id, method, params })
+    })
+  }
+
+  function waitForNotification(method, predicate, timeoutMs = 30_000) {
+    const bufferedIndex = notifications.findIndex(
+      message => message.method === method && predicate(record(message.params))
+    )
+    if (bufferedIndex >= 0) {
+      const [message] = notifications.splice(bufferedIndex, 1)
+      return Promise.resolve(record(message.params))
+    }
+
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        method,
+        predicate,
+        resolve,
+        reject,
+        timer: null
+      }
+      waiter.timer = setTimeout(() => {
+        notificationWaiters.delete(waiter)
+        reject(new Error(`Timed out waiting for ${method}; stderr=${stderr}`))
+      }, timeoutMs)
+      waiter.timer.unref?.()
+      notificationWaiters.add(waiter)
     })
   }
 
@@ -160,13 +209,14 @@ function createClient() {
   }
 
   async function materializeThreadWithFirstTurn(threadId, marker) {
-    // Pinned Codex's durable-history contract materializes a fresh non-ephemeral
-    // Thread on its first Turn. This is the actual Zero3 user path and is also
-    // exercised by smoke-codex-app-server.mjs without credentials. CI may lack
-    // model/auth access, so a non-schema runtime error is acceptable after the
-    // request has crossed protocol deserialization; invalid request shapes are not.
+    // turn/start only acknowledges that Core accepted/routed the Turn. It does
+    // not mean the first user input has reached PersistContext::TurnStart yet.
+    // Wait for the matching turn/completed lifecycle notification before any
+    // thread-store read/list assertion so the smoke does not race an empty
+    // rollout file created by the background writer.
+    let result
     try {
-      const result = record(
+      result = record(
         await request('turn/start', {
           threadId,
           input: [
@@ -179,18 +229,24 @@ function createClient() {
           approvalPolicy: 'never'
         })
       )
-      const turnId = record(result.turn).id
-      if (typeof turnId !== 'string' || !turnId) {
-        throw new Error(`turn/start returned no turn id while materializing ${threadId}`)
-      }
     } catch (error) {
       if (errorLooksLikeInvalidParams(error)) {
         throw new Error(`turn/start rejected persistence smoke request shape for ${threadId}: ${error.message}`)
       }
-      // Authentication/model access is intentionally absent in CI. The basic
-      // app-server smoke accepts the same class of runtime failure after schema
-      // acceptance, and the first-turn persistence fence is what this test needs.
+      throw new Error(
+        `turn/start failed before a durable first-turn lifecycle could be observed for ${threadId}: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
+
+    const turnId = record(result.turn).id
+    if (typeof turnId !== 'string' || !turnId) {
+      throw new Error(`turn/start returned no turn id while materializing ${threadId}`)
+    }
+
+    await waitForNotification(
+      'turn/completed',
+      params => params.threadId === threadId && record(params.turn).id === turnId
+    )
 
     const read = record(await request('thread/read', { threadId, includeTurns: false }))
     if (record(read.thread).id !== threadId) {
