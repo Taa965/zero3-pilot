@@ -25,10 +25,13 @@ Zero3 Pilot has not published a GitHub Release yet. The first planned public tag
 - Native Codex `Zero3Executor` using the pinned app-server path, explicit permission forwarding and supported account/rate-limit APIs rather than credential-file parsing (R4C).
 - Public `SECURITY.md`, private vulnerability-reporting path, `CONTRIBUTING.md`, PR/issue templates and extensive architecture/CI gates.
 
-### In progress / not included until merged
+### Release blocker
 
-- Durable AppServer conversation discovery and restart persistence fix: [PR #49](https://github.com/Taa965/zero3-pilot/pull/49).
-- Formal ACP external-executor runtime: [PR #48](https://github.com/Taa965/zero3-pilot/pull/48).
+- Durable AppServer conversation discovery and restart persistence fix: [PR #49](https://github.com/Taa965/zero3-pilot/pull/49). It is not included until its real cold-restart smoke and required surrounding gates pass.
+
+### Deferred from this alpha
+
+- Formal ACP external-executor runtime: [PR #48](https://github.com/Taa965/zero3-pilot/pull/48). Its current dedicated workflow fails behavior tests on Ubuntu and Windows, including deny -> `succeeded` instead of `cancelled` and protocol-version mismatch -> `unavailable` instead of `unsupported`. It also requires replay/rebase onto the post-R4C stack. It will be repaired and revalidated in a later pre-release rather than waived into `v0.1.0-alpha`.
 - Remote Host -> Executor Manager/Handoff/Failover integration remains follow-up work; audit history is tracked separately from merged runtime features.
 
 ### Known pre-release limitations
@@ -36,7 +39,7 @@ Zero3 Pilot has not published a GitHub Release yet. The first planned public tag
 - No GitHub Release/tag has been published yet.
 - The project is not production-ready and does not claim broad external adoption.
 - Parts of the Hermes-derived backend may still exist as compatibility scaffolding for unported UI surfaces; new/migrated core runtime behavior must use Codex-owned boundaries.
-- External-agent collaboration is not part of the release baseline until its formal implementation is merged and revalidated.
+- ACP external-agent execution is intentionally not part of the `v0.1.0-alpha` scope.
 - Release-quality screenshots/demo and a final Codex-native Windows distribution still need to be produced from the real release candidate.
 
 ### Security / architecture invariants
@@ -46,5 +49,6 @@ Zero3 Pilot has not published a GitHub Release yet. The first planned public tag
 - Migrated core operations do not silently fall back to Hermes Runtime or legacy Zero3 Node.
 - Codex authentication material is not copied or parsed from credential files by the Native executor.
 - External executors do not gain Handoff/Router/task authority merely by being providers.
+- Provider integrations with incorrect deny/failure semantics are deferred rather than treated as release-ready.
 
 See [`ROADMAP.md`](ROADMAP.md) and [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md) for the release-readiness plan and draft release narrative.
