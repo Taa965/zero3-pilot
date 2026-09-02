@@ -301,11 +301,15 @@ Important boundaries include:
 
 Older audit/POC PRs for R4B/R4C are historical exploration and must not be treated as the authoritative implementation when a formal merged path exists.
 
-## 8. Current open reliability work
+## 8. First-alpha closeout and remaining reliability work
 
-[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) fixes a primary-session restart issue: pinned Codex `thread/list` source filtering can omit AppServer-created Threads unless the AppServer source kind is requested.
+[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) is merged. Zero3 now explicitly launches pinned Codex with `--session-source app-server`, lists the matching `sourceKinds: ['appServer']` namespace, and carries a real first-Turn cold-restart persistence smoke for two durable Threads.
 
-The PR adds explicit AppServer source listing and a real restart/persistence smoke. The public release roadmap treats this as a blocker for the first alpha.
+[PR #51](https://github.com/Taa965/zero3-pilot/pull/51) is merged. The Windows alpha packaging path builds the exact reviewed Codex pin, bundles `resources/zero3-codex/codex.exe`, carries required legal notices, fails closed against arbitrary packaged-runtime substitution, builds an NSIS candidate and verifies the packaged binary with a real app-server smoke plus installer SHA-256 generation.
+
+[PR #52](https://github.com/Taa965/zero3-pilot/pull/52) merged the public release-document closeout. The #51 pull-request merge candidate already contained merged #49 and passed the integrated Windows Alpha Artifact gate; that is pre-tag evidence, not a substitute for final exact-release-SHA validation.
+
+The remaining open [PR #48](https://github.com/Taa965/zero3-pilot/pull/48) is explicitly deferred from `v0.1.0-alpha` because its ACP behavior semantics remain red; it is not a first-alpha blocker.
 
 Remote Host -> Executor Manager/Handoff/Failover integration remains follow-up work; H5 remote-control authority and the R4 execution contracts must be connected without weakening either set of invariants.
 
@@ -343,7 +347,8 @@ Core/public evidence includes:
 - R3 structured-input/thread/history gates;
 - D1/D2 retention gates;
 - Remote Host H-series reliability/control-plane gates;
-- R4 Executor/Handoff/Failover/Native Codex gates.
+- R4 Executor/Handoff/Failover/Native Codex gates;
+- Windows Alpha Artifact package/bundled-Codex smoke and checksum evidence for the release candidate.
 
 Legacy/provider smokes may remain green while the target architecture evolves. Their success proves compatibility of those components, not ownership of the native Agent Kernel.
 
@@ -353,7 +358,9 @@ The local `scripts/dev-check.sh` covers the practical repository-level core chec
 
 Zero3 Pilot has **no published GitHub Release yet** and remains pre-release.
 
-The first planned release is `v0.1.0-alpha`. Release criteria are tracked in:
+The first planned release is `v0.1.0-alpha`. PRs #49, #51 and #52 are merged, but the exact final `main` candidate still requires the release evidence defined by the release process, including final Windows artifact/checksum verification and matching tag/GitHub pre-release publication.
+
+Release criteria are tracked in:
 
 - [`../ROADMAP.md`](../ROADMAP.md);
 - [`../CHANGELOG.md`](../CHANGELOG.md);
@@ -361,4 +368,4 @@ The first planned release is `v0.1.0-alpha`. Release criteria are tracked in:
 - [`releases/v0.1.0-alpha.md`](releases/v0.1.0-alpha.md);
 - public release-readiness Issue #50.
 
-Public documentation should describe merged `main` capability and clearly label open PR/POC work as unmerged.
+Public documentation should describe merged `main` capability and clearly label open PR/POC work as unmerged. Evidence not actually executed on the exact release candidate must remain `NOT_RUN` rather than being inferred from older PR artifacts.

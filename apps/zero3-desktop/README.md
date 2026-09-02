@@ -73,7 +73,7 @@ Stop / Esc     -> turn/interrupt
 
 Codex Threads and Items are projected into the existing `SessionInfo` / `ChatMessage` stores only as presentation adapters. Hermes session/job semantics are no longer authoritative for this main path.
 
-Operations not migrated yet — attachments, edit/rewind/regenerate/branch, native archive/delete, steering, additional Codex Item families and multi-pane Codex parity — do **not** silently fall back into Hermes Runtime for the primary chat. See [`../../docs/CODEX_PRIMARY_CHAT_R2.md`](../../docs/CODEX_PRIMARY_CHAT_R2.md).
+R2A was the initial primary-chat cut. Later merged R3B-R3F work added additional Item families, structured attachments/input, native Thread actions, exact Turn mapping and authoritative paginated history. Any still-unported shell surface must continue to fail closed or remain explicitly compatibility-only rather than silently falling back into Hermes Runtime for migrated core behavior. See [`../../docs/CODEX_PRIMARY_CHAT_R2.md`](../../docs/CODEX_PRIMARY_CHAT_R2.md).
 
 ## R2B — Codex native approval and user-input bridge
 
@@ -112,7 +112,7 @@ Prompt requests are queued per Codex Thread instead of stored in a single slot. 
 
 `apply-codex-item-rendering.mjs` preserves Codex as the authoritative Item source and projects selected native Items into the mature Hermes-derived reasoning/tool presentation components. The mapping is presentation-only; it does not call Hermes Runtime or Zero3 Node.
 
-Implemented Item mappings:
+Implemented Item mappings include:
 
 ```text
 Codex reasoning        -> Hermes reasoning timeline part
@@ -121,21 +121,33 @@ Codex fileChange       -> Hermes patch/file-change card
 Codex mcpToolCall      -> Hermes generic MCP tool card
 ```
 
-History comes from the same `thread/read(includeTurns=true)` Turn Item arrays, so restored conversations and live conversations share one projection model. Live updates use the pinned app-server notifications:
-
-```text
-item/reasoning/summaryTextDelta
-item/reasoning/textDelta
-item/commandExecution/outputDelta
-item/fileChange/patchUpdated
-item/mcpToolCall/progress
-item/started
-item/completed
-```
-
-Reasoning prefers Codex's summary stream when present and falls back to raw reasoning content. Command execution preserves the command/cwd, bounded live output preview, final aggregate output, exit code and duration. File changes preserve structured change rows and combined inline diffs. MCP cards preserve server/tool/arguments, progress, final result/error and duration.
+History comes from the same `thread/read(includeTurns=true)` Turn Item arrays, so restored conversations and live conversations share one projection model. Live updates use the pinned app-server notifications.
 
 R3A does not change the R2B security boundary: `approvalPolicy=on-request`, default `sandbox=read-only`, and unsupported server-request classes remain fail-closed.
+
+## R3B-R3F — merged Codex-native parity
+
+The phases previously listed as “next implementation” are now merged:
+
+- **R3B:** additional Codex-native Item presentation, including dynamic-tool, plan and web-search families;
+- **R3C:** validated structured `UserInput[]`, including supported local-image input;
+- **R3D:** native archive/unarchive/delete/rename/fork and active-Turn steer;
+- **R3E:** authoritative message-to-Turn mapping for history-sensitive operations;
+- **R3F:** authoritative paginated history with fail-closed destructive/history-sensitive flows.
+
+See the corresponding documents under `docs/CODEX_*_R3*.md` for detailed boundaries and test evidence.
+
+## Durable AppServer conversation source — #49 merged
+
+Zero3 explicitly launches pinned Codex with `--session-source app-server` and lists `sourceKinds: ['appServer']`. The release-blocking persistence smoke creates two non-ephemeral Threads, starts a first Turn on each, restarts app-server with the same `CODEX_HOME`, then requires both original IDs to remain listable/readable in the AppServer source namespace.
+
+Development sessions created before explicit source tagging may have been persisted under Codex's `vscode` source; the first public alpha does not promise automatic migration of those pre-release rows.
+
+## Codex-native Windows package — #51 merged
+
+`npm run dist:win` builds the exact reviewed Codex pin in release mode, stages it as `resources/zero3-codex/codex.exe`, stages required Zero3/Codex/Hermes legal notices, configures packaged mode to use only the bundled reviewed Codex binary, and invokes the NSIS build with automatic publishing disabled.
+
+The Windows Alpha Artifact workflow verifies the packaged Codex with `--version` and a real app-server smoke, verifies required legal resources, and records an installer SHA-256. The #51 pull-request merge candidate already included merged #49 and passed this integrated package gate; final public-release evidence must still come from the exact post-closeout release SHA.
 
 ## Retired Zero3 Node desktop direction
 
@@ -161,12 +173,12 @@ That backend is not allowed to own primary conversation semantics, Codex approva
 
 ## Pinned upstreams
 
-Exact SHAs live in `scripts/config.mjs`; preparation fails closed on pin mismatch.
+Exact SHAs live in the reviewed repository configuration/manifest; preparation fails closed on pin mismatch.
 
 ```text
-upstream/codex            core
-upstream/hermes-agent     UI shell
-upstream/deepseek-harness capability donor
+Codex            94311d447587411789533c47601fd8bc9d81eb48
+Hermes Agent     f7c79efbac19ae18e8dee7c79a4e4c0935299b5f
+DeepSeek-Harness cd5ef8148158c3a752a658978873241fdf8e2bbc
 ```
 
 ## Commands
@@ -178,7 +190,9 @@ npm run dev
 npm run dist:win
 ```
 
-`npm run prepare` applies branding/localization, the R1A Codex transport, R2A primary-chat adapter, R2B native prompt adapter and R3A Item presentation projection. `npm run dev` additionally builds the pinned open-source Codex binary when missing and launches the temporary UI compatibility environment. It does not launch Zero3 Node.
+`npm run prepare` applies the reviewed Zero3 desktop overlays for the current Codex-native path. `npm run dev` additionally builds/resolves the exact pinned open-source Codex binary when missing and launches the temporary UI compatibility environment. It does not launch Zero3 Node as native runtime authority.
+
+`npm run dist:win` prepares the same reviewed target, builds the pinned Codex release binary, stages the bundled runtime/legal resources and produces the Windows NSIS candidate with publishing disabled.
 
 Before changes:
 
@@ -186,17 +200,11 @@ Before changes:
 node ../../scripts/check-architecture.mjs
 ```
 
-## Next implementation phase: R3B
+## Current follow-up boundary
 
-Next work closes more Codex-native parity without changing runtime authority:
+R3B-R3F are no longer future work. Remaining desktop follow-up includes still-unported shell surfaces, permission/MCP elicitation UX where separately reviewed, eventual removal of the Hermes compatibility-backend boot dependency, and post-alpha executor/collaboration/productization work.
 
-- dynamicToolCall / plan / functionCallOutput / webSearch and other useful Item families;
-- permission-profile and MCP elicitation UX where required;
-- attachments -> Codex structured `UserInput`;
-- native archive/delete/branch/edit/rollback/steer operations;
-- session tiles / multi-pane Codex parity;
-- only after execution UX and permission coverage are proven should Zero3 evaluate `workspace-write` as a default sandbox;
-- remove the remaining Hermes compatibility-backend boot dependency once no target surface needs it.
+None of those follow-ups permits a second Zero3/Hermes Agent Kernel, generic Renderer Codex proxy, hidden fallback agent loop, tool loop, MCP runtime or approval engine.
 
 ## Upstream modification policy
 
