@@ -26,13 +26,27 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           # Zero3 overlay patches are reviewed as LF text. Hosted Windows Git
-          # can inherit core.autocrlf=true, which rewrites the freshly-cloned
-          # Codex worktree before git-apply sees it and makes a valid reviewed
-          # patch look like unmanaged upstream drift. Disable conversion before
-          # the submodule checkout so Windows validates the exact same bytes as
-          # Linux instead of weakening patch checks with whitespace ignores.
+          # can inherit core.autocrlf=true. actions/checkout has already
+          # materialized the root worktree by this point, so changing the setting
+          # only for submodules is insufficient: the reviewed *.patch inputs may
+          # already contain CRLF while the Codex target uses LF. Re-materialize
+          # the root worktree from the index after disabling conversion, then
+          # reject any reviewed patch that still contains a CR byte.
           git config --global core.autocrlf false
-          if ($LASTEXITCODE -ne 0) { throw 'failed to disable Git CRLF conversion' }
+          if ($LASTEXITCODE -ne 0) { throw 'failed to disable global Git CRLF conversion' }
+          git config --local core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'failed to disable repository Git CRLF conversion' }
+          git reset --hard HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'failed to rematerialize the root worktree with LF bytes' }
+
+          $patchesWithCr = @(Get-ChildItem 'codex-overlays' -Recurse -File -Filter '*.patch' | Where-Object {
+            [System.IO.File]::ReadAllText($_.FullName).Contains("`r")
+          })
+          if ($patchesWithCr.Count -gt 0) {
+            $paths = ($patchesWithCr | ForEach-Object { $_.FullName }) -join ', '
+            throw "reviewed Codex overlay patches contain CR bytes after normalization: $paths"
+          }
+
           git submodule update --init --depth 1 -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
           if ($LASTEXITCODE -ne 0) { throw 'submodule initialization failed' }
           $codexAutocrlf = git -C upstream/codex config --get core.autocrlf
