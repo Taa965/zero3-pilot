@@ -41,7 +41,10 @@ function errorLooksLikeInvalidParams(error) {
 }
 
 function createClient() {
-  const child = spawn(binary, ['app-server', '--stdio'], {
+  // Mirror the production Zero3 launcher exactly. Pinned Codex app-server
+  // otherwise defaults --session-source to vscode, while sourceKinds
+  // ['appServer'] intentionally selects CoreSessionSource::Mcp.
+  const child = spawn(binary, ['app-server', '--stdio', '--session-source', 'app-server'], {
     env: { ...process.env, CODEX_HOME: codexHome },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
