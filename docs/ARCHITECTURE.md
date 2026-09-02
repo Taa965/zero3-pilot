@@ -1,356 +1,364 @@
 # Zero3 Pilot Architecture
 
-Zero3 Pilot is a Codex-core desktop application. The non-negotiable role contract lives in [`ARCHITECTURE_CONSTITUTION.md`](ARCHITECTURE_CONSTITUTION.md).
+This document describes the **current `main` architecture** of Zero3 Pilot. Historical phase-specific details remain in the linked R2/R3/H/D documents and in merged PRs, but this file is the public summary of what currently owns runtime authority and what has actually been merged.
 
-## Target product shape
+The non-negotiable rules live in [`ARCHITECTURE_CONSTITUTION.md`](ARCHITECTURE_CONSTITUTION.md).
 
-```text
-                    Zero3 Pilot
-                         |
-              Hermes-derived Desktop UI
-              (Electron + React shell)
-                         |
-                  Zero3 UI Adapter
-                         |
-                  codex app-server
-                         |
-          open-source Codex Agent Kernel
-                         |
-          +--------------+--------------+
-          |                             |
-   Zero3 extensions              Multi-Agent Collaboration
-  tools/MCP/hooks/etc.                    |
-          |                    +----------+----------+
-          |                    |          |          |
- DeepSeek-derived         Codex app   Claude app   Hermes/others
- capabilities              external     external     external
-```
+## 1. Runtime authority
 
-## Runtime authority
+Zero3 Pilot is a Codex-core desktop application.
 
-`upstream/codex` is the source of truth for the primary agent runtime. Zero3 uses Codex app-server's native Thread / Turn / Item model instead of inventing parallel conversation/job abstractions for the core path.
+**OpenAI's open-source Codex is the authoritative native Agent Kernel/runtime** for:
 
-Relevant Codex primitives include:
+- Thread / Turn / Item conversation state;
+- the primary agent loop and context;
+- model/tool execution semantics;
+- shell/files and related tool activity;
+- approvals and user-input requests;
+- MCP and Codex-native execution surfaces;
+- interruption/resume and authoritative conversation history.
 
-- Thread — durable conversation/session identity;
-- Turn — one agent execution turn;
-- Item — user message, agent output, reasoning, shell command, file edit, tool activity, etc.;
-- streaming notifications — including item/turn progress and agent-message deltas;
-- server-originated approval/input requests;
-- interruption, resume, list and read APIs.
+Zero3 may extend, present or orchestrate that runtime through reviewed boundaries, but it must not silently introduce a second hidden primary agent loop.
 
-## Upstream roles
+## 2. Product topology
 
 ```text
-upstream/codex/
-  CORE — authoritative agent runtime and app-server protocol
-
-upstream/hermes-agent/
-  UI SHELL — Electron/React desktop UX source
-
-upstream/deepseek-harness/
-  CAPABILITY DONOR — audited source of ideas/implementations to port
-```
-
-All three remain pinned for deterministic development, but they are not peers in runtime authority.
-
-## Architecture drift that was retired
-
-The repository still contains buildable code from an earlier shape:
-
-```text
-legacy Rust/Wry Desktop or retired Hermes overlays
-                    |
-             Zero3 Pilot Node
-                    |
-       +------------+------------+
-       |            |            |
- CodexWorker   ClaudeWorker  HermesWorker
-       |
- jobs / scheduler / memory / browser / computer
-```
-
-That implementation is now **legacy/extension infrastructure**. R0 removed it from the target desktop boot/runtime path and introduced an architecture guard so passing legacy tests cannot redefine the product core.
-
-## Desktop architecture
-
-### R1A transport boundary
-
-```text
-Hermes React UI
-    |
-window.zero3Codex
-    |
-typed Electron preload IPC
-    |
-Electron main Zero3CodexAppServer
-    |
-`codex app-server --stdio`
-    |
-pinned open-source Codex
-```
-
-R1A is implemented by `apps/zero3-desktop/scripts/apply-codex-transport.mjs`.
-
-Electron main owns the Codex child and performs:
-
-1. launch of the explicitly configured pinned Codex binary;
-2. `initialize` request and `initialized` notification;
-3. JSONL framing and request-id correlation;
-4. bounded request timeouts, stdout frames, stderr tail and pending server requests;
-5. forwarding Codex notifications to Renderer;
-6. forwarding Codex-originated requests without automatically approving them;
-7. process cleanup when the desktop quits.
-
-The Renderer is intentionally limited to the following contract:
-
-```text
-status
-start
-thread/start
-thread/resume
-thread/list
-thread/read
-turn/start
-turn/interrupt
-respond to an already-outstanding Codex server request
-subscribe to Codex events
-```
-
-There is no Renderer-controlled arbitrary `method + params` JSON-RPC tunnel. Adding a new Codex capability requires adding a named typed IPC surface and review.
-
-### R2A primary-chat boundary
-
-The primary visible chat uses `apps/zero3-desktop/scripts/apply-codex-primary-chat.mjs` to preserve the Hermes-derived UI while changing its runtime contract:
-
-```text
-Hermes ChatView / Composer / Sidebar
-        |
-Zero3 Codex primary-chat adapter
-        |
-+-------+-------------------------------+
-| new/list/resume | send/stop | stream |
-| Thread APIs     | Turn APIs | Items  |
-+-------+-------------------------------+
-        |
-window.zero3Codex
-        |
-codex app-server
-```
-
-The R2A mapping is:
-
-- new main chat -> `thread/start`;
-- sidebar recents -> `thread/list`;
-- resume/history -> `thread/resume` + `thread/read(includeTurns=true)`;
-- text send -> `turn/start`;
-- assistant stream -> `item/started`, `item/agentMessage/delta`, `item/completed`;
-- settle -> `turn/completed`;
-- Stop/Esc -> `turn/interrupt`;
-- title/status -> Codex thread notifications.
-
-Codex Threads/Turns/Items are projected into the Hermes `SessionInfo` and `ChatMessage` stores strictly as presentation adapters. Those stores do not define runtime authority on the migrated path.
-
-R2A does not silently route missing operations back into Hermes Runtime. Attachments, edit/rewind/regenerate/branch, native archive/delete, steering, additional Item families and multi-pane Codex parity remain explicit migration work. See [`CODEX_PRIMARY_CHAT_R2.md`](CODEX_PRIMARY_CHAT_R2.md).
-
-### R2B native approval and input boundary
-
-R2B adds `apps/zero3-desktop/scripts/apply-codex-prompts.mjs` plus queue/state hardening. Selected app-server server requests are converted into Zero3-owned UI prompts and answered through the already typed `respondToServerRequest` surface:
-
-```text
-item/commandExecution/requestApproval -> approval dialog -> accept / acceptForSession / decline
-item/fileChange/requestApproval       -> approval dialog -> accept / acceptForSession / decline
-item/tool/requestUserInput             -> input dialog    -> native answers map
-```
-
-The primary chat uses `approvalPolicy=on-request` while keeping the **default sandbox** at `read-only`. `read-only` does not override an explicit Codex escalation the user approves; it means Zero3 has not made `workspace-write` the default sandbox. Persistent exec-policy/network-policy amendments, permission-profile escalation, MCP elicitation, dynamic tool callbacks, auth refresh/attestation and legacy approval methods remain fail-closed until they receive dedicated reviewed UX.
-
-Prompt requests are queued per Thread rather than stored in a single shared slot. Blocking Codex approvals/input are projected into the shell's existing awaiting-input state so composer gating, Stop/Esc and session status remain coherent. Stop, terminal turn completion and runtime errors reject/clear any unresolved request IDs, preventing orphaned app-server callbacks in Electron main.
-
-Secret `request_user_input` values remain component-local and are returned directly to the matching server request rather than being persisted in Zero3 presentation stores.
-
-### R3A native Item presentation boundary
-
-R3A adds `apps/zero3-desktop/scripts/apply-codex-item-rendering.mjs`. Codex remains the source of truth for Item identity, lifecycle and results; the adapter only translates those Items into the Hermes-derived chat presentation types already used by the shell.
-
-```text
-Codex ThreadItem / notifications
+                         Zero3 Pilot
+                              |
+                  Hermes-derived Desktop UI
+                   (Electron + React shell)
+                              |
+                       Zero3 UI Adapter
+                              |
+                       codex app-server
+                              |
+               open-source Codex Agent Kernel
+                              |
+          +-------------------+-------------------+
+          |                   |                   |
+   Codex-native          Executor/Handoff      Remote Host
+    extensions              orchestration       integration
+          |                   |                   |
+  output/context        Native Codex +       durable host /
+    retention          external providers     control plane
           |
-Zero3 item-projection.ts
-          |
-Hermes ChatMessage parts
-          |
-reasoning timeline / tool cards
+  donor-derived ideas
+  re-expressed through
+  reviewed Zero3 seams
 ```
 
-Current mappings are:
+### Upstream roles
 
-- `reasoning` -> Hermes reasoning timeline parts;
-- `commandExecution` -> Hermes `terminal` tool-card presentation;
-- `fileChange` -> Hermes `patch` / inline-diff presentation;
-- `mcpToolCall` -> generic MCP tool-card presentation carrying server/tool/arguments/result/error.
+- `upstream/codex/` — **CORE**, authoritative native Agent Kernel/app-server source.
+- `upstream/hermes-agent/` — **UI SHELL SOURCE**, Electron/React desktop UX donor. Remaining Hermes runtime use is compatibility scaffolding only.
+- `upstream/deepseek-harness/` — **CAPABILITY DONOR/REFERENCE**, never the default parallel native runtime.
 
-The same mapper is used for restored history from `thread/read(includeTurns=true)` and for live Item lifecycle notifications. Live projection consumes the pinned protocol's `item/started`, `item/completed`, `item/reasoning/summaryTextDelta`, `item/reasoning/textDelta`, `item/commandExecution/outputDelta`, `item/fileChange/patchUpdated` and `item/mcpToolCall/progress` notifications.
+Installed Codex/Claude/Hermes applications may participate as external collaborators/executors. They do not become the native Zero3 kernel.
 
-Reasoning summary deltas take presentation priority when Codex emits them; raw reasoning text is the fallback. Command output previews are bounded in Renderer state and replaced by the authoritative completed Item output. File-change presentation keeps structured changes and diff text. MCP progress remains presentation-only; it does not turn Hermes into the MCP runtime.
+## 3. Pinned upstream and managed Codex overlay
 
-R3A does not widen permissions. The R2B `approvalPolicy=on-request` and default `sandbox=read-only` boundary remains in force, and unsupported server-request classes remain fail-closed.
+The reviewed pins currently recorded by `codex-overlays/manifest.json` are:
 
-### Core binary ownership
+```text
+Codex            94311d447587411789533c47601fd8bc9d81eb48
+Hermes Agent     f7c79efbac19ae18e8dee7c79a4e4c0935299b5f
+DeepSeek-Harness cd5ef8148158c3a752a658978873241fdf8e2bbc
+```
 
-For development, `apps/zero3-desktop/scripts/run.mjs` builds the `codex` executable from the exact pinned `upstream/codex/codex-rs` source when it is missing and passes its path as `ZERO3_CODEX_BIN`.
+The upstream Codex gitlink remains pinned. Zero3-specific Codex work is represented by the managed `codex-overlays/` system:
 
-This distinction is important:
+1. verify the exact Codex base SHA;
+2. reject unmanaged Codex worktree changes;
+3. install explicitly listed Zero3 extensions;
+4. apply explicitly listed patches in deterministic manifest order;
+5. reject unlisted/missing/unreplayable patches;
+6. replay the overlay in a detached candidate Codex worktree to detect upstream drift;
+7. run Codex format/build/app-server and architecture gates.
 
-- the pinned open-source Codex build is the **Zero3 core**;
-- host-installed Codex/Claude/Hermes applications are **external collaborators** and must not silently replace that path.
+The active merged overlay features are currently:
 
-Zero3 uses a dedicated Codex state boundary (`ZERO3_CODEX_HOME`, defaulting to the Zero3 application data area) so primary core state is explicit rather than accidentally owned by another installed application.
+- **D1 / `zero3-output-retention`** — lossless oversized plain-text tool-result spill/recovery with bounded model projection;
+- **D2 / `zero3-context-retention`** — recoverable pruning of oversized historical tool results only in private compaction input.
 
-### Temporary Hermes compatibility state
+Those features reuse Codex execution/compaction authority; they do not introduce a second tool or history authority.
 
-The Hermes-derived shell still has unported surfaces whose boot/data dependencies assume Hermes' backend. That backend may still boot during `npm run dev` only as compatibility scaffolding.
+See [`UPSTREAM.md`](UPSTREAM.md) for the full overlay/pin policy.
 
-Rules during the remaining migration:
+## 4. Target desktop path
 
-- main chat conversation semantics, native prompt requests and R3A Item execution state are Codex-owned;
-- Hermes components may render Codex data but do not become runtime authority;
-- no new Zero3 runtime feature may be added to Hermes runtime;
-- no desktop product feature may use Zero3 Node as primary state/runtime authority;
-- old Node bridge overlay files remain unapplied;
-- new core work goes through `window.zero3Codex` and Codex-native extension seams;
-- removal of the Hermes compatibility backend happens after all target shell dependencies are ported, not by weakening the Codex-core invariant.
+The target desktop shell is prepared under `apps/zero3-desktop/` from the pinned Hermes Electron/React source and wired to Codex through a Zero3-owned typed boundary.
 
-## Multi-Agent Collaboration
+### R1A — Codex app-server transport — merged
 
-The existing `zero3-subagents` crate and its Codex/Claude/Hermes CLI workers are classified as External Agent Collaboration infrastructure.
+Electron main owns a `codex app-server --stdio` child and handles:
 
-Their eventual responsibility is to support:
+- explicit pinned Codex executable selection;
+- `initialize` / `initialized` lifecycle;
+- JSONL framing and request-id correlation;
+- notification forwarding;
+- bounded server-originated request forwarding;
+- child lifecycle and cleanup.
 
-- discover external installed agents;
-- inspect running/unfinished work;
-- continue an existing external task;
-- send instructions or review requests;
-- observe execution and collect output;
-- hand off work between external agents;
-- take over unfinished work into Zero3's Codex core.
+Renderer access is purpose-specific. There is no supported arbitrary Renderer-controlled `method + params` Codex RPC tunnel.
 
-Their current `Subagent*` names remain temporarily for source compatibility.
+### R2A — primary chat -> Codex Thread/Turn/Item — merged
 
-## Zero3 extensions
+The visible primary conversation path maps the Hermes-derived presentation shell onto Codex semantics:
 
-Existing Rust components remain useful, but should attach to Codex rather than replace it:
+- new conversation -> `thread/start`;
+- recents/restore -> Codex Thread list/read/resume;
+- send -> `turn/start`;
+- streaming -> Codex Item notifications/deltas;
+- Stop/Esc -> `turn/interrupt`.
 
-- scheduler -> Codex tool/MCP/automation extension;
-- memory -> Codex/Zero3 project-memory extension;
-- BrowserProvider -> Codex tool/MCP provider;
-- ComputerProvider -> Codex tool/MCP provider;
-- EventStore/job durability -> extension workflow infrastructure, not primary conversation state;
-- Weixin channel -> user/channel ingress into Codex core.
+Hermes-derived stores are presentation adapters on this path, not runtime authority.
 
-These components may remain independently testable while migration occurs.
+See [`CODEX_PRIMARY_CHAT_R2.md`](CODEX_PRIMARY_CHAT_R2.md).
 
-## DeepSeek-Harness integration
+### R2B — native approval and input — merged
 
-DeepSeek-Harness stays pinned as an audit/reference source. A capability enters Zero3 only after deciding where it belongs:
+Selected server-originated Codex requests are presented through Zero3-owned UI and answered through the typed server-response surface:
 
-1. Codex core patch when it fundamentally improves the Agent Kernel;
-2. Zero3 tool/MCP/hook/skill when it is an extension;
-3. desktop UI adapter when it is presentation/interaction behavior.
+- command execution approval;
+- file-change approval;
+- user-input requests.
 
-Do not keep DeepSeek-Harness as a default parallel agent runtime merely to avoid porting the capability.
+Prompt state is correlated/queued per Thread and unresolved callbacks are cleared/rejected on terminal/interruption/error paths.
 
-## Legacy components
+Unsupported request classes remain fail-closed until they receive dedicated reviewed UX.
+
+The current conservative baseline keeps `approvalPolicy=on-request` and does not make `workspace-write` the unconditional default sandbox.
+
+### R3A/R3B — native Item presentation — merged
+
+The presentation adapter covers Codex-native Item families including:
+
+- reasoning;
+- command execution;
+- file change;
+- MCP tool calls;
+- dynamic tool-call presentation;
+- plans;
+- web search.
+
+Presentation does not move execution authority into Hermes.
+
+See [`CODEX_MORE_ITEMS_R3B.md`](CODEX_MORE_ITEMS_R3B.md).
+
+### R3C — structured user input — merged
+
+The primary composer supports a validated Codex `UserInput[]` bridge, including supported local-image inputs. Renderer input is reconstructed/validated by the reviewed Electron boundary rather than used as an arbitrary protocol passthrough.
+
+See [`CODEX_STRUCTURED_INPUT_R3C.md`](CODEX_STRUCTURED_INPUT_R3C.md).
+
+### R3D — native Thread actions — merged
+
+Migrated actions include Codex-native:
+
+- archive / unarchive;
+- permanent delete;
+- rename;
+- whole-Thread fork;
+- active-Turn steer.
+
+See [`CODEX_THREAD_ACTIONS_R3D.md`](CODEX_THREAD_ACTIONS_R3D.md).
+
+### R3E — authoritative message/Turn mapping — merged
+
+Message-level history operations resolve presentation messages against authoritative Codex Thread/Turn/Item history rather than guessing by index/timestamp.
+
+This provides reviewed boundaries for exact fork/revert/regenerate flows while keeping unsupported ambiguous cases fail-closed.
+
+See [`CODEX_TURN_MAPPING_R3E.md`](CODEX_TURN_MAPPING_R3E.md).
+
+### R3F — authoritative paginated history — merged
+
+Destructive/history-sensitive flows use authoritative paginated Codex history and fail closed on incomplete/invalid pagination conditions.
+
+See [`CODEX_AUTHORITATIVE_HISTORY_R3F.md`](CODEX_AUTHORITATIVE_HISTORY_R3F.md).
+
+## 5. Context/output resilience
+
+### D0 — managed overlay foundation — merged
+
+D0 establishes deterministic extension/patch installation, exact pin checks and detached replay/drift detection.
+
+### D1 — output retention — merged
+
+Oversized plain-text tool results can be stored losslessly outside model context and represented to the model through a bounded projection with an opaque recovery reference.
+
+Recovery tools operate through the installed spill-store contract. Storage/projection behavior is designed not to become tool-execution authority.
+
+### D2 — context retention — merged
+
+D2 prunes only recoverable oversized historical tool results in the **private cloned history used for compaction/model input**.
+
+It does not mutate authoritative persisted Thread/Turn/Item history. D2 reuses D1's spill/recovery authority rather than creating a second persistence system.
+
+## 6. Remote Host architecture
+
+Remote Host allows remotely admitted development tasks to reach a local Zero3/Codex execution host through narrow reviewed boundaries while preserving Codex as execution authority.
+
+### H0-H3 — local host runtime — merged
+
+Key invariants include:
+
+- exact task/execution identity binding;
+- local workspace allow-listing;
+- durable task -> Codex mapping;
+- deterministic user-message identity for crash recovery;
+- durable pending-Turn intent;
+- authoritative restart recovery;
+- fail-closed handling of ambiguous side effects and unsupported Git preconditions.
+
+The Remote Host adapter is intentionally narrow and does not expose a generic remote Codex RPC/shell path.
+
+See [`REMOTE_HOST_RUNTIME.md`](REMOTE_HOST_RUNTIME.md).
+
+### H4/H4.1 — durable ordered outbox — merged
+
+Remote evidence/terminal publication follows a crash-safe rule:
+
+```text
+persist committed envelope
+        -> drain older committed envelopes in order
+        -> publish
+        -> durable acceptance/ack
+        -> delete local pending envelope
+```
+
+Stale lease/fencing outcomes quarantine identity rather than mutating it into a new authority.
+
+See [`H4_REMOTE_OUTBOX_DESIGN.md`](H4_REMOTE_OUTBOX_DESIGN.md).
+
+### H5 — durable control plane — merged
+
+The control plane owns remote task/node admission state, sticky leases, fencing generations, durable accepted mirrors and replay/terminal validation.
+
+It does **not** become Codex execution authority and must not expose shell/files/MCP/Codex generic RPC as a control-plane shortcut.
+
+See [`H5_REMOTE_CONTROL_PLANE.md`](H5_REMOTE_CONTROL_PLANE.md).
+
+## 7. Executor, Handoff and Failover
+
+Zero3 now has a provider-neutral execution orchestration layer outside the Codex native Agent Kernel.
+
+The distinction is important:
+
+- **Codex native kernel** defines native agent execution semantics;
+- **Zero3 Executor/Router/Handoff** decides which approved executor/provider is assigned to a Zero3 Task/Execution and how durable work authority moves between providers;
+- an external provider never becomes the native kernel merely by being selectable.
+
+### R4A — `zero3.pilot.executor.v1` — merged
+
+The frozen provider-neutral contract carries:
+
+- Task / Execution identity;
+- workspace and optional lease/fencing identity;
+- executor session/probe/event/failure contracts;
+- normalized Zero3-owned failure taxonomy/policy;
+- Registry/Manager authority with one active binding per task/execution;
+- provider-neutral routing surfaces.
+
+Raw provider-private exceptions/types are not supposed to become shared policy authority.
+
+### R4E — durable Handoff — merged
+
+The Handoff layer records deterministic Git/workspace checkpoint evidence, uses crash-safe persistent state and enforces an exclusive writer/generation transfer.
+
+A new executor cannot become workspace writer merely by starting a process; it must satisfy the Handoff acceptance/verification contract.
+
+### R4F — failover controller — merged
+
+The Zero3-owned failover controller implements:
+
+- ordered candidates;
+- bounded retry;
+- provider cooldown/circuit-breaker state;
+- recovery-first decisions;
+- context-loss handoff requirements;
+- manual/automatic switching controls;
+- return-to-primary at defined boundaries;
+- duplicate-event idempotency and restart-serializable state.
+
+User stop and policy/permission/budget/bad-request classes are not converted into automatic provider switching just to keep work running.
+
+### R4C — Native Codex executor — merged
+
+A real Native Codex `Zero3Executor` uses the same pinned open-source `codex app-server --stdio` kernel through a controller-owned child process.
+
+Important boundaries include:
+
+- explicit per-executor Codex home selection;
+- supported `account/read` / rate-limit probing rather than credential-file parsing;
+- no `auth.json` token extraction/copy/serialization;
+- explicit permission decision forwarding;
+- resume failure -> typed context loss rather than silently starting a replacement Thread.
+
+### R4B — ACP/external executor — open, not merged
+
+[PR #48](https://github.com/Taa965/zero3-pilot/pull/48) is the formal ACP external-executor implementation and is **not part of the merged `main` capability until merged**.
+
+Older audit/POC PRs for R4B/R4C are historical exploration and must not be treated as the authoritative implementation when a formal merged path exists.
+
+## 8. Current open reliability work
+
+[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) fixes a primary-session restart issue: pinned Codex `thread/list` source filtering can omit AppServer-created Threads unless the AppServer source kind is requested.
+
+The PR adds explicit AppServer source listing and a real restart/persistence smoke. The public release roadmap treats this as a blocker for the first alpha.
+
+Remote Host -> Executor Manager/Handoff/Failover integration remains follow-up work; H5 remote-control authority and the R4 execution contracts must be connected without weakening either set of invariants.
+
+## 9. Legacy / compatibility components
+
+The repository still contains older components that remain useful as compatibility evidence or future extension sources.
 
 ### `apps/node`
 
-Legacy/extension host. It currently exposes jobs, schedules, memory, browser/computer and external-agent dispatch. It is no longer the target desktop runtime authority.
+Legacy/extension host for older jobs/schedule/memory/provider paths. It is not the target desktop native runtime authority.
 
-### `apps/desktop`
+### legacy Rust/Wry desktop
 
-Legacy Rust/Tao/Wry desktop. It remains only for rollback/installer history while the Hermes-derived Electron shell migration completes. Do not add new product UI here.
+Retained for migration/installer history and compatibility tests. New target UI/runtime work belongs in the Hermes-derived Codex-core desktop path.
 
-### `crates/zero3-subagents`
+### Hermes compatibility backend
 
-Legacy naming for External Agent Collaboration adapters. Codex/Claude/Hermes are peers only inside this optional collaboration module, not at the product-core level.
+Some unported UI surfaces may still require Hermes backend scaffolding during development. No new target core capability should be implemented by expanding Hermes Runtime authority.
 
-## Migration phases
+### old `zero3-subagents` naming
 
-### R0 — complete: architecture reset
+Historical naming may remain in compatibility crates. External agent work belongs under the Executor/Collaboration model and must preserve Codex native-kernel authority.
 
-- codified role hierarchy;
-- stopped applying Zero3 Node chat/memory/schedule/browser desktop overlays;
-- stopped target desktop from auto-starting Zero3 Node;
-- added CI architecture guard;
-- preserved buildable legacy code for controlled migration.
+## 10. CI invariants
 
-### R1A — complete: Codex app-server transport
+The repository uses multiple independent gates rather than one “everything passed” script.
 
-- pinned Codex binary resolution/build;
-- app-server lifecycle ownership;
-- initialize/initialized JSONL handshake;
-- typed request/response correlation;
-- bounded notification/server-request forwarding;
-- typed Thread / Turn / interrupt Renderer API;
-- no arbitrary JSON-RPC proxy.
+Core/public evidence includes:
 
-### R2A — complete: primary chat cut
+- architecture guard;
+- Rust format/Clippy/build/tests;
+- Windows target-shell prepare/typecheck/build;
+- real pinned-Codex CLI/app-server JSONL smoke;
+- Codex overlay verify/replay;
+- R3 structured-input/thread/history gates;
+- D1/D2 retention gates;
+- Remote Host H-series reliability/control-plane gates;
+- R4 Executor/Handoff/Failover/Native Codex gates.
 
-- Hermes main session UI -> Codex Thread;
-- composer -> `turn/start`;
-- streaming assistant UI -> Codex Item notifications/deltas;
-- Stop -> `turn/interrupt`;
-- durable session restore -> `thread/list/read/resume`;
-- compatibility types remain presentation-only.
+Legacy/provider smokes may remain green while the target architecture evolves. Their success proves compatibility of those components, not ownership of the native Agent Kernel.
 
-### R2B — complete: native approval/input prompts
+The local `scripts/dev-check.sh` covers the practical repository-level core checks; specialized Windows/Codex/feature gates remain authoritative in GitHub Actions.
 
-- command-execution approval -> Zero3 dialog -> Codex server response;
-- file-change approval -> Zero3 dialog -> Codex server response;
-- `request_user_input` -> native Zero3 multi-question UI;
-- per-Thread prompt queues and shell awaiting-input integration;
-- unsupported server requests remain fail-closed;
-- default sandbox remains `read-only`; `workspace-write` is not the default.
+## 11. Current release status
 
-### R3A — current: reasoning and tool Item presentation
+Zero3 Pilot has **no published GitHub Release yet** and remains pre-release.
 
-- restore/live projection for Codex `reasoning`;
-- restore/live projection for `commandExecution` using the shell's terminal card;
-- restore/live projection for `fileChange` using patch/diff presentation;
-- restore/live projection for `mcpToolCall` using generic MCP tool cards;
-- consume native reasoning/output/patch/progress notifications;
-- preserve Codex runtime authority and R2B permission boundary.
+The first planned release is `v0.1.0-alpha`. Release criteria are tracked in:
 
-### R3B — remaining execution UX and thread parity
+- [`../ROADMAP.md`](../ROADMAP.md);
+- [`../CHANGELOG.md`](../CHANGELOG.md);
+- [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md);
+- [`releases/v0.1.0-alpha.md`](releases/v0.1.0-alpha.md);
+- public release-readiness Issue #50.
 
-- structured attachments -> Codex UserInput;
-- dynamicToolCall / plan / functionCallOutput / webSearch and other useful Item families;
-- permission-profile and MCP elicitation UX where required;
-- native thread archive/delete/branch/edit/rollback/steer;
-- projects/worktrees and token/cost/status presentation;
-- multi-pane/session-tile Codex parity;
-- evaluate `workspace-write` as a default only after execution/policy UX is complete.
-
-### R4 — External Agent Collaboration
-
-- formal `ExternalAgent` contract;
-- inspect/continue/handoff/takeover;
-- adapters for installed Codex, Claude, Hermes and future agents.
-
-### R5 — migrate Zero3 extensions
-
-- scheduler, memory, browser/computer, messaging and workflows attach through Codex-native extension seams.
-
-### R6 — DeepSeek capability absorption
-
-- audit, port, benchmark and integrate selected capabilities.
-
-## CI invariant
-
-`node scripts/check-architecture.mjs` is the first architecture gate. The Windows target-shell gate then applies the exact pinned Hermes overlay and TypeScript-checks/builds the resulting Electron application.
-
-The dedicated Codex Core Smoke builds the exact pinned Codex source and exercises real JSONL protocol flow through `initialize`, `thread/list`, `thread/start` and `turn/start`, including the pinned `text_elements` UserInput field. Credential-free CI may tolerate a model/auth runtime failure only after request deserialization succeeds; invalid-params/unknown-field failures block the release.
-
-CI and the architecture guard require the typed `zero3Codex` boundary, reject generic Codex Renderer proxies, reject legacy Zero3 Node routing from primary chat, require the R2B prompt bridge/queue hardening, require the R3A native Item projection and keep the retired Node desktop bridge out of the target shell.
-
-Platform smoke tests for legacy/extension components may continue until each path is replaced. Passing a legacy smoke test is evidence that a compatibility component still works; it is not evidence that the component defines the target architecture.
+Public documentation should describe merged `main` capability and clearly label open PR/POC work as unmerged.
