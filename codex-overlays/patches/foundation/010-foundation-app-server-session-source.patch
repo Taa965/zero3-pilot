@@ -1,7 +1,7 @@
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
-@@
+@@ -567,7 +567,17 @@ struct AppServerCommand {
      /// Use stdio as the transport (equivalent to `--listen stdio://`).
      #[arg(long = "stdio", conflicts_with = "listen")]
      stdio: bool,
@@ -19,7 +19,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
      /// Enable remote control for this app-server process without changing persistence.
      #[arg(long = "remote-control", hide = true)]
      remote_control: bool,
-@@
+@@ -1249,6 +1259,7 @@ async fn main() -> anyhow::Result<()> {
                  strict_config: app_server_strict_config,
                  listen,
                  stdio,
@@ -27,7 +27,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
                  remote_control,
                  analytics_default_enabled,
                  auth,
-@@
+@@ -1291,6 +1302,6 @@ async fn main() -> anyhow::Result<()> {
                          strict_config,
                          analytics_default_enabled,
                          transport,
