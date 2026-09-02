@@ -23,7 +23,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
                  remote_control,
                  analytics_default_enabled,
                  auth,
-@@ -1291,6 +1302,6 @@ async fn main() -> anyhow::Result<()> {
+@@ -1291,7 +1302,7 @@ async fn main() -> anyhow::Result<()> {
                          strict_config,
                          analytics_default_enabled,
                          transport,
