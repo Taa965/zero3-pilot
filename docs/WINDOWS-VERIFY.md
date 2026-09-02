@@ -98,25 +98,34 @@ cargo test --workspace 2>&1 | tail -c 3500
 
 ## 先同步，再验证（最容易踩的坑）
 
-通道执行的是**本机工作树的当前状态**，不是 GitHub 上的最新代码。这台机器的克隆
-可能明显落后于 `origin/main`（本文档写作时落后 193 个提交），此时直接下发
-`cargo test` 验证的是旧代码，结论会误导人。
+**本项目以 GitHub 为唯一真相源。** 通道执行的却是**本机工作树的当前状态**——
+两者不一致时，验证结果说的不是 `origin/main` 的事。本文档写作时这台机器的克隆
+落后 193 个提交（本地在 P0.1，远端已发 v0.1.0-alpha），此时下发 `cargo test`
+会得到一个关于旧代码的、很自信的结论。
 
-所以验证最新代码前，先用一条 `git_status` 任务看清落差：
+所以**验证前先同步，不要在落后的树上验证**。开场先探一条 `git_status`：
 
 ```json
 { "id": "wv-pilot-sync-check", "type": "git_status",
   "workdir": "C:/Users/aaaa/Documents/zero3-pilot", "timeout_s": 120 }
 ```
 
-确认干净后再下发同步命令，然后才是构建：
+读结果里的落差，然后同步到 GitHub 的状态，再构建：
 
 ```bash
-git fetch --prune origin && git status -sb | head -1
+git fetch --prune origin && git pull --rebase origin main && git status -sb | head -1
 ```
 
-注意通道不会替你决定要不要同步：本机工作树可能有未提交的在途改动，盲目
-`git pull` 会和别的开发端冲突。落差大时先把 `git_status` 结果拿给人看。
+「以 GitHub 为准」指的是**方向**，不是丢弃本地工作：
+
+- 本地**落后** → `pull --rebase` 拉到最新，这是常态。
+- 本地**领先**（有未推送的提交）→ 那些提交是别的开发端还没同步上去的成果，
+  要 `push` 上去，**绝不能** `reset --hard` 丢掉。
+- 工作树**有未提交改动** → 先弄清是什么。可能是另一个开发端的在途工作，
+  也可能只是运行时垃圾文件。不要为了让 rebase 通过就 `checkout --` 抹掉。
+
+`git_status` 任务同时给出 `git status --porcelain` 和最近 5 条 `git log --oneline`，
+一条就能把上面三种情况分辨清楚。
 
 ## 边界
 
