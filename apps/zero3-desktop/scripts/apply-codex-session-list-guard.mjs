@@ -40,6 +40,14 @@ export function applyZero3CodexSessionListGuard() {
 
   patchFile('electron/main.ts', [
     {
+      label: 'Zero3 app-server session-source identity',
+      from: `    const child = spawn(executable, ['app-server', '--stdio'], {`,
+      to: `    // Codex app-server defaults --session-source to vscode. Zero3 must
+    // claim its own durable AppServer/Mcp source explicitly so thread/list can
+    // address Zero3 conversations without colliding with VS Code history.
+    const child = spawn(executable, ['app-server', '--stdio', '--session-source', 'app-server'], {`
+    },
+    {
       label: 'Codex thread/list source filter',
       from: `function zero3CodexThreadListParams(value: unknown) {
   const input = zero3CodexRecord(value)
@@ -47,9 +55,9 @@ export function applyZero3CodexSessionListGuard() {
       to: `function zero3CodexThreadListParams(value: unknown) {
   const input = zero3CodexRecord(value)
   // Pinned Codex defaults thread/list to interactive CLI/VS Code sources when
-  // sourceKinds is omitted. Zero3-owned desktop conversations are app-server
-  // (CoreSessionSource::Mcp), so omitting this filter makes durable threads
-  // disappear from the sidebar after a renderer/app restart.
+  // sourceKinds is omitted. Zero3 explicitly launches app-server with
+  // --session-source app-server (CoreSessionSource::Mcp), so this filter is the
+  // stable Zero3-owned conversation namespace across renderer/app restarts.
   const params: Record<string, unknown> = { sourceKinds: ['appServer'] }`
     }
   ])
