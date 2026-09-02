@@ -28,7 +28,7 @@ The project is intended to provide a practical implementation/reference surface 
 
 ## What is already on `main`
 
-The repository is young, but the current `main` is beyond a transport-only prototype. The table below intentionally lists only merged work; open PRs are shown separately.
+The repository is young, but the current `main` is beyond a transport-only prototype. The table below intentionally lists only merged work; open/deferred PRs are shown separately.
 
 | Area | Current merged baseline | Evidence |
 | --- | --- | --- |
@@ -36,12 +36,15 @@ The repository is young, but the current `main` is beyond a transport-only proto
 | Codex integration resilience | Deterministic overlay/replay infrastructure; lossless oversized tool-output spill/recovery (D1); recoverable compaction-input pruning without authoritative-history mutation (D2) | [PR #30](https://github.com/Taa965/zero3-pilot/pull/30), [#33](https://github.com/Taa965/zero3-pilot/pull/33), [#31](https://github.com/Taa965/zero3-pilot/pull/31) |
 | Remote Host | Narrow Codex-backed host runtime, crash-safe durable outbox, strict publication ordering, durable authenticated control plane with leases/fencing/replay/terminal validation | [PR #36](https://github.com/Taa965/zero3-pilot/pull/36), [#37](https://github.com/Taa965/zero3-pilot/pull/37), [#38](https://github.com/Taa965/zero3-pilot/pull/38), [#39](https://github.com/Taa965/zero3-pilot/pull/39) |
 | Executor control | Provider-neutral Executor contract, durable Git/workspace handoff, automatic failover controller, Native Codex executor | [PR #44](https://github.com/Taa965/zero3-pilot/pull/44), [#45](https://github.com/Taa965/zero3-pilot/pull/45), [#46](https://github.com/Taa965/zero3-pilot/pull/46), [#47](https://github.com/Taa965/zero3-pilot/pull/47) |
-| Public maintenance/security | Architecture constitution, contribution rules, security policy/private reporting, issue/PR templates, Linux + Windows and feature-specific CI gates | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md), [workflows](.github/workflows) |
+| Public maintenance/security | Architecture constitution, contribution rules, governance, release process, security policy/private reporting, issue/PR templates, Linux + Windows and feature-specific CI gates | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`GOVERNANCE.md`](GOVERNANCE.md), [`SECURITY.md`](SECURITY.md), [workflows](.github/workflows) |
 
-### Active work, not yet part of the merged baseline
+### First-alpha blocker
 
-- [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) — durable AppServer conversation discovery after restart plus a real pinned-Codex persistence smoke. This is treated as a blocker for the first public alpha.
-- [PR #48](https://github.com/Taa965/zero3-pilot/pull/48) — formal ACP external-executor runtime. It may enter the first alpha if final integration gates are clean; otherwise it can ship in the next pre-release.
+- [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) — durable AppServer conversation discovery after restart. Its corrected credential-free smoke materializes two AppServer Threads through Codex's documented persistence path, cold-restarts app-server with the same `CODEX_HOME`, and requires both original IDs to remain listable/readable. It remains a `v0.1.0-alpha` blocker until that real gate is green.
+
+### Explicitly deferred from the first alpha
+
+- [PR #48](https://github.com/Taa965/zero3-pilot/pull/48) — formal ACP external-executor runtime. It is **not** part of `v0.1.0-alpha`: its dedicated behavior suite currently fails on both Ubuntu and Windows (including deny -> `succeeded` instead of `cancelled`, and protocol-version mismatch -> `unavailable` instead of `unsupported`) and the branch needs replay/rebase onto the post-R4C stack. It will be repaired and revalidated in a later pre-release rather than waived into the first alpha.
 
 See [`ROADMAP.md`](ROADMAP.md) for release criteria and the post-alpha direction.
 
@@ -76,7 +79,7 @@ The roles are intentionally asymmetric:
  capabilities             executor     agents      integration
 ```
 
-See [`docs/ARCHITECTURE_CONSTITUTION.md`](docs/ARCHITECTURE_CONSTITUTION.md) for non-negotiable authority rules and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for detailed implementation history.
+See [`docs/ARCHITECTURE_CONSTITUTION.md`](docs/ARCHITECTURE_CONSTITUTION.md) for non-negotiable authority rules and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the current implementation summary.
 
 ## Reproducible Codex integration
 
@@ -105,7 +108,7 @@ Zero3 Pilot uses small, focused PRs and explicit integration gates. Current work
 - Codex overlay verify/replay gates;
 - legacy/extension smokes that are explicitly prevented from redefining the target Agent Kernel.
 
-This repository treats a green legacy test as compatibility evidence, not permission for a legacy runtime to become the product core.
+This repository treats a green legacy test as compatibility evidence, not permission for a legacy runtime to become the product core. Conversely, a provider integration whose dedicated semantic gate is red is deferred rather than counted as release-ready functionality.
 
 ## Repository layout
 
@@ -136,20 +139,13 @@ git clone --recurse-submodules https://github.com/Taa965/zero3-pilot.git
 cd zero3-pilot
 ```
 
-Run the architecture guard before feature work:
+Run the core local pre-push gate:
 
 ```bash
-node scripts/check-architecture.mjs
+./scripts/dev-check.sh
 ```
 
-Existing Rust compatibility/extension code is covered by:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace --all-targets
-cargo test --workspace
-```
+That gate includes the architecture guard plus Rust format, Clippy, build and tests. Specialized Windows, Codex and feature-specific gates remain authoritative in GitHub Actions.
 
 For the target desktop shell:
 
@@ -164,8 +160,9 @@ npm run dev
 
 ## Releases and roadmap
 
-- [`ROADMAP.md`](ROADMAP.md) — what is merged, what blocks the first alpha and what comes after it.
+- [`ROADMAP.md`](ROADMAP.md) — what is merged, what blocks the first alpha, what is explicitly deferred and what comes after it.
 - [`CHANGELOG.md`](CHANGELOG.md) — public pre-release/release history.
+- [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) — evidence required before a tag is presented as a release.
 - [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md) — draft first-alpha release notes and release checklist.
 
 The repository deliberately does **not** label the draft as a real release until a tag/artifact exists and the exact candidate has passed the required gates.
@@ -181,6 +178,10 @@ Please read [`CONTRIBUTING.md`](CONTRIBUTING.md) before changing the pinned Code
 - route side-effecting behavior through reviewed permission/authority boundaries;
 - document upstream-code provenance and license obligations;
 - do not present mocks, audit branches or planned features as merged runtime capability.
+
+## Governance
+
+Zero3 Pilot is currently a small maintainer-led project. [`GOVERNANCE.md`](GOVERNANCE.md) records the current maintainer responsibilities and decision process without implying a larger organization than actually exists.
 
 ## Security
 
