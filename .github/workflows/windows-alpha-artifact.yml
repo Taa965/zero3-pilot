@@ -57,7 +57,7 @@ jobs:
           npm run dist:win
           if ($LASTEXITCODE -ne 0) { throw 'Codex-native Windows package build failed' }
 
-      - name: Verify packaged pinned Codex and real app-server protocol
+      - name: Verify packaged pinned Codex, notices and real app-server protocol
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -68,12 +68,32 @@ jobs:
           if ($package.build.appId -ne 'ai.zero3.pilot') { throw 'package lost Zero3 appId' }
           if ($package.scripts.'dist:win' -notmatch '--publish never') { throw 'Windows package must not auto-publish from CI' }
 
-          $resource = @($package.build.win.extraResources) | Where-Object { $_.to -eq 'zero3-codex/codex.exe' }
-          if ($resource.Count -ne 1) { throw 'Windows package must contain exactly one managed Codex extraResource' }
+          $codexResource = @($package.build.win.extraResources) | Where-Object { $_.to -eq 'zero3-codex/codex.exe' }
+          if ($codexResource.Count -ne 1) { throw 'Windows package must contain exactly one managed Codex extraResource' }
+          $legalResource = @($package.build.win.extraResources) | Where-Object { $_.to -eq 'legal' }
+          if ($legalResource.Count -ne 1) { throw 'Windows package must contain exactly one managed legal-notice resource directory' }
 
-          $bundledCodex = "$desktop/release/win-unpacked/resources/zero3-codex/codex.exe"
+          $resources = "$desktop/release/win-unpacked/resources"
+          $bundledCodex = "$resources/zero3-codex/codex.exe"
           if (-not (Test-Path $bundledCodex -PathType Leaf)) { throw 'packaged pinned Codex binary is missing' }
           $bundledCodex = (Resolve-Path $bundledCodex).Path
+
+          @(
+            'LICENSE-Zero3-Pilot.txt',
+            'NOTICE-Zero3-Pilot.txt',
+            'LICENSE-OpenAI-Codex.txt',
+            'NOTICE-OpenAI-Codex.txt',
+            'LICENSE-Hermes-Agent.txt'
+          ) | ForEach-Object {
+            $legal = "$resources/legal/$_"
+            if (-not (Test-Path $legal -PathType Leaf)) { throw "packaged legal notice missing: $_" }
+            if ((Get-Item $legal).Length -le 0) { throw "packaged legal notice is empty: $_" }
+          }
+          $codexNotice = Get-Content -Raw "$resources/legal/NOTICE-OpenAI-Codex.txt"
+          if ($codexNotice -notmatch 'OpenAI Codex') { throw 'packaged Codex NOTICE is not the reviewed upstream notice' }
+          $hermesLicense = Get-Content -Raw "$resources/legal/LICENSE-Hermes-Agent.txt"
+          if ($hermesLicense -notmatch 'Copyright \(c\) 2025 Nous Research') { throw 'packaged Hermes license notice is not the reviewed upstream license' }
+
           & $bundledCodex --version
           if ($LASTEXITCODE -ne 0) { throw 'packaged Codex --version failed' }
           node apps/zero3-desktop/scripts/smoke-codex-app-server.mjs $bundledCodex
