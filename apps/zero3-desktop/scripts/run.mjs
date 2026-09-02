@@ -5,6 +5,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import {
   codexRoot,
   commandName,
+  hermesDesktopDir,
   hermesRoot,
   pinnedCodexBinary,
   repoRoot,
@@ -59,29 +60,60 @@ function ensureHermesDependencies(env) {
   })
 }
 
-function ensurePinnedCodexBinary(env) {
-  const binary = pinnedCodexBinary()
+function ensurePinnedCodexBinary(env, profile = 'debug') {
+  const binary = pinnedCodexBinary(profile)
   if (isFile(binary)) return binary
 
-  console.log('[Zero3 R1A] Building pinned open-source Codex core...')
-  runSync(
-    'cargo',
-    [
-      'build',
-      '--manifest-path',
-      path.join(codexRoot, 'codex-rs', 'Cargo.toml'),
-      '-p',
-      'codex-cli',
-      '--bin',
-      'codex'
-    ],
-    { cwd: codexRoot, env }
-  )
+  console.log(`[Zero3] Building pinned open-source Codex core (${profile})...`)
+  const args = [
+    'build',
+    '--manifest-path',
+    path.join(codexRoot, 'codex-rs', 'Cargo.toml'),
+    '-p',
+    'codex-cli',
+    '--bin',
+    'codex'
+  ]
+  if (profile === 'release') args.push('--release')
+  runSync('cargo', args, { cwd: codexRoot, env })
 
   if (!isFile(binary)) {
     throw new Error(`Pinned Codex binary was not produced at ${binary}`)
   }
   return binary
+}
+
+function copyRequiredFile(source, target) {
+  if (!isFile(source)) throw new Error(`Required release file is missing: ${source}`)
+  fs.copyFileSync(source, target)
+  if (!isFile(target) || fs.statSync(target).size === 0) {
+    throw new Error(`Failed to stage release file: ${target}`)
+  }
+}
+
+function stagePinnedCodexForWindowsPackage(binary) {
+  if (process.platform !== 'win32') {
+    throw new Error('dist:win must run on Windows so the packaged Codex binary matches the target platform.')
+  }
+
+  const codexTargetDir = path.join(hermesDesktopDir, 'build', 'zero3-codex')
+  const codexTarget = path.join(codexTargetDir, 'codex.exe')
+  fs.rmSync(codexTargetDir, { recursive: true, force: true })
+  fs.mkdirSync(codexTargetDir, { recursive: true })
+  copyRequiredFile(binary, codexTarget)
+
+  const legalTargetDir = path.join(hermesDesktopDir, 'build', 'zero3-legal')
+  fs.rmSync(legalTargetDir, { recursive: true, force: true })
+  fs.mkdirSync(legalTargetDir, { recursive: true })
+  copyRequiredFile(path.join(repoRoot, 'LICENSE'), path.join(legalTargetDir, 'LICENSE-Zero3-Pilot.txt'))
+  copyRequiredFile(path.join(repoRoot, 'NOTICE'), path.join(legalTargetDir, 'NOTICE-Zero3-Pilot.txt'))
+  copyRequiredFile(path.join(codexRoot, 'LICENSE'), path.join(legalTargetDir, 'LICENSE-OpenAI-Codex.txt'))
+  copyRequiredFile(path.join(codexRoot, 'NOTICE'), path.join(legalTargetDir, 'NOTICE-OpenAI-Codex.txt'))
+  copyRequiredFile(path.join(hermesRoot, 'LICENSE'), path.join(legalTargetDir, 'LICENSE-Hermes-Agent.txt'))
+
+  console.log(`[Zero3] Staged pinned Codex release binary for Windows package: ${codexTarget}`)
+  console.log(`[Zero3] Staged Zero3/Codex/Hermes release notices: ${legalTargetDir}`)
+  return codexTarget
 }
 
 function hermesVenvPython() {
@@ -181,12 +213,23 @@ const baseEnv = {
   ZERO3_DESKTOP_SHELL: 'hermes-ui-compat'
 }
 
+let codexBinary
+if (mode === 'dev') {
+  codexBinary = ensurePinnedCodexBinary(baseEnv, 'debug')
+} else if (mode === 'dist:win') {
+  codexBinary = ensurePinnedCodexBinary(baseEnv, 'release')
+  stagePinnedCodexForWindowsPackage(codexBinary)
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-windows-package.mjs')])
+} else {
+  codexBinary = pinnedCodexBinary('debug')
+}
+
 const env = {
   ...baseEnv,
-  // The target runtime always points at the binary built from upstream/codex's
-  // pinned source tree. Host-installed Codex/Claude/Hermes applications remain
-  // external collaborators and never satisfy this core-runtime path.
-  ZERO3_CODEX_BIN: mode === 'dev' ? ensurePinnedCodexBinary(baseEnv) : pinnedCodexBinary()
+  // Development/build orchestration points only at the binary built from the
+  // reviewed upstream/codex pin. The packaged Windows app has a separate
+  // fail-closed resolver for its bundled resources/zero3-codex/codex.exe.
+  ZERO3_CODEX_BIN: codexBinary
 }
 
 ensureHermesDependencies(env)
