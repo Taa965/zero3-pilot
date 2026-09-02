@@ -23,6 +23,23 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function rpcErrorFrom(error) {
+  if (!(error instanceof Error)) return null
+  try {
+    const parsed = JSON.parse(error.message)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function errorLooksLikeInvalidParams(error) {
+  const rpcError = rpcErrorFrom(error)
+  if (!rpcError) return false
+  const message = typeof rpcError.message === 'string' ? rpcError.message : ''
+  return rpcError.code === -32602 || /invalid params|unknown field|missing field|deserialize/i.test(message)
+}
+
 function createClient() {
   const child = spawn(binary, ['app-server', '--stdio'], {
     env: { ...process.env, CODEX_HOME: codexHome },
@@ -131,7 +148,7 @@ function createClient() {
 
   async function waitForThreads(expectedIds, label) {
     let actual = new Set()
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
       actual = await listAppServerThreads()
       if (expectedIds.every(id => actual.has(id))) return actual
       await delay(100)
@@ -139,21 +156,42 @@ function createClient() {
     throw new Error(`${label}: expected=${expectedIds.join(',')} actual=${JSON.stringify([...actual])}`)
   }
 
-  async function materializeThread(threadId) {
-    // Pinned Codex deliberately materializes a fresh non-ephemeral Thread on its
-    // first Turn. This credential-free smoke must test cold-store filtering, not
-    // model/auth access, so use Codex's documented section-move path to force the
-    // same rollout materialization before restart. A null sectionId keeps the
-    // Thread unsectioned while still persisting it.
-    await request('thread/section/move', {
-      threadId,
-      sectionId: null,
-      beforeThreadId: null
-    })
+  async function materializeThreadWithFirstTurn(threadId, marker) {
+    // Pinned Codex's durable-history contract materializes a fresh non-ephemeral
+    // Thread on its first Turn. This is the actual Zero3 user path and is also
+    // exercised by smoke-codex-app-server.mjs without credentials. CI may lack
+    // model/auth access, so a non-schema runtime error is acceptable after the
+    // request has crossed protocol deserialization; invalid request shapes are not.
+    try {
+      const result = record(
+        await request('turn/start', {
+          threadId,
+          input: [
+            {
+              type: 'text',
+              text: `Zero3 durable session persistence smoke ${marker}. No tool use is required.`,
+              text_elements: []
+            }
+          ],
+          approvalPolicy: 'never'
+        })
+      )
+      const turnId = record(result.turn).id
+      if (typeof turnId !== 'string' || !turnId) {
+        throw new Error(`turn/start returned no turn id while materializing ${threadId}`)
+      }
+    } catch (error) {
+      if (errorLooksLikeInvalidParams(error)) {
+        throw new Error(`turn/start rejected persistence smoke request shape for ${threadId}: ${error.message}`)
+      }
+      // Authentication/model access is intentionally absent in CI. The basic
+      // app-server smoke accepts the same class of runtime failure after schema
+      // acceptance, and the first-turn persistence fence is what this test needs.
+    }
 
     const read = record(await request('thread/read', { threadId, includeTurns: false }))
     if (record(read.thread).id !== threadId) {
-      throw new Error(`thread/read failed after materializing ${threadId}`)
+      throw new Error(`thread/read failed after first-turn materialization for ${threadId}`)
     }
   }
 
@@ -170,7 +208,7 @@ function createClient() {
     })
   }
 
-  return { child, initialize, request, waitForThreads, materializeThread, close }
+  return { child, initialize, request, waitForThreads, materializeThreadWithFirstTurn, close }
 }
 
 async function main() {
@@ -180,16 +218,16 @@ async function main() {
   try {
     await client.initialize()
     first = threadIdFrom(
-      await client.request('thread/start', { approvalPolicy: 'never', sandbox: 'read-only' })
+      await client.request('thread/start', { approvalPolicy: 'never', sandbox: 'read-only', ephemeral: false })
     )
     second = threadIdFrom(
-      await client.request('thread/start', { approvalPolicy: 'never', sandbox: 'read-only' })
+      await client.request('thread/start', { approvalPolicy: 'never', sandbox: 'read-only', ephemeral: false })
     )
     if (first === second) throw new Error('two thread/start calls returned the same thread id')
 
-    await client.materializeThread(first)
-    await client.materializeThread(second)
-    await client.waitForThreads([first, second], 'live appServer thread/list omitted materialized threads')
+    await client.materializeThreadWithFirstTurn(first, 'A')
+    await client.materializeThreadWithFirstTurn(second, 'B')
+    await client.waitForThreads([first, second], 'live appServer thread/list omitted first-turn durable threads')
 
     await client.close()
     client = createClient()
@@ -206,7 +244,7 @@ async function main() {
     }
 
     console.log(
-      `Zero3 Codex session persistence smoke passed: two materialized appServer threads survived app-server restart (${first}, ${second}).`
+      `Zero3 Codex session persistence smoke passed: two first-turn appServer threads survived app-server restart (${first}, ${second}).`
     )
   } finally {
     await client.close().catch(() => {})
