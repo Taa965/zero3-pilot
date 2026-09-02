@@ -1,11 +1,10 @@
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
-@@ -567,3 +567,13 @@ struct AppServerCommand {
-     /// Use stdio as the transport (equivalent to `--listen stdio://`).
+@@ -568,6 +568,16 @@
      #[arg(long = "stdio", conflicts_with = "listen")]
      stdio: bool,
-+
+ 
 +    /// Session source used to derive product restrictions and persisted metadata.
 +    /// Keep the upstream wrapper default unchanged unless a caller opts in.
 +    #[arg(
@@ -15,7 +14,11 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 +        value_parser = codex_protocol::protocol::SessionSource::from_startup_arg
 +    )]
 +    session_source: codex_protocol::protocol::SessionSource,
-@@ -1249,6 +1259,7 @@ async fn main() -> anyhow::Result<()> {
++
+     /// Enable remote control for this app-server process without changing persistence.
+     #[arg(long = "remote-control", hide = true)]
+     remote_control: bool,
+@@ -1248,6 +1258,7 @@
                  strict_config: app_server_strict_config,
                  listen,
                  stdio,
@@ -23,7 +26,7 @@ diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
                  remote_control,
                  analytics_default_enabled,
                  auth,
-@@ -1291,7 +1302,7 @@ async fn main() -> anyhow::Result<()> {
+@@ -1290,7 +1301,7 @@
                          strict_config,
                          analytics_default_enabled,
                          transport,
