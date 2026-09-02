@@ -1,6 +1,8 @@
 # Zero3 Pilot Architecture
 
-This document describes the **current `main` architecture** of Zero3 Pilot. Historical phase-specific documents remain useful for implementation provenance, but the non-negotiable authority rules live in [`ARCHITECTURE_CONSTITUTION.md`](ARCHITECTURE_CONSTITUTION.md) and this file is the current implementation summary.
+This document describes the **current `main` architecture** of Zero3 Pilot. Historical phase-specific details remain in the linked R2/R3/H/D documents and in merged PRs, but this file is the public summary of what currently owns runtime authority and what has actually been merged.
+
+The non-negotiable rules live in [`ARCHITECTURE_CONSTITUTION.md`](ARCHITECTURE_CONSTITUTION.md).
 
 ## 1. Runtime authority
 
@@ -16,7 +18,7 @@ Zero3 Pilot is a Codex-core desktop application.
 - MCP and Codex-native execution surfaces;
 - interruption/resume and authoritative conversation history.
 
-Zero3 may extend, present or orchestrate that runtime through reviewed boundaries, but it must not introduce a second hidden primary agent loop, tool loop, MCP runtime or approval engine.
+Zero3 may extend, present or orchestrate that runtime through reviewed boundaries, but it must not silently introduce a second hidden primary agent loop.
 
 ## 2. Product topology
 
@@ -55,7 +57,7 @@ Installed Codex/Claude/Hermes applications may participate as external collabora
 
 ## 3. Pinned upstream and managed Codex overlay
 
-The reviewed pins currently recorded by the repository are:
+The reviewed pins currently recorded by `codex-overlays/manifest.json` are:
 
 ```text
 Codex            94311d447587411789533c47601fd8bc9d81eb48
@@ -63,128 +65,257 @@ Hermes Agent     f7c79efbac19ae18e8dee7c79a4e4c0935299b5f
 DeepSeek-Harness cd5ef8148158c3a752a658978873241fdf8e2bbc
 ```
 
-The Codex gitlink remains pinned. Zero3-specific Codex work is represented by the managed `codex-overlays/` system, which verifies the expected base, rejects unmanaged/unlisted patch drift, applies reviewed extensions/patches in manifest order and supports detached replay against candidate upstream revisions.
+The upstream Codex gitlink remains pinned. Zero3-specific Codex work is represented by the managed `codex-overlays/` system:
 
-The active merged resilience features include:
+1. verify the exact Codex base SHA;
+2. reject unmanaged Codex worktree changes;
+3. install explicitly listed Zero3 extensions;
+4. apply explicitly listed patches in deterministic manifest order;
+5. reject unlisted/missing/unreplayable patches;
+6. replay the overlay in a detached candidate Codex worktree to detect upstream drift;
+7. run Codex format/build/app-server and architecture gates.
+
+The active merged overlay features are currently:
 
 - **D1 / `zero3-output-retention`** — lossless oversized plain-text tool-result spill/recovery with bounded model projection;
-- **D2 / `zero3-context-retention`** — recoverable pruning of oversized historical tool results only in private compaction/model input.
+- **D2 / `zero3-context-retention`** — recoverable pruning of oversized historical tool results only in private compaction input.
 
-Those features reuse Codex execution/history authority rather than creating a second tool or persistence authority.
+Those features reuse Codex execution/compaction authority; they do not introduce a second tool or history authority.
 
-See [`UPSTREAM.md`](UPSTREAM.md) for the full pin/overlay policy.
+See [`UPSTREAM.md`](UPSTREAM.md) for the full overlay/pin policy.
 
 ## 4. Target desktop path
 
-The target desktop shell is prepared under `apps/zero3-desktop/` from the pinned Hermes Electron/React source and wired to Codex through Zero3-owned typed boundaries.
+The target desktop shell is prepared under `apps/zero3-desktop/` from the pinned Hermes Electron/React source and wired to Codex through a Zero3-owned typed boundary.
 
 ### R1A — Codex app-server transport — merged
 
-Electron main owns the pinned `codex app-server --stdio` child, initialization, JSONL framing, request correlation/timeouts, bounded server-request forwarding and process lifecycle. Renderer access is purpose-specific; there is no supported generic Renderer-controlled `method + params` Codex RPC tunnel.
+Electron main owns a `codex app-server --stdio` child and handles:
 
-### R2A/R2B — primary chat, approvals and input — merged
+- explicit pinned Codex executable selection;
+- `initialize` / `initialized` lifecycle;
+- JSONL framing and request-id correlation;
+- notification forwarding;
+- bounded server-originated request forwarding;
+- child lifecycle and cleanup.
 
-The visible primary conversation path maps onto Codex semantics:
+Renderer access is purpose-specific. There is no supported arbitrary Renderer-controlled `method + params` Codex RPC tunnel.
 
-```text
-new conversation -> thread/start
-list/restore      -> thread/list + thread/read/resume
-send              -> turn/start
-stop              -> turn/interrupt
-```
+### R2A — primary chat -> Codex Thread/Turn/Item — merged
 
-Selected Codex command/file approval and user-input server requests are presented through Zero3 UI and answered through the typed boundary. Unsupported request classes fail closed.
+The visible primary conversation path maps the Hermes-derived presentation shell onto Codex semantics:
+
+- new conversation -> `thread/start`;
+- recents/restore -> Codex Thread list/read/resume;
+- send -> `turn/start`;
+- streaming -> Codex Item notifications/deltas;
+- Stop/Esc -> `turn/interrupt`.
+
+Hermes-derived stores are presentation adapters on this path, not runtime authority.
+
+See [`CODEX_PRIMARY_CHAT_R2.md`](CODEX_PRIMARY_CHAT_R2.md).
+
+### R2B — native approval and input — merged
+
+Selected server-originated Codex requests are presented through Zero3-owned UI and answered through the typed server-response surface:
+
+- command execution approval;
+- file-change approval;
+- user-input requests.
+
+Prompt state is correlated/queued per Thread and unresolved callbacks are cleared/rejected on terminal/interruption/error paths.
+
+Unsupported request classes remain fail-closed until they receive dedicated reviewed UX.
+
+The current conservative baseline keeps `approvalPolicy=on-request` and does not make `workspace-write` the unconditional default sandbox.
 
 ### R3A/R3B — native Item presentation — merged
 
-The presentation adapter covers Codex-native Item families including reasoning, command execution, file changes, MCP tool calls, dynamic tool calls, plans and web search. Projection into Hermes-derived components is presentation-only and does not move execution authority into Hermes.
+The presentation adapter covers Codex-native Item families including:
+
+- reasoning;
+- command execution;
+- file change;
+- MCP tool calls;
+- dynamic tool-call presentation;
+- plans;
+- web search.
+
+Presentation does not move execution authority into Hermes.
+
+See [`CODEX_MORE_ITEMS_R3B.md`](CODEX_MORE_ITEMS_R3B.md).
 
 ### R3C — structured user input — merged
 
-The primary composer uses a validated Codex `UserInput[]` bridge, including supported local-image input. Renderer payloads are reconstructed/validated at the reviewed Electron boundary rather than used as an arbitrary protocol passthrough.
+The primary composer supports a validated Codex `UserInput[]` bridge, including supported local-image inputs. Renderer input is reconstructed/validated by the reviewed Electron boundary rather than used as an arbitrary protocol passthrough.
+
+See [`CODEX_STRUCTURED_INPUT_R3C.md`](CODEX_STRUCTURED_INPUT_R3C.md).
 
 ### R3D — native Thread actions — merged
 
-Codex-native archive/unarchive/delete/rename/fork and active-Turn steering are implemented through reviewed typed surfaces.
+Migrated actions include Codex-native:
 
-### R3E/R3F — authoritative Turn mapping and paginated history — merged
+- archive / unarchive;
+- permanent delete;
+- rename;
+- whole-Thread fork;
+- active-Turn steer.
 
-Message/history-sensitive operations resolve presentation state against authoritative Codex Thread/Turn/Item history. Destructive/history-sensitive flows use authoritative paginated history and fail closed when identity or pagination is incomplete/ambiguous.
+See [`CODEX_THREAD_ACTIONS_R3D.md`](CODEX_THREAD_ACTIONS_R3D.md).
 
-## 5. Durable Zero3 conversation source (#49)
+### R3E — authoritative message/Turn mapping — merged
 
-[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) is merged and is part of the first-alpha candidate.
+Message-level history operations resolve presentation messages against authoritative Codex Thread/Turn/Item history rather than guessing by index/timestamp.
 
-Pinned Codex distinguishes AppServer transport from persisted session source. Zero3 explicitly launches its Codex child with `--session-source app-server` and lists `sourceKinds: ['appServer']`, preventing unrelated VS Code Codex history from being treated as Zero3 conversation history.
+This provides reviewed boundaries for exact fork/revert/regenerate flows while keeping unsupported ambiguous cases fail-closed.
 
-The release-blocking regression smoke uses normal durable materialization: create two non-ephemeral Threads, start a first Turn on each, restart app-server with the same `CODEX_HOME`, then require both original IDs through AppServer-source list/read operations.
+See [`CODEX_TURN_MAPPING_R3E.md`](CODEX_TURN_MAPPING_R3E.md).
 
-Development sessions created before explicit Zero3 AppServer source tagging may have been persisted under Codex's `vscode` source; the first public alpha does not promise automatic migration of that pre-release state.
+### R3F — authoritative paginated history — merged
+
+Destructive/history-sensitive flows use authoritative paginated Codex history and fail closed on incomplete/invalid pagination conditions.
+
+See [`CODEX_AUTHORITATIVE_HISTORY_R3F.md`](CODEX_AUTHORITATIVE_HISTORY_R3F.md).
+
+## 5. Context/output resilience
+
+### D0 — managed overlay foundation — merged
+
+D0 establishes deterministic extension/patch installation, exact pin checks and detached replay/drift detection.
+
+### D1 — output retention — merged
+
+Oversized plain-text tool results can be stored losslessly outside model context and represented to the model through a bounded projection with an opaque recovery reference.
+
+Recovery tools operate through the installed spill-store contract. Storage/projection behavior is designed not to become tool-execution authority.
+
+### D2 — context retention — merged
+
+D2 prunes only recoverable oversized historical tool results in the **private cloned history used for compaction/model input**.
+
+It does not mutate authoritative persisted Thread/Turn/Item history. D2 reuses D1's spill/recovery authority rather than creating a second persistence system.
 
 ## 6. Remote Host architecture
 
 Remote Host allows remotely admitted development tasks to reach a local Zero3/Codex execution host through narrow reviewed boundaries while preserving Codex as execution authority.
 
-Merged H0-H5 invariants include:
+### H0-H3 — local host runtime — merged
+
+Key invariants include:
 
 - exact task/execution identity binding;
-- workspace allow-listing;
-- durable task -> Codex mapping and restart recovery;
-- crash-safe durable outbox with ack-before-delete;
-- strict publication ordering;
-- authenticated durable control-plane state;
-- sticky leases and fencing generations;
-- replay/terminal idempotency and fail-closed identity handling.
+- local workspace allow-listing;
+- durable task -> Codex mapping;
+- deterministic user-message identity for crash recovery;
+- durable pending-Turn intent;
+- authoritative restart recovery;
+- fail-closed handling of ambiguous side effects and unsupported Git preconditions.
 
-The Remote Host/control plane does not expose a generic remote Codex RPC/shell authority and does not become the native Agent Kernel.
+The Remote Host adapter is intentionally narrow and does not expose a generic remote Codex RPC/shell path.
 
-See [`REMOTE_HOST_RUNTIME.md`](REMOTE_HOST_RUNTIME.md), [`H4_REMOTE_OUTBOX_DESIGN.md`](H4_REMOTE_OUTBOX_DESIGN.md) and [`H5_REMOTE_CONTROL_PLANE.md`](H5_REMOTE_CONTROL_PLANE.md).
+See [`REMOTE_HOST_RUNTIME.md`](REMOTE_HOST_RUNTIME.md).
+
+### H4/H4.1 — durable ordered outbox — merged
+
+Remote evidence/terminal publication follows a crash-safe rule:
+
+```text
+persist committed envelope
+        -> drain older committed envelopes in order
+        -> publish
+        -> durable acceptance/ack
+        -> delete local pending envelope
+```
+
+Stale lease/fencing outcomes quarantine identity rather than mutating it into a new authority.
+
+See [`H4_REMOTE_OUTBOX_DESIGN.md`](H4_REMOTE_OUTBOX_DESIGN.md).
+
+### H5 — durable control plane — merged
+
+The control plane owns remote task/node admission state, sticky leases, fencing generations, durable accepted mirrors and replay/terminal validation.
+
+It does **not** become Codex execution authority and must not expose shell/files/MCP/Codex generic RPC as a control-plane shortcut.
+
+See [`H5_REMOTE_CONTROL_PLANE.md`](H5_REMOTE_CONTROL_PLANE.md).
 
 ## 7. Executor, Handoff and Failover
 
-Zero3 has a provider-neutral execution orchestration layer **outside** the Codex native Agent Kernel.
+Zero3 now has a provider-neutral execution orchestration layer outside the Codex native Agent Kernel.
 
-- **Codex native kernel** defines native agent execution semantics.
-- **Zero3 Executor/Router/Handoff** decides which approved executor/provider is assigned to a Zero3 Task/Execution and how durable workspace authority moves.
-- An external provider never becomes the native kernel merely by being selectable.
+The distinction is important:
+
+- **Codex native kernel** defines native agent execution semantics;
+- **Zero3 Executor/Router/Handoff** decides which approved executor/provider is assigned to a Zero3 Task/Execution and how durable work authority moves between providers;
+- an external provider never becomes the native kernel merely by being selectable.
 
 ### R4A — `zero3.pilot.executor.v1` — merged
 
-The frozen provider-neutral contract carries Task/Execution identity, workspace and lease/fencing identity where applicable, executor session/probe/event/failure contracts, normalized Zero3-owned failure policy, Registry/Manager authority and provider-neutral routing surfaces.
+The frozen provider-neutral contract carries:
+
+- Task / Execution identity;
+- workspace and optional lease/fencing identity;
+- executor session/probe/event/failure contracts;
+- normalized Zero3-owned failure taxonomy/policy;
+- Registry/Manager authority with one active binding per task/execution;
+- provider-neutral routing surfaces.
+
+Raw provider-private exceptions/types are not supposed to become shared policy authority.
 
 ### R4E — durable Handoff — merged
 
-The Handoff layer records deterministic Git/workspace checkpoint evidence, uses crash-safe persistent state and enforces an exclusive writer/generation transfer. A new executor cannot become workspace writer merely by starting a process.
+The Handoff layer records deterministic Git/workspace checkpoint evidence, uses crash-safe persistent state and enforces an exclusive writer/generation transfer.
+
+A new executor cannot become workspace writer merely by starting a process; it must satisfy the Handoff acceptance/verification contract.
 
 ### R4F — failover controller — merged
 
-Failover supports ordered candidates, bounded retry, cooldown/circuit-breaker state, recovery-first behavior, context-loss handoff requirements, manual/automatic switching controls, return-to-primary boundaries, duplicate-event idempotency and restart-serializable state. User stop and policy/permission/budget/bad-request classes are not converted into automatic provider switching just to keep work running.
+The Zero3-owned failover controller implements:
+
+- ordered candidates;
+- bounded retry;
+- provider cooldown/circuit-breaker state;
+- recovery-first decisions;
+- context-loss handoff requirements;
+- manual/automatic switching controls;
+- return-to-primary at defined boundaries;
+- duplicate-event idempotency and restart-serializable state.
+
+User stop and policy/permission/budget/bad-request classes are not converted into automatic provider switching just to keep work running.
 
 ### R4C — Native Codex executor — merged
 
-The Native Codex `Zero3Executor` uses the same pinned `codex app-server` kernel through a controller-owned process. It uses supported account/rate-limit APIs, does not extract/copy Codex credential files, forwards explicit permission decisions, and maps resume-context loss to a typed failure rather than silently starting a replacement Thread.
+A real Native Codex `Zero3Executor` uses the same pinned open-source `codex app-server --stdio` kernel through a controller-owned child process.
 
-### R4B — ACP/external executor — deferred from first alpha
+Important boundaries include:
 
-[PR #48](https://github.com/Taa965/zero3-pilot/pull/48) remains open and is **not included in `v0.1.0-alpha`**. Its dedicated cross-platform behavior gate has unresolved deny/cancellation and protocol-version classification semantics. It will be replayed/repaired/revalidated post-alpha rather than weakening the first-release boundary.
+- explicit per-executor Codex home selection;
+- supported `account/read` / rate-limit probing rather than credential-file parsing;
+- no `auth.json` token extraction/copy/serialization;
+- explicit permission decision forwarding;
+- resume failure -> typed context loss rather than silently starting a replacement Thread.
 
-## 8. Windows package authority (#51)
+### R4B — ACP/external executor — open, not merged
 
-[PR #51](https://github.com/Taa965/zero3-pilot/pull/51) is merged and establishes the Codex-native Windows packaging path.
+[PR #48](https://github.com/Taa965/zero3-pilot/pull/48) is the formal ACP external-executor implementation and is **not part of the merged `main` capability until merged**.
 
-The release package:
+Older audit/POC PRs for R4B/R4C are historical exploration and must not be treated as the authoritative implementation when a formal merged path exists.
 
-- builds the exact reviewed pinned Codex source in release mode;
-- bundles it as `resources/zero3-codex/codex.exe`;
-- requires packaged mode to use that bundled binary rather than PATH, `@latest`, runtime download or arbitrary external override;
-- includes required Zero3/OpenAI Codex/Hermes license/NOTICE material;
-- builds an NSIS candidate with automatic publication disabled in CI;
-- verifies the packaged Codex binary with `--version` and a real app-server JSONL smoke;
-- computes an installer SHA-256 for evidence.
+## 8. First-alpha closeout and remaining reliability work
 
-The #51 pull-request merge candidate already contained merged #49 and passed the Windows Alpha Artifact gate. That is integrated pre-tag evidence, not a substitute for exact final release-SHA validation.
+[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) is merged. Zero3 now explicitly launches pinned Codex with `--session-source app-server`, lists the matching `sourceKinds: ['appServer']` namespace, and carries a real first-Turn cold-restart persistence smoke for two durable Threads.
+
+[PR #51](https://github.com/Taa965/zero3-pilot/pull/51) is merged. The Windows alpha packaging path builds the exact reviewed Codex pin, bundles `resources/zero3-codex/codex.exe`, carries required legal notices, fails closed against arbitrary packaged-runtime substitution, builds an NSIS candidate and verifies the packaged binary with a real app-server smoke plus installer SHA-256 generation.
+
+[PR #52](https://github.com/Taa965/zero3-pilot/pull/52) merged the public release-document closeout. The #51 pull-request merge candidate already contained merged #49 and passed the integrated Windows Alpha Artifact gate; that is pre-tag evidence, not a substitute for final exact-release-SHA validation.
+
+The remaining open [PR #48](https://github.com/Taa965/zero3-pilot/pull/48) is explicitly deferred from `v0.1.0-alpha` because its ACP behavior semantics remain red; it is not a first-alpha blocker.
+
+Remote Host -> Executor Manager/Handoff/Failover integration remains follow-up work; H5 remote-control authority and the R4 execution contracts must be connected without weakening either set of invariants.
 
 ## 9. Legacy / compatibility components
+
+The repository still contains older components that remain useful as compatibility evidence or future extension sources.
 
 ### `apps/node`
 
@@ -192,40 +323,42 @@ Legacy/extension host for older jobs/schedule/memory/provider paths. It is not t
 
 ### legacy Rust/Wry desktop
 
-Retained for migration/installer history and compatibility tests. The current product target is the Hermes-derived Electron/React Codex-core desktop path.
+Retained for migration/installer history and compatibility tests. New target UI/runtime work belongs in the Hermes-derived Codex-core desktop path.
 
 ### Hermes compatibility backend
 
-Some unported UI surfaces may still require Hermes backend scaffolding. No new target core capability should expand Hermes Runtime authority; migrated core paths must remain Codex-owned.
+Some unported UI surfaces may still require Hermes backend scaffolding during development. No new target core capability should be implemented by expanding Hermes Runtime authority.
 
-### historical `zero3-subagents` naming
+### old `zero3-subagents` naming
 
-Historical naming may remain in compatibility crates. External-agent work belongs under the Executor/Collaboration model and must preserve Codex native-kernel authority.
+Historical naming may remain in compatibility crates. External agent work belongs under the Executor/Collaboration model and must preserve Codex native-kernel authority.
 
-## 10. CI and release invariants
+## 10. CI invariants
 
-Release evidence is intentionally split across focused gates:
+The repository uses multiple independent gates rather than one “everything passed” script.
+
+Core/public evidence includes:
 
 - architecture guard;
-- repository Rust/static gates where applicable;
+- Rust format/Clippy/build/tests;
 - Windows target-shell prepare/typecheck/build;
-- real pinned-Codex CLI/app-server smoke;
+- real pinned-Codex CLI/app-server JSONL smoke;
 - Codex overlay verify/replay;
 - R3 structured-input/thread/history gates;
 - D1/D2 retention gates;
 - Remote Host H-series reliability/control-plane gates;
 - R4 Executor/Handoff/Failover/Native Codex gates;
-- Windows Alpha Artifact package/bundled-Codex smoke and checksum evidence.
+- Windows Alpha Artifact package/bundled-Codex smoke and checksum evidence for the release candidate.
 
-A green legacy/provider test is compatibility evidence, not permission for that component to become the native Agent Kernel.
+Legacy/provider smokes may remain green while the target architecture evolves. Their success proves compatibility of those components, not ownership of the native Agent Kernel.
 
-## 11. Current first-alpha closeout status
+The local `scripts/dev-check.sh` covers the practical repository-level core checks; specialized Windows/Codex/feature gates remain authoritative in GitHub Actions.
 
-PRs #49, #51 and #52 are merged. The first-alpha implementation/documentation blockers are therefore on `main`.
+## 11. Current release status
 
-Zero3 Pilot still has **no published GitHub Release/tag**. Before `v0.1.0-alpha` is considered complete, one exact final `main` SHA must receive the required release evidence, including final Windows artifact/checksum verification, and the matching tag/GitHub pre-release must be published and verified.
+Zero3 Pilot has **no published GitHub Release yet** and remains pre-release.
 
-The remaining open PR #48 is explicitly deferred and is not a first-alpha blocker.
+The first planned release is `v0.1.0-alpha`. PRs #49, #51 and #52 are merged, but the exact final `main` candidate still requires the release evidence defined by the release process, including final Windows artifact/checksum verification and matching tag/GitHub pre-release publication.
 
 Release criteria are tracked in:
 
@@ -235,4 +368,4 @@ Release criteria are tracked in:
 - [`releases/v0.1.0-alpha.md`](releases/v0.1.0-alpha.md);
 - public release-readiness Issue #50.
 
-Until the exact-candidate validation and publication facts exist, release tests not actually run must remain `NOT_RUN` rather than being inferred from older PR artifacts.
+Public documentation should describe merged `main` capability and clearly label open PR/POC work as unmerged. Evidence not actually executed on the exact release candidate must remain `NOT_RUN` rather than being inferred from older PR artifacts.
