@@ -80,8 +80,20 @@ Hermes and DeepSeek-Harness are donors/collaborators only; neither may become th
 
 S0/S1 own `codex-overlays/manifest.json`, schemas, common apply/replay engine, base-SHA guard, shared patch ordering, common architecture guard and CI. Feature sessions own only their declared feature directories. When a feature needs shared registration or manifest activation it submits an `INTEGRATION_REQUEST` to S0/S1 rather than editing shared integration files concurrently.
 
-The Bootstrap contract commit for the current multi-session wave is recorded in the coordinating plan/output and is the required branch base for S2/S3/S4 feature branches.
+The Bootstrap contract commit for a coordinated multi-session wave is recorded by that wave's integration plan and is the required branch base for its feature branches. Historical S0/S1/S2 naming describes integration ownership during those waves; it does not create permanent runtime authority outside the architecture constitution.
 
 ## Current modification log
 
-D0 establishes overlay infrastructure only. At this stage `manifest.json` activates no feature extensions and no Codex Core patches; `upstream/codex` remains pinned at `94311d447587411789533c47601fd8bc9d81eb48`.
+The current reviewed Codex pin remains:
+
+`94311d447587411789533c47601fd8bc9d81eb48`
+
+The managed overlay is no longer infrastructure-only. The merged modification history currently includes:
+
+- **D0 — overlay foundation:** deterministic manifest, exact pin verification, managed extension copy/patch ordering, unmanaged-worktree guards and detached replay/drift detection;
+- **D1 — output retention:** Codex-native lossless spill/recovery for oversized plain-text tool results with bounded model projection and typed recovery tools;
+- **D2 — context retention:** deterministic pruning of recoverable oversized historical tool results only in Codex's private compaction input, without mutating authoritative Thread/Turn/Item history.
+
+The exact active extensions/patches are defined by `codex-overlays/manifest.json`; this prose log is explanatory only and must not override the manifest.
+
+Any future Codex pin bump or Core patch must remain separately reviewable and must pass overlay replay plus the relevant Codex/app-server gates before merge.
