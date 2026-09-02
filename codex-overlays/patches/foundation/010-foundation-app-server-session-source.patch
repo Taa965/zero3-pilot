@@ -1,10 +1,7 @@
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
-@@ -568,6 +568,16 @@
-     #[arg(long = "stdio", conflicts_with = "listen")]
-     stdio: bool,
- 
+@@ -571,3 +571,13 @@
 +    /// Session source used to derive product restrictions and persisted metadata.
 +    /// Keep the upstream wrapper default unchanged unless a caller opts in.
 +    #[arg(
