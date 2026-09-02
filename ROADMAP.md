@@ -1,6 +1,6 @@
 # Zero3 Pilot Roadmap
 
-Zero3 Pilot is in active pre-release development. This roadmap describes the public product direction and separates capabilities already merged to `main` from work that is still under review.
+Zero3 Pilot is in active pre-release development. This roadmap describes the public product direction and separates capabilities already merged to `main` from work that is still under review or still requires release evidence.
 
 The governing rule is unchanged: **open-source Codex remains the authoritative native Agent Kernel/runtime.** New features must extend that runtime or integrate through reviewed boundaries rather than creating a second hidden agent core.
 
@@ -18,6 +18,14 @@ The primary desktop path has progressed through R1A-R3F:
 - native thread archive/unarchive/delete/rename/fork and active-turn steer;
 - authoritative Item -> Turn mapping for history mutation boundaries;
 - authoritative paginated Codex history for destructive-history operations.
+
+### Durable Zero3 AppServer conversation identity (#49)
+
+[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) is merged.
+
+Pinned Codex separates the AppServer transport from the persisted session source. Zero3 explicitly launches the child with `--session-source app-server` and lists the matching `sourceKinds: ['appServer']` namespace, preventing unrelated VS Code Codex history from being treated as Zero3 conversation history.
+
+The regression smoke mirrors production launch arguments: create two non-ephemeral Threads, start a first Turn on each so normal durable history is materialized, restart app-server with the same `CODEX_HOME`, then require both original IDs to remain listable and readable in the AppServer source namespace.
 
 ### Codex integration resilience
 
@@ -38,47 +46,36 @@ The primary desktop path has progressed through R1A-R3F:
 - automatic failover policy with retry/cooldown/circuit-breaker and recovery-first semantics (R4F);
 - Native Codex `Zero3Executor` backed by the pinned Codex app-server, with explicit permission forwarding and credential-file isolation rules (R4C).
 
-## Active work before the first public alpha
+### Codex-native Windows packaging (#51)
 
-### Release blocker: durable primary-session restart (#49)
+[PR #51](https://github.com/Taa965/zero3-pilot/pull/51) is merged.
 
-[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) addresses durable Zero3 conversation discovery across app-server restart.
+The Windows release path now:
 
-Pinned Codex separates the AppServer transport from the persisted session source. The `codex app-server` command defaults `--session-source` to `vscode`; Zero3 therefore must explicitly launch its child with `--session-source app-server`. The matching Zero3 list boundary requests `sourceKinds: ['appServer']`, which maps to the pinned Codex `Mcp` session source rather than mixing unrelated VS Code Codex history into the desktop sidebar.
+- builds the exact reviewed pinned Codex source in release mode rather than resolving an arbitrary installed CLI;
+- carries `codex.exe` under `resources/zero3-codex/codex.exe`;
+- requires packaged mode to use the bundled binary rather than PATH, `@latest`, runtime download or an arbitrary host override;
+- carries required Zero3, OpenAI Codex and Hermes license/NOTICE material;
+- produces an NSIS artifact with publishing disabled in CI;
+- exercises `--version` and a real app-server JSONL smoke against the packaged Codex binary;
+- records a SHA-256 for each CI artifact candidate.
 
-The corrected credential-free regression smoke mirrors the real Zero3 launch arguments, creates two non-ephemeral Threads, starts a first Turn on each so Codex materializes normal durable conversation history, restarts app-server with the same `CODEX_HOME`, and requires both original IDs to remain listable and readable in the AppServer source namespace.
+The #51 pull-request merge candidate incorporated the already-merged #49 tree and passed the Windows Alpha Artifact gate. This proves the two implementation blockers can coexist in the packaged path. The public release still requires the final documentation-closeout SHA to be revalidated as the exact release candidate.
 
-#49 remains a blocker until that exact real smoke and its surrounding required gates are green.
+## Remaining work before the first public alpha
 
-### Release blocker: Codex-native Windows artifact (#51)
-
-[PR #51](https://github.com/Taa965/zero3-pilot/pull/51) establishes the first distributable Windows path for the Codex-native target shell.
-
-The release package is required to:
-
-- build the exact reviewed pinned Codex source for Windows rather than resolve an arbitrary installed CLI;
-- carry that `codex.exe` under application resources;
-- use the bundled binary in packaged mode instead of PATH, `@latest`, runtime download or arbitrary host override;
-- carry Zero3, OpenAI Codex and Hermes license/NOTICE material required by the packaged inputs;
-- produce a real NSIS artifact;
-- exercise `--version` and a real app-server JSONL smoke against the binary inside the package;
-- record a SHA-256 for the actual installer artifact.
-
-A green standalone #51 run proves the packaging mechanism, but the final release candidate must be revalidated after #49 is merged so one exact candidate contains both durable AppServer source identity and bundled pinned Codex distribution.
-
-### Public alpha productization
+The implementation blockers #49 and #51 are resolved. The remaining work is release closeout, not new feature development.
 
 Before `v0.1.0-alpha` is published:
 
-- all release-blocking CI and architecture gates must be green on the exact tag candidate;
-- #49 and #51 must be merged/revalidated together rather than treated as independent release evidence;
-- the Windows target desktop path must produce a documented reproducible real artifact;
-- public installation/deployment docs must describe the current Electron + bundled-Codex architecture, not legacy Wry/Node/Inno paths;
-- known limitations must be explicit rather than hidden behind roadmap language;
-- release notes and changelog must match the exact tagged SHA;
+- the release documentation closeout must be merged so README, ROADMAP, CHANGELOG, Windows installation/deployment guidance and release notes match the merged Codex-native product;
+- all required architecture, Codex, Windows target-shell and feature gates must be bound to the exact final candidate rather than an older branch or artifact;
+- the final Windows candidate must produce the real packaged NSIS artifact, verify the bundled pinned Codex runtime and legal resources, and record the final installer SHA-256;
+- exact Codex/Hermes/DeepSeek-Harness pins and provenance/NOTICE obligations must be confirmed for the candidate;
+- known limitations must remain explicit, including unsigned-Windows behavior if no signing credential is used;
 - no known critical security-boundary regression may remain open;
-- public screenshots or a short demo should be added only if captured from the real target desktop build;
-- stale/superseded draft PRs and historical architecture docs should be clearly marked so the repository presents one current implementation path.
+- the final tag and GitHub Release must point to the exact validated SHA and the pre-release artifact/checksum must be traceable to it;
+- public screenshots/demo, if included, must come from a real target build rather than a mock.
 
 Draft release notes live at [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md).
 

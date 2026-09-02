@@ -6,21 +6,32 @@
 
 The Codex-native Windows target is a Zero3-branded **Electron + React** desktop application packaged with NSIS.
 
-The first-alpha packaging design is intentionally self-contained around the reviewed Codex core:
+The first-alpha packaging implementation is merged and intentionally self-contained around the reviewed Codex core:
 
 - Zero3 builds the repository's exact pinned open-source Codex revision for Windows;
 - the package carries that binary at `resources/zero3-codex/codex.exe`;
 - packaged mode uses the bundled reviewed binary rather than PATH, `@latest`, runtime download or an arbitrary host override;
 - the package carries the relevant Zero3/OpenAI Codex/Hermes license and NOTICE material under application resources;
-- CI verifies the **packaged** Codex binary with `--version` and a real `codex app-server` JSONL smoke before the artifact is accepted.
+- CI verifies the **packaged** Codex binary with `--version` and a real `codex app-server` JSONL smoke before an artifact candidate is accepted.
 
 This replaces the legacy Tao/Wry + `zero3-node` + Inno Setup distribution described by older development documents. Those paths are not the current desktop release architecture.
+
+## Pre-tag integrated validation
+
+The Windows Alpha Artifact run for the #51 pull-request merge candidate included the already-merged #49 session-persistence tree and passed the package/bundled-runtime gate. That validation produced:
+
+```text
+Zero3Pilot-0.1.0-alpha-win-x64.exe
+SHA-256: 8DDC4EE5ED6A96E474625A1509779783E591E4F7B8F4473E2DF54E81868DB096
+```
+
+This checksum is **validation evidence only**, not the public-release checksum. The documentation closeout changes the final repository SHA, so the exact final candidate must be rebuilt/revalidated and its own installer checksum recorded before `v0.1.0-alpha` is published.
 
 ## Public alpha install
 
 When `v0.1.0-alpha` is actually published, use the Windows installer attached to that GitHub pre-release and verify its SHA-256 against the checksum recorded in the final release notes.
 
-The exact installer filename/checksum are intentionally omitted from this pre-release document until a combined release candidate containing both session-persistence (#49) and bundled-runtime (#51) fixes has passed the final artifact gate.
+The final public installer filename/checksum are intentionally not declared in this pre-release document until the exact release candidate has passed the final artifact gate and the matching GitHub pre-release exists.
 
 The installer is intended to be per-user and not require users to separately install Codex just to provide Zero3's native Agent Kernel.
 
