@@ -93,6 +93,13 @@ type DeliveryNotes = {
   downstreamNotes: string
 }
 
+type RequirementCreateInput = {
+  title: string
+  description: string
+  acceptanceCriteria: string[]
+  pathHints: string[]
+}
+
 const emptyDeliveryNotes: DeliveryNotes = { testsAdded: '', testsExecuted: '', artifacts: '', knownIssues: '', downstreamNotes: '' }
 const inputClass = 'w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-foreground/40'
 const buttonClass = 'inline-flex items-center justify-center rounded-md border border-border bg-background px-3 py-2 text-sm font-medium transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50'
@@ -107,6 +114,33 @@ function statusTone(status: string): string {
 
 function lines(value: string): string[] {
   return value.split(/\r?\n/u).map(item => item.trim()).filter(Boolean)
+}
+
+function parseRequirementLines(value: string): RequirementCreateInput[] {
+  return lines(value).map((entry, index) => {
+    const separator = entry.indexOf('|')
+    if (separator <= 0 || entry.indexOf('|', separator + 1) !== -1) {
+      throw new Error(`Requirement 第 ${index + 1} 行格式错误：请使用“标题 | 路径1, 路径2”`)
+    }
+    const title = entry.slice(0, separator).trim()
+    const pathHints = entry.slice(separator + 1).split(',').map(path => path.trim()).filter(Boolean)
+    if (!title) throw new Error(`Requirement 第 ${index + 1} 行缺少标题`)
+    if (pathHints.length === 0) throw new Error(`Requirement 第 ${index + 1} 行必须声明至少一个路径范围`)
+    return {
+      title,
+      description: title,
+      acceptanceCriteria: [`${title} 完成并通过验证`],
+      pathHints
+    }
+  })
+}
+
+function asProductEvent(payload: unknown): ProductEvent | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const candidate = payload as Partial<ProductEvent>
+  if (!candidate.groupId || typeof candidate.groupId !== 'string') return undefined
+  if (!candidate.type || !['group.changed', 'executor.event', 'runtime.error'].includes(candidate.type)) return undefined
+  return candidate as ProductEvent
 }
 
 function DeliveryFinalizer({ groupId, sessionId, busy, notes, onNotes, onFinalize }: {
@@ -164,7 +198,9 @@ export function DevelopmentGroupPage() {
 
   useEffect(() => {
     void refresh().catch(err => setError(err instanceof Error ? err.message : String(err)))
-    return window.zero3DevelopmentGroups.onEvent((event: ProductEvent) => {
+    return window.zero3DevelopmentGroups.onEvent((payload: unknown) => {
+      const event = asProductEvent(payload)
+      if (!event) return
       if (event.type === 'executor.event' && event.event?.type === 'permission.requested' && event.sessionId && event.event.requestId) {
         setPending({
           groupId: event.groupId,
@@ -196,9 +232,15 @@ export function DevelopmentGroupPage() {
   }
 
   const create = async () => {
-    const requirementList = lines(requirements)
+    let requirementList: RequirementCreateInput[]
+    try {
+      requirementList = parseRequirementLines(requirements)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      return
+    }
     if (!repositoryRoot.trim() || !goal.trim() || requirementList.length === 0) {
-      setError('请填写本地 Git 仓库路径、总目标，并至少提供一条 Requirement。')
+      setError('请填写本地 Git 仓库路径、总目标，并至少提供一条带路径范围的 Requirement。')
       return
     }
     await run('create', async () => {
@@ -206,7 +248,7 @@ export function DevelopmentGroupPage() {
         repositoryRoot,
         masterGoal: goal,
         developmentPlan: plan.trim() || goal,
-        requirements: requirementList.map(title => ({ title, description: title, acceptanceCriteria: [`${title} 完成并通过验证`] }))
+        requirements: requirementList
       }) as GroupSnapshot
       setSelectedId(snapshot.view.summary.groupId)
       setGoal('')
@@ -270,9 +312,9 @@ export function DevelopmentGroupPage() {
               <input className={inputClass} placeholder="本地 Git 仓库绝对路径" value={repositoryRoot} onChange={event => setRepositoryRoot(event.target.value)} />
               <input className={inputClass} placeholder="总目标" value={goal} onChange={event => setGoal(event.target.value)} />
               <textarea className={`${inputClass} min-h-20`} placeholder="开发计划（可选）" value={plan} onChange={event => setPlan(event.target.value)} />
-              <textarea className={`${inputClass} min-h-28`} placeholder={'Requirements：每行一条\n例如：完成开发组产品接线\n增加 Windows 集成验收'} value={requirements} onChange={event => setRequirements(event.target.value)} />
+              <textarea className={`${inputClass} min-h-32 font-mono text-xs`} placeholder={'每行：Requirement 标题 | 仓库相对路径范围\n例如：接入开发组 UI | apps/zero3-desktop/renderer/development-group/**\n例如：补运行时 | apps/zero3-desktop/group-runtime/runtime/**, apps/zero3-desktop/scripts/**'} value={requirements} onChange={event => setRequirements(event.target.value)} />
               <button className={`${primaryButtonClass} w-full`} disabled={busy === 'create'} onClick={() => void create()}>{busy === 'create' ? '创建中…' : '生成计划并创建'}</button>
-              <p className="text-[11px] leading-4 text-muted-foreground">V1 使用 C1 deterministic planning fallback，不新增第二套 Agent Planner；验证命令来自仓库冻结的 <code>.zero3/verification-policy.json</code>。</p>
+              <p className="text-[11px] leading-4 text-muted-foreground">每条 Requirement 必须声明受控路径范围，支持 <code>*</code>、<code>**</code>、<code>?</code>。禁止全仓 <code>**/*</code>、绝对路径、<code>..</code>、<code>.git/**</code> 和 <code>.zero3/**</code>。V1 使用 C1 deterministic planning fallback，不新增第二套 Agent Planner。</p>
             </div>
           </div>
         </aside>
