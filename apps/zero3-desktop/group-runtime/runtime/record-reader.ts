@@ -48,7 +48,7 @@ export async function loadDurableGroupRecords(store: DevelopmentGroupStore, plan
     deliveries: [...deliveries].sort((a, b) => a.sessionId.localeCompare(b.sessionId)),
     integrations: [...integrations].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.integrationRunId.localeCompare(b.integrationRunId)),
     verifications: [...verifications].sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.verificationRunId.localeCompare(b.verificationRunId)),
-    failures: [...failures].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.failureId.localeCompare(b.failureId)),
-    repairs: [...repairs].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.repairTaskId.localeCompare(b.repairTaskId))
+    failures: [...failures].sort((a, b) => a.failureId.localeCompare(b.failureId)),
+    repairs: [...repairs].sort((a, b) => a.waveOrdinal - b.waveOrdinal || a.repairTaskId.localeCompare(b.repairTaskId))
   }
 }
