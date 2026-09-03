@@ -1,0 +1,18 @@
+{
+  "schema": "zero3.pilot.verification-policy.v1",
+  "revision": "zero3-pilot-dg-v1-2026-09-04.1",
+  "commands": [
+    {
+      "id": "development-group-product-audit",
+      "command": "[\"node\",\"apps/zero3-desktop/scripts/check-development-group-product-wiring.mjs\"]",
+      "platform": "any",
+      "required": true
+    },
+    {
+      "id": "desktop-typecheck",
+      "command": "[\"node\",\"apps/zero3-desktop/scripts/run.mjs\",\"typecheck\"]",
+      "platform": "any",
+      "required": true
+    }
+  ]
+}
