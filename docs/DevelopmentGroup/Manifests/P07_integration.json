@@ -1,0 +1,15 @@
+{
+  "session": "P07",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "382c4ced5f9b765545e71776468de32fa6f4f237",
+  "branch": "parallel/dg-p07-integration",
+  "implementation_head": "a291e3e06529001e00854a09d9f07ecfd71de754",
+  "owned_paths": ["apps/zero3-desktop/group-runtime/integration/**"],
+  "closeout_repairs": ["allow durable merged Session IDs to seed dependency readiness after controller restart"],
+  "tests_added_or_updated": ["apps/zero3-desktop/group-runtime/integration/integration.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node integration tests", "real Git merge/conflict/rollback", "Windows integrated acceptance"],
+  "c1_modified": false,
+  "known_risks": ["M2 wiring must reconstruct integratedSessionIds from durable merged IntegrationMilestones"],
+  "p99_wiring": ["workers never self-merge; seed restart state from durable evidence only"]
+}
