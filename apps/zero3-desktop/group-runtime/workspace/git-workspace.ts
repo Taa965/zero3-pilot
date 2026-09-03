@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
+import { captureWorkspaceState } from '../../executor-runtime/handoff/handoff-builder.ts'
+
 const execFileAsync = promisify(execFile)
 const SHA_RE = /^[0-9a-f]{40}$/i
 
@@ -16,6 +18,7 @@ export interface GitWorkspacePort {
   isAncestor(baseSha: string, headSha: string): Promise<boolean>
   changedPaths(baseSha: string, headSha: string): Promise<readonly string[]>
   status(): Promise<readonly GitStatusEntry[]>
+  handoffDirtyWorktreeFingerprint?(): Promise<string>
 }
 
 function assertSha(value: string, name: string): string {
@@ -94,6 +97,10 @@ export class GitWorkspaceAdapter implements GitWorkspacePort {
       entries.push({ status, path: path.replaceAll('\\', '/') })
     }
     return entries.sort((left, right) => left.path.localeCompare(right.path))
+  }
+
+  async handoffDirtyWorktreeFingerprint(): Promise<string> {
+    return (await captureWorkspaceState(this.repoRoot)).dirtyWorktreeFingerprint
   }
 
   async createSessionWorktree(worktreePath: string, branch: string, baselineSha: string): Promise<void> {
