@@ -20,6 +20,7 @@ import { applyZero3CodexPrompts } from './apply-codex-prompts.mjs'
 import { applyZero3CodexSessionListGuard } from './apply-codex-session-list-guard.mjs'
 import { applyZero3CodexStructuredInput } from './apply-codex-structured-input.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
+import { applyZero3DevelopmentGroupRuntime } from './apply-development-group-runtime.mjs'
 import { applyZero3RemoteHostRuntime } from './apply-remote-host-runtime.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 
@@ -73,8 +74,8 @@ function assertOnlyOverlayChanges() {
   // R3D permits only the reviewed shell transformations plus the typed Codex
   // app-server boundary, primary-chat adapter, native prompt/item presentation,
   // structured UserInput mapping and native Thread lifecycle surfaces. Retired
-  // Zero3 Node bridges stay disabled. H0-H3 Remote Host adds only untracked
-  // Zero3-owned Electron-main source templates plus reviewed main.ts wiring.
+  // Zero3 Node bridges stay disabled. H0-H3 Remote Host and Development Group
+  // add only Zero3-owned Electron/runtime sources plus reviewed shell wiring.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -228,6 +229,7 @@ function applyBrandOverlay() {
         itemRenderingPhase: 'R3A-codex-item-rendering',
         structuredInputPhase: 'R3C-codex-structured-input',
         remoteHostPhase: 'H0-H3-remote-host-runtime',
+        developmentGroupPhase: 'DG-v1-product-wiring',
         upstream: pins
       },
       null,
@@ -268,8 +270,9 @@ applyZero3CodexItemRenderingHardening()
 applyZero3CodexSessionListGuard()
 applyZero3CodexStructuredInput()
 applyZero3RemoteHostRuntime()
+applyZero3DevelopmentGroupRuntime()
 
-console.log('Zero3 Desktop R3D + Remote Host H0-H3 shell prepared successfully.')
+console.log('Zero3 Desktop R3D + Remote Host H0-H3 + Development Group V1 shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
 console.log(`Hermes UI shell source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
@@ -278,3 +281,4 @@ console.log('R3C: Hermes composer images use native Codex localImage; other atta
 console.log('R3C safety: Renderer may submit only text/localImage structured inputs; default sandbox stays read-only and unsupported server requests stay fail-closed.')
 console.log('R3D: archive/unarchive/delete/rename/whole-thread fork/active-turn steer use typed Codex app-server operations.')
 console.log('Remote Host H0-H3: external tasks enter the same pinned Codex Thread/Turn runtime through an outbound HTTPS host node; no second agent loop or direct remote shell is introduced.')
+console.log('Development Group V1: Group/Session orchestration reuses the same Codex app-server through Zero3Executor; Renderer receives bounded product IPC only and Git/Handoff evidence is generated in Electron main.')
