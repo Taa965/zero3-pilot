@@ -112,19 +112,29 @@ export async function verifyDevelopmentDelivery(input: {
   if (session.deliveryPolicy.requireHandoff) {
     if (!input.handoff) {
       reasons.push('required zero3.pilot.handoff.v1 evidence is missing')
+    } else if (!git.handoffWorkspaceFingerprint) {
+      reasons.push('Git workspace adapter cannot independently capture the R4E Handoff fingerprint')
     } else {
       const checkpoint = input.handoff.checkpoint
       if (checkpoint.execution_id !== session.executionId) reasons.push('handoff execution identity does not match Development Session')
       if (checkpoint.base_sha !== session.baselineSha) reasons.push('handoff baseline does not match Development Session')
       if (delivery.handoffCheckpoint && delivery.handoffCheckpoint !== checkpoint.checkpoint_hash) reasons.push('delivery handoff checkpoint reference does not match supplied checkpoint')
-      const observed: HandoffObservedWorkspace = {
-        workspace: session.worktree,
-        branch,
-        headSha,
-        dirtyWorktreeFingerprint: fingerprint
+      let handoffFingerprint: string | undefined
+      try {
+        handoffFingerprint = await git.handoffWorkspaceFingerprint()
+      } catch (error) {
+        reasons.push(`handoff workspace fingerprint unavailable: ${String(error)}`)
       }
-      const handoffResult = verifyHandoff(checkpoint, observed)
-      if (handoffResult.decision !== 'HANDOFF_ACCEPT') reasons.push(...handoffResult.reasons.map(reason => `handoff: ${reason}`))
+      if (handoffFingerprint) {
+        const observed: HandoffObservedWorkspace = {
+          workspace: session.worktree,
+          branch,
+          headSha,
+          dirtyWorktreeFingerprint: handoffFingerprint
+        }
+        const handoffResult = verifyHandoff(checkpoint, observed)
+        if (handoffResult.decision !== 'HANDOFF_ACCEPT') reasons.push(...handoffResult.reasons.map(reason => `handoff: ${reason}`))
+      }
     }
   }
 
