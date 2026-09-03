@@ -203,97 +203,97 @@ export class DevelopmentSessionRunner {
   }
 
   async sendInstruction(clientRequestId: string, text: string): Promise<DevelopmentSessionRuntime> {
-    if (this.#runtime.status !== 'running') throw new DevelopmentSessionRuntimeError(`session must be running before prompt; got ${this.#runtime.status}`)
-    const input: ExecutorInput = { clientRequestId, text }
+    if (this.#runtime.status !== 'running' && this.#runtime.status !== 'waiting_input') {
+      throw new DevelopmentSessionRuntimeError(`session cannot prompt while ${this.#runtime.status}`)
+    }
+    if (!clientRequestId.trim() || !text.trim()) throw new DevelopmentSessionRuntimeError('instruction request id and text must be non-empty')
+    const input: ExecutorInput = { kind: 'prompt', clientRequestId: clientRequestId.trim(), text }
     try {
-      let executorSequence = 0
       for await (const event of this.executorManager.prompt(this.taskIdentity, input)) {
-        if (!Number.isSafeInteger(event.sequence) || event.sequence <= executorSequence) {
-          this.#runtime.blocker = `executor_event_sequence_invalid:${event.sequence}`
-          await this.transition('outcome_unknown')
-          await this.persist()
-          throw new DevelopmentSessionRuntimeError('Executor event sequence is not strictly monotonic within prompt attempt')
-        }
-        executorSequence = event.sequence
         await this.applyExecutorEvent(event)
+        await this.sink?.onExecutorEvent(event, this.snapshot())
       }
       return this.snapshot()
     } catch (error) {
-      if (this.#runtime.status !== 'outcome_unknown') {
-        this.#runtime.blocker = `executor_prompt_outcome_unknown: ${String(error)}`
-        await this.transition('outcome_unknown')
-        await this.persist()
-      }
+      // A transport/process exception during an active prompt may occur after a side effect.
+      // Without an authoritative terminal event the control plane cannot safely infer failure/retry.
+      await this.markOutcomeUnknown(`executor_prompt_exception: ${String(error)}`)
       throw error
     }
   }
 
-  async respondPermission(response: ExecutorPermissionResponse): Promise<DevelopmentSessionRuntime> {
-    if (this.#runtime.status !== 'waiting_input' || !this.#runtime.pendingPermissionRequestId) {
-      throw new DevelopmentSessionRuntimeError('there is no pending Development Session permission request')
-    }
-    if (response.requestId !== this.#runtime.pendingPermissionRequestId) throw new DevelopmentSessionRuntimeError('permission response requestId mismatch')
+  async respondPermission(response: ExecutorPermissionResponse): Promise<void> {
+    if (this.#runtime.status !== 'waiting_input') throw new DevelopmentSessionRuntimeError('no permission/input wait is active')
     await this.executorManager.respondPermission(this.taskIdentity.taskId, this.taskIdentity.executionId, response)
-    this.#runtime.pendingPermissionRequestId = undefined
     await this.transition('running')
     await this.persist()
-    return this.snapshot()
   }
 
-  async cancel(): Promise<DevelopmentSessionRuntime> {
-    if (['verified', 'cancelled', 'superseded'].includes(this.#runtime.status)) return this.snapshot()
+  async cancel(): Promise<void> {
+    if (['verified', 'cancelled', 'superseded'].includes(this.#runtime.status)) return
     await this.executorManager.cancel(this.taskIdentity.taskId, this.taskIdentity.executionId)
     await this.transition('cancelled')
-    this.#runtime.blocker = undefined
-    this.#runtime.pendingPermissionRequestId = undefined
     await this.persist()
-    return this.snapshot()
   }
 
   async close(): Promise<void> {
     await this.executorManager.close(this.taskIdentity.taskId, this.taskIdentity.executionId)
   }
 
-  async markOutcomeUnknown(reason: string): Promise<DevelopmentSessionRuntime> {
-    if (!['starting', 'running', 'waiting_input', 'delivering'].includes(this.#runtime.status)) {
-      throw new DevelopmentSessionRuntimeError(`cannot mark ${this.#runtime.status} as OutcomeUnknown`)
-    }
-    this.#runtime.blocker = reason
-    this.#runtime.pendingPermissionRequestId = undefined
+  async markOutcomeUnknown(reason: string): Promise<void> {
+    if (!reason.trim()) throw new DevelopmentSessionRuntimeError('OutcomeUnknown reason is required')
+    if (this.#runtime.status === 'outcome_unknown') return
     await this.transition('outcome_unknown')
+    this.#runtime.blocker = reason.trim()
     await this.persist()
-    return this.snapshot()
-  }
-
-  private bindExecutorSession(executorSession: ExecutorSession): void {
-    this.#runtime.executorId = executorSession.executorId
-    this.#runtime.executorSessionId = executorSession.sessionId
-    this.#runtime.writerGeneration = executorSession.generation
   }
 
   private async applyExecutorEvent(event: ExecutorEvent): Promise<void> {
+    if (!Number.isSafeInteger(event.sequence) || event.sequence < 1) {
+      throw new DevelopmentSessionRuntimeError('executor event sequence must be a positive safe integer')
+    }
+    // ExecutorManager verifies monotonic ordering within each prompt stream. A Development
+    // Session has its own durable lifetime sequence because executor stream numbers may restart
+    // from 1 for a later prompt/resume.
     this.#runtime.lastEventSequence += 1
-    this.#runtime.updatedAt = event.at
+
+    if (['blocked', 'failed', 'outcome_unknown', 'cancelled'].includes(this.#runtime.status)) {
+      await this.persist()
+      return
+    }
+    if (this.#runtime.status === 'waiting_input' && event.type !== 'permission.requested') {
+      await this.transition('running')
+    }
+
     if (event.type === 'permission.requested') {
-      this.#runtime.pendingPermissionRequestId = event.requestId
-      if (this.#runtime.status === 'running') await this.transition('waiting_input')
-    } else if (event.type === 'permission.resolved') {
-      if (this.#runtime.pendingPermissionRequestId === event.requestId) this.#runtime.pendingPermissionRequestId = undefined
-      if (this.#runtime.status === 'waiting_input') await this.transition('running')
-    } else if (event.type === 'completed') {
-      if (this.#runtime.status === 'waiting_input') throw new DevelopmentSessionRuntimeError('Executor completed while permission request is unresolved')
-      if (this.#runtime.status === 'running') await this.transition('delivering')
-    } else if (event.type === 'cancelled') {
-      if (!['cancelled', 'verified', 'superseded'].includes(this.#runtime.status)) await this.transition('cancelled')
+      await this.transition('waiting_input')
     } else if (event.type === 'failure') {
-      this.#runtime.blocker = `${event.failure.code}: ${event.failure.message}`
-      if (event.failure.code === 'user_stopped') await this.transition('cancelled')
-      else if (event.failure.code === 'context_lost' || event.failure.code === 'context_exhausted') await this.transition('blocked')
-      else if (event.failure.code === 'transport_lost' || event.failure.code === 'process_crash') await this.transition('outcome_unknown')
+      if (event.failure.code === 'context_lost' || event.failure.code === 'context_exhausted') {
+        await this.transition('blocked')
+        this.#runtime.blocker = event.failure.code
+      } else if (event.failure.code === 'transport_lost' || event.failure.code === 'process_crash') {
+        await this.transition('outcome_unknown')
+        this.#runtime.blocker = event.failure.code
+      } else if (event.failure.code === 'permission_denied' || event.failure.code === 'policy_denied') {
+        await this.transition('blocked')
+        this.#runtime.blocker = event.failure.code
+      } else {
+        await this.transition('failed')
+        this.#runtime.blocker = event.failure.code
+      }
+    } else if (event.type === 'completed') {
+      if (event.outcome === 'succeeded') await this.transition('delivering')
+      else if (event.outcome === 'cancelled') await this.transition('cancelled')
       else await this.transition('failed')
     }
     await this.persist()
-    await this.sink?.onExecutorEvent(event, this.snapshot())
+  }
+
+  private bindExecutorSession(session: ExecutorSession): void {
+    this.#runtime.executorId = session.executorId
+    this.#runtime.executorSessionId = session.sessionId
+    this.#runtime.executorGeneration = session.generation
+    this.#runtime.writerGeneration = session.generation
   }
 
   private async transition(next: DevelopmentSessionStatus): Promise<void> {
@@ -303,7 +303,7 @@ export class DevelopmentSessionRunner {
     this.#runtime.updatedAt = now()
   }
 
-  private async persist(): Promise<void> {
-    await this.store.save(this.snapshot())
+  private persist(): Promise<void> {
+    return this.store.save(this.snapshot())
   }
 }
