@@ -34,6 +34,18 @@ test('integration revalidates and records a merged Delivery without worker self-
   assert.equal(queue.snapshot().length, 0)
 })
 
+test('restart can seed already integrated dependencies before draining queued deliveries', async () => {
+  const dependentSession = { ...session, sessionId: 'S2', executionId: 'E2', branch: 'parallel/s2', dependencies: ['S1'] } as DevelopmentSessionDefinition
+  const dependentDelivery = { ...delivery, sessionId: 'S2', executionId: 'E2', deliveryHash: 'D2' } as DevelopmentDelivery
+  const dependentWaves: DevelopmentWave[] = [{ groupId: 'G1', waveId: 'W1', ordinal: 1, sessionIds: ['S1', 'S2'], requiredSessionIds: ['S1', 'S2'], dependsOnWaveIds: [] }]
+  const queue = new IntegrationQueue(); queue.enqueue(dependentSession, dependentDelivery, dependentWaves)
+  const git = new FakeGit()
+  const controller = new IntegrationController(queue, git, accept, new MemoryStore(), { integrationRef: git.branch, initialIntegratedSessionIds: ['S1'] })
+  const result = await controller.integrateNext()
+  assert.equal(result?.status, 'merged')
+  assert.deepEqual(result?.mergedSessionIds, ['S2'])
+})
+
 test('merge conflict abort path records conflict and never marks session integrated', async () => {
   const queue = new IntegrationQueue(); queue.enqueue(session, delivery, waves)
   const store = new MemoryStore(); const git = new FakeGit(); git.conflict = true
