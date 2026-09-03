@@ -1,14 +1,14 @@
 # Zero3 Pilot Roadmap
 
-Zero3 Pilot is in active pre-release development. This roadmap describes the public product direction and separates capabilities already merged to `main` from work that is still under review or still requires release evidence.
+Zero3 Pilot is in active pre-1.0 development. The first public release line is `v0.1.0-alpha`; this roadmap separates that frozen baseline from post-alpha work.
 
 The governing rule is unchanged: **open-source Codex remains the authoritative native Agent Kernel/runtime.** New features must extend that runtime or integrate through reviewed boundaries rather than creating a second hidden agent core.
 
-## Already on `main`
+## `v0.1.0-alpha` baseline
 
 ### Codex-native desktop path
 
-The primary desktop path has progressed through R1A-R3F:
+The primary desktop path progressed through R1A-R3F:
 
 - typed `codex app-server --stdio` lifecycle and IPC boundary;
 - Codex Thread / Turn / Item-backed primary chat and restore;
@@ -23,9 +23,7 @@ The primary desktop path has progressed through R1A-R3F:
 
 [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) is merged.
 
-Pinned Codex separates the AppServer transport from the persisted session source. Zero3 explicitly launches the child with `--session-source app-server` and lists the matching `sourceKinds: ['appServer']` namespace, preventing unrelated VS Code Codex history from being treated as Zero3 conversation history.
-
-The regression smoke mirrors production launch arguments: create two non-ephemeral Threads, start a first Turn on each so normal durable history is materialized, restart app-server with the same `CODEX_HOME`, then require both original IDs to remain listable and readable in the AppServer source namespace.
+Zero3 explicitly launches the pinned Codex child with `--session-source app-server` and lists the matching `sourceKinds: ['appServer']` namespace. The release regression smoke creates two non-ephemeral Threads, materializes a first Turn on each, restarts app-server with the same `CODEX_HOME`, then requires both original IDs to remain listable and readable.
 
 ### Codex integration resilience
 
@@ -50,34 +48,24 @@ The regression smoke mirrors production launch arguments: create two non-ephemer
 
 [PR #51](https://github.com/Taa965/zero3-pilot/pull/51) is merged.
 
-The Windows release path now:
+The Windows release path:
 
 - builds the exact reviewed pinned Codex source in release mode rather than resolving an arbitrary installed CLI;
 - carries `codex.exe` under `resources/zero3-codex/codex.exe`;
 - requires packaged mode to use the bundled binary rather than PATH, `@latest`, runtime download or an arbitrary host override;
 - carries required Zero3, OpenAI Codex and Hermes license/NOTICE material;
-- produces an NSIS artifact with publishing disabled in CI;
-- exercises `--version` and a real app-server JSONL smoke against the packaged Codex binary;
-- records a SHA-256 for each CI artifact candidate.
+- produces an NSIS artifact with publishing disabled inside the build gate;
+- exercises `--version` and a real app-server JSONL smoke against the packaged Codex binary.
 
-The #51 pull-request merge candidate incorporated the already-merged #49 tree and passed the Windows Alpha Artifact gate. This proves the two implementation blockers can coexist in the packaged path. The public release still requires the final documentation-closeout SHA to be revalidated as the exact release candidate.
+### Final Alpha release hygiene (#54)
 
-## Remaining work before the first public alpha
+[PR #54](https://github.com/Taa965/zero3-pilot/pull/54) is merged.
 
-The implementation blockers #49 and #51 are resolved. The remaining work is release closeout, not new feature development.
+It repaired the public desktop-orchestrator `codex:verify` / `codex:replay` commands and changed the historical `zero3-web` deployment workflow to manual-only. Moving `main` no longer automatically deploys the retired web/control prototype.
 
-Before `v0.1.0-alpha` is published:
+Every #54 PR workflow completed successfully, including CI with Ubuntu Clippy, Codex Core/Overlay, D1/D2, R3C-R3F, H0-H5 and Windows Alpha Artifact.
 
-- the release documentation closeout must be merged so README, ROADMAP, CHANGELOG, Windows installation/deployment guidance and release notes match the merged Codex-native product;
-- all required architecture, Codex, Windows target-shell and feature gates must be bound to the exact final candidate rather than an older branch or artifact;
-- the final Windows candidate must produce the real packaged NSIS artifact, verify the bundled pinned Codex runtime and legal resources, and record the final installer SHA-256;
-- exact Codex/Hermes/DeepSeek-Harness pins and provenance/NOTICE obligations must be confirmed for the candidate;
-- known limitations must remain explicit, including unsigned-Windows behavior if no signing credential is used;
-- no known critical security-boundary regression may remain open;
-- the final tag and GitHub Release must point to the exact validated SHA and the pre-release artifact/checksum must be traceable to it;
-- public screenshots/demo, if included, must come from a real target build rather than a mock.
-
-Draft release notes live at [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md).
+The release owner explicitly waived an additional local Windows exact-main rerun after #54. That waiver is recorded as `WAIVED_BY_RELEASE_OWNER`, not as PASS. The public Windows binary remains evidence-bound through the tag-triggered Windows Alpha Artifact workflow.
 
 ## Explicitly deferred from `v0.1.0-alpha`
 
@@ -87,21 +75,18 @@ Draft release notes live at [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1
 
 The decision is evidence-driven:
 
-- the branch predates the merged Native Codex R4C path and currently requires replay/rebase onto the authoritative `main` stack;
-- its dedicated R4B workflow passes architecture guards and strict TypeScript checks but fails ACP behavior tests on both Ubuntu and Windows;
-- the observed failures include a deny path ending as `succeeded` instead of `cancelled`, and an ACP protocol-version mismatch being classified as `unavailable` instead of `unsupported`.
-
-Those are contract/semantics issues, not cosmetic CI noise. R4B will be repaired, replayed onto current `main`, and revalidated in a later pre-release rather than weakening the first-alpha gate.
-
-Older audit/POC PRs should be closed or clearly marked superseded once their formal implementation path exists. Open history should not make contributors guess which branch is authoritative.
+- the branch predates the merged Native Codex R4C path and requires replay/rebase onto the authoritative stack;
+- its dedicated R4B behavior suite exposed incorrect deny/cancellation and protocol-version-classification semantics;
+- the provider path is therefore deferred rather than weakening the first-alpha gate.
 
 ## After `v0.1.0-alpha`
 
-### R4 / collaboration completion
+### Collaboration / delivery control-plane completion
 
 - repair/rebase/revalidate the formal ACP external-agent executor (#48), including deny/cancellation and protocol-version classification semantics;
 - connect Remote Host task execution to the frozen Executor Manager / Handoff / Failover contracts without weakening H5 lease/fencing/outbox invariants;
 - expose executor selection, failover and handoff evidence in the desktop UI;
+- build higher-level software-delivery orchestration on top of the existing Executor/Handoff/Failover contracts while keeping Codex as the sole native Agent Kernel;
 - continue to keep external Codex/Claude/Hermes applications as collaborators, not alternate native kernels.
 
 ### Productization
@@ -139,7 +124,7 @@ Zero3 Pilot will not improve apparent feature count by:
 - copying credentials or parsing Codex auth files to bypass supported account APIs;
 - exposing a generic Renderer-controlled Codex JSON-RPC tunnel;
 - silently falling back to Hermes Runtime or legacy Zero3 Node for migrated core operations;
-- claiming broad adoption, production readiness or release status before public evidence exists;
-- merging a provider integration whose own cross-platform behavior contract is red merely to increase first-release scope.
+- claiming production readiness or broad adoption without evidence;
+- merging a provider integration whose own cross-platform behavior contract is red merely to increase release scope.
 
-See [`docs/ARCHITECTURE_CONSTITUTION.md`](docs/ARCHITECTURE_CONSTITUTION.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`SECURITY.md`](SECURITY.md) for the detailed authority and security boundaries.
+See [`docs/ARCHITECTURE_CONSTITUTION.md`](docs/ARCHITECTURE_CONSTITUTION.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`CHANGELOG.md`](CHANGELOG.md) and [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md).
