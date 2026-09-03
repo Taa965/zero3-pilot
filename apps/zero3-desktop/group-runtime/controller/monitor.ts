@@ -67,8 +67,8 @@ export function observeDevelopmentGroup(input: {
     if (runtime.status === 'blocked') {
       signals.push({ kind: 'blocked_session', severity: 'warning', sessionId: runtime.sessionId, detail: runtime.blocker ?? 'session is blocked', evidence: session.dependencies })
     }
-    if (runtime.status === 'waiting_human') {
-      signals.push({ kind: 'waiting_human', severity: 'blocking', sessionId: runtime.sessionId, detail: runtime.blocker ?? 'human action is required', evidence: [] })
+    if (runtime.status === 'waiting_input') {
+      signals.push({ kind: 'waiting_human', severity: 'blocking', sessionId: runtime.sessionId, detail: runtime.blocker ?? 'session is waiting for human input', evidence: [] })
     }
     if (runtime.status === 'failed' && runtime.attempt >= input.definition.policy.maxSessionAttempts) {
       signals.push({ kind: 'attempt_budget_exhausted', severity: 'blocking', sessionId: runtime.sessionId, detail: `attempt budget ${input.definition.policy.maxSessionAttempts} exhausted`, evidence: [`attempt=${runtime.attempt}`] })
