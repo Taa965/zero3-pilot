@@ -101,7 +101,7 @@ export class DevelopmentSessionRunner {
         ...session.ownedPaths.map(path => `owned:${path}`),
         ...session.readOnlyPaths.map(path => `read_only:${path}`),
         ...session.forbiddenPaths.map(path => `forbidden:${path}`),
-        `delivery_contract=zero3.pilot.development-delivery.v1`,
+        'delivery_contract=zero3.pilot.development-delivery.v1',
         `subagent_max=${session.subagentPolicy.maxConcurrency}`,
         'recursive_group_creation=false'
       ],
@@ -235,11 +235,18 @@ export class DevelopmentSessionRunner {
   }
 
   private async applyExecutorEvent(event: ExecutorEvent): Promise<void> {
-    if (!Number.isSafeInteger(event.sequence) || event.sequence <= this.#runtime.lastEventSequence) {
-      throw new DevelopmentSessionRuntimeError('executor event sequence regressed or duplicated')
+    if (!Number.isSafeInteger(event.sequence) || event.sequence < 1) {
+      throw new DevelopmentSessionRuntimeError('executor event sequence must be a positive safe integer')
     }
-    this.#runtime.lastEventSequence = event.sequence
+    // ExecutorManager verifies monotonic ordering within each prompt stream. A Development
+    // Session has its own durable lifetime sequence because executor stream numbers may restart
+    // from 1 for a later prompt/resume.
+    this.#runtime.lastEventSequence += 1
 
+    if (['blocked', 'failed', 'outcome_unknown', 'cancelled'].includes(this.#runtime.status)) {
+      await this.persist()
+      return
+    }
     if (this.#runtime.status === 'waiting_input' && event.type !== 'permission.requested') {
       await this.transition('running')
     }
