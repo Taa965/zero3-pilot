@@ -1,0 +1,23 @@
+{
+  "session": "P05",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "5b6a062f84e79037ac2e48da79e235c423bf36ac",
+  "head_sha": "370325884fe478e8df350f01eb7bf0d7cd6a2705",
+  "lane_commits": [
+    "4239004b4d6b242b2108882739ff98f0db6627bf",
+    "370325884fe478e8df350f01eb7bf0d7cd6a2705"
+  ],
+  "owned_paths": ["apps/zero3-desktop/group-runtime/scheduler/**"],
+  "changed_paths": [
+    "apps/zero3-desktop/group-runtime/scheduler/dag.ts",
+    "apps/zero3-desktop/group-runtime/scheduler/index.ts",
+    "apps/zero3-desktop/group-runtime/scheduler/scheduler.ts",
+    "apps/zero3-desktop/group-runtime/scheduler/scheduler.test.ts"
+  ],
+  "tests_added": ["apps/zero3-desktop/group-runtime/scheduler/scheduler.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node scheduler tests", "real concurrency/process behavior"],
+  "icr": [],
+  "known_risks": ["P08 repair budget must share durable authority with Scheduler after M2"],
+  "p99_wiring": ["feed P07 IntegrationMilestone evidence into Wave Gate; do not let workers self-open waves"]
+}
