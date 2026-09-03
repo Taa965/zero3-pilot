@@ -2,7 +2,7 @@
   "session": "P00",
   "status": "READY_FOR_INTEGRATION_REVIEW",
   "base_sha": "c912f17e109b1710fe56b94bb289df546af597f9",
-  "head_sha": "PENDING_COMMIT_SHA",
+  "head_sha": "a1ea013a613803debd9731f2adfd04632702e1fa",
   "owned_paths": [
     "apps/zero3-desktop/group-runtime/contracts/**",
     "docs/DevelopmentGroup/CONTRACT_FREEZE_C1.md",
@@ -31,5 +31,5 @@
   "not_run": ["Node contract tests", "Windows product/runtime acceptance"],
   "icr": [],
   "known_risks": ["glob-aware ownership is delegated to P03", "runtime evidence binding is delegated to P09"],
-  "p99_wiring": ["freeze this branch into integration before any Wave 1 branch is created"]
+  "p99_wiring": ["freeze C1 into integration before any Wave 1 implementation consumes it"]
 }
