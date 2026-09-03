@@ -1,12 +1,10 @@
 # Windows installation
 
-> **Pre-release documentation.** Zero3 Pilot has not published a GitHub Release yet. The Windows distribution described here is the `v0.1.0-alpha` candidate path and must not be treated as shipped until the release-readiness gates in Issue #50 are complete.
+The `v0.1.0-alpha` Windows target is a Zero3-branded **Electron + React** desktop application packaged with NSIS and distributed through the matching GitHub pre-release.
 
-## Current target package
+## Package trust model
 
-The Codex-native Windows target is a Zero3-branded **Electron + React** desktop application packaged with NSIS.
-
-The first-alpha packaging implementation is merged and intentionally self-contained around the reviewed Codex core:
+The first-alpha package is intentionally self-contained around the reviewed Codex core:
 
 - Zero3 builds the repository's exact pinned open-source Codex revision for Windows;
 - the package carries that binary at `resources/zero3-codex/codex.exe`;
@@ -16,30 +14,37 @@ The first-alpha packaging implementation is merged and intentionally self-contai
 
 This replaces the legacy Tao/Wry + `zero3-node` + Inno Setup distribution described by older development documents. Those paths are not the current desktop release architecture.
 
-## Pre-tag integrated validation
+## Release validation baseline
 
-The Windows Alpha Artifact run for the #51 pull-request merge candidate included the already-merged #49 session-persistence tree and passed the package/bundled-runtime gate. That validation produced:
+A full independent Windows acceptance run on pre-#54 candidate `961c04c66431a5e92e56e6887722ba9ed859f566` passed the bundled Codex/runtime, real app-server, #49 cold-restart persistence, feature-gate and NSIS checks.
+
+After the final release-hygiene repair, PR #54 passed every triggered repository workflow, including the Windows Alpha Artifact gate. Its downloaded pre-tag artifact contained:
 
 ```text
 Zero3Pilot-0.1.0-alpha-win-x64.exe
-SHA-256: 8DDC4EE5ED6A96E474625A1509779783E591E4F7B8F4473E2DF54E81868DB096
+size: 185,183,120 bytes
+pre-tag validation SHA-256:
+3EAD2DED013EFCFC2F3BC80945352AB7061B75B907818434FE5ED22BA3C5EDB6
 ```
 
-This checksum is **validation evidence only**, not the public-release checksum. The documentation closeout changes the final repository SHA, so the exact final candidate must be rebuilt/revalidated and its own installer checksum recorded before `v0.1.0-alpha` is published.
+The release owner explicitly waived an additional local Windows exact-main rerun after #54. That status is **`WAIVED_BY_RELEASE_OWNER`**, not PASS.
 
-## Public alpha install
+The distributed installer must therefore come from the **tag-triggered Windows Alpha Artifact** workflow. Use the SHA-256 recorded on the GitHub Release for the actual public installer; do not substitute the pre-tag validation checksum above for the release checksum.
 
-When `v0.1.0-alpha` is actually published, use the Windows installer attached to that GitHub pre-release and verify its SHA-256 against the checksum recorded in the final release notes.
+## Install `v0.1.0-alpha`
 
-The final public installer filename/checksum are intentionally not declared in this pre-release document until the exact release candidate has passed the final artifact gate and the matching GitHub pre-release exists.
+1. Open the `v0.1.0-alpha` GitHub pre-release.
+2. Download `Zero3Pilot-0.1.0-alpha-win-x64.exe` from that release.
+3. Verify its SHA-256 against the checksum recorded in the GitHub Release notes.
+4. Run the installer.
 
-The installer is intended to be per-user and not require users to separately install Codex just to provide Zero3's native Agent Kernel.
+The installer is intended to be per-user and does not require users to separately install an arbitrary Codex binary just to provide Zero3's native Agent Kernel.
 
 ### Signing / SmartScreen
 
-The current alpha CI disables automatic code-signing identity discovery. Unless the final release evidence explicitly records a Windows signing step, expect the first alpha installer to be **unsigned** and Windows may show SmartScreen or an unknown-publisher warning.
+`v0.1.0-alpha` is distributed **unsigned**. Windows may therefore show SmartScreen or an unknown-publisher warning.
 
-An unsigned status is a distribution limitation, not permission to ignore integrity checks: verify the installer SHA-256 against the final release record before running it.
+Unsigned status is a distribution limitation, not permission to ignore integrity checks. Verify the installer SHA-256 from the GitHub Release before running it.
 
 ## First launch
 
@@ -49,15 +54,15 @@ During migration, some UI surfaces derived from Hermes may still initialize a lo
 
 Development sessions created before explicit Zero3 AppServer source tagging are not guaranteed to appear in the first public alpha. Older development builds may have persisted those Threads using Codex's `vscode` session source. Automatically importing every `vscode` row would risk mixing unrelated VS Code Codex history into Zero3, so the alpha does not claim automatic migration of that pre-release state.
 
-## Build the Windows candidate from source
+## Build from source
 
 ### Prerequisites
 
 Use a Windows development environment with:
 
 - Git;
-- Node.js 24;
-- a stable Rust MSVC toolchain and the native build prerequisites required by the pinned Codex source;
+- a Node.js/npm combination allowed by the pinned desktop upstream;
+- the Rust toolchain declared by the pinned Codex repository plus required MSVC native build prerequisites;
 - sufficient disk space for a full pinned-Codex release build plus Electron packaging.
 
 Clone the reviewed upstream pins:
@@ -105,8 +110,6 @@ win-unpacked/
       LICENSE-Hermes-Agent.txt
 ```
 
-The exact final artifact layout remains evidence-gated by the Windows Alpha Artifact workflow; this document should be updated if the verified package differs.
-
 ## Development mode
 
 For contributors working from source:
@@ -114,6 +117,7 @@ For contributors working from source:
 ```powershell
 cd apps/zero3-desktop
 npm run prepare
+npm run codex:verify
 npm run typecheck
 npm run dev
 ```
@@ -121,8 +125,6 @@ npm run dev
 Development mode may resolve/build the pinned Codex binary from the repository and pass its exact path explicitly to the desktop process. That development override is not the packaged-release trust model.
 
 ## Troubleshooting principles
-
-For the public alpha:
 
 - do not fix a packaged-runtime problem by downloading an arbitrary `codex.exe` and replacing the bundled core;
 - do not switch the packaged app to `@latest` or an unreviewed PATH binary;

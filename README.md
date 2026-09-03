@@ -7,7 +7,7 @@
 
 Zero3 Pilot explores what a Codex-native desktop agent can look like when Codex remains in control of Threads, Turns, Items, tool execution, approvals, shell/files, MCP and the primary agent loop, while Zero3 adds a desktop product layer, explicit security boundaries, durability/recovery work, Remote Host infrastructure and controlled executor/handoff orchestration.
 
-> **Status: active development / pre-release.** Zero3 Pilot is not production-ready and does not claim broad external adoption. No GitHub Release has been published yet. The first planned public milestone is [`v0.1.0-alpha`](docs/releases/v0.1.0-alpha.md).
+> **Status: alpha-stage / pre-1.0.** Zero3 Pilot is not production-ready and does not claim broad external adoption. The first public release line is [`v0.1.0-alpha`](docs/releases/v0.1.0-alpha.md); prebuilt binaries are distributed only through the matching GitHub pre-release.
 
 ## Why this project exists
 
@@ -26,36 +26,36 @@ The project is intended to provide a practical implementation/reference surface 
 - Remote Host durability, leases/fencing and crash-safe evidence delivery;
 - executor selection/handoff/failover without moving native Agent Kernel authority away from Codex.
 
-## What is already on `main`
+## `v0.1.0-alpha` merged baseline
 
-The repository is young, but the current `main` is beyond a transport-only prototype. The table below intentionally lists only merged work; deferred work is shown separately.
+The table below lists the first-alpha baseline only; deferred work is shown separately.
 
-| Area | Current merged baseline | Evidence |
+| Area | Merged baseline | Evidence |
 | --- | --- | --- |
 | Codex desktop path | Typed app-server transport; Thread/Turn/Item primary chat; native approval/input; tool/reasoning presentation; structured input; native thread actions; authoritative Turn mapping/history | [R1A-R3F PR history](https://github.com/Taa965/zero3-pilot/pulls?q=is%3Apr+is%3Amerged+R3) |
 | Session persistence | Explicit Zero3 AppServer session-source identity plus real first-Turn cold-restart discovery/read verification | [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) |
 | Codex integration resilience | Deterministic overlay/replay infrastructure; lossless oversized tool-output spill/recovery (D1); recoverable compaction-input pruning without authoritative-history mutation (D2) | [PR #30](https://github.com/Taa965/zero3-pilot/pull/30), [#33](https://github.com/Taa965/zero3-pilot/pull/33), [#31](https://github.com/Taa965/zero3-pilot/pull/31) |
 | Remote Host | Narrow Codex-backed host runtime, crash-safe durable outbox, strict publication ordering, durable authenticated control plane with leases/fencing/replay/terminal validation | [PR #36](https://github.com/Taa965/zero3-pilot/pull/36), [#37](https://github.com/Taa965/zero3-pilot/pull/37), [#38](https://github.com/Taa965/zero3-pilot/pull/38), [#39](https://github.com/Taa965/zero3-pilot/pull/39) |
 | Executor control | Provider-neutral Executor contract, durable Git/workspace handoff, automatic failover controller, Native Codex executor | [PR #44](https://github.com/Taa965/zero3-pilot/pull/44), [#45](https://github.com/Taa965/zero3-pilot/pull/45), [#46](https://github.com/Taa965/zero3-pilot/pull/46), [#47](https://github.com/Taa965/zero3-pilot/pull/47) |
-| Windows alpha packaging | Exact reviewed pinned Codex release build, bundled `resources/zero3-codex/codex.exe`, packaged-runtime fail-closed resolver, legal notices, NSIS artifact gate and real bundled app-server smoke | [PR #51](https://github.com/Taa965/zero3-pilot/pull/51) |
+| Windows packaging | Exact reviewed pinned Codex release build, bundled `resources/zero3-codex/codex.exe`, packaged-runtime fail-closed resolver, legal notices, NSIS artifact gate and real bundled app-server smoke | [PR #51](https://github.com/Taa965/zero3-pilot/pull/51) |
+| Release hygiene | Working public overlay verify/replay commands; legacy `zero3-web` deploy is manual-only and cannot deploy on a `main` push | [PR #54](https://github.com/Taa965/zero3-pilot/pull/54) |
 | Public maintenance/security | Architecture constitution, contribution rules, governance, release process, security policy/private reporting, issue/PR templates, Linux + Windows and feature-specific CI gates | [`CONTRIBUTING.md`](CONTRIBUTING.md), [`GOVERNANCE.md`](GOVERNANCE.md), [`SECURITY.md`](SECURITY.md), [workflows](.github/workflows) |
 
-### First-alpha closeout status
+### First-alpha validation status
 
-The two implementation blockers tracked for the first alpha are now merged:
+The first-alpha implementation and repository-hygiene blockers are closed:
 
-- [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) — Zero3 explicitly launches Codex with `--session-source app-server`, lists the matching `sourceKinds: ['appServer']` namespace, and verifies two first-Turn durable Threads across an app-server cold restart with the same `CODEX_HOME`.
-- [PR #51](https://github.com/Taa965/zero3-pilot/pull/51) — the Windows packaging path builds the exact reviewed Codex pin, bundles it under application resources, carries required legal notices, refuses arbitrary packaged-runtime substitution, produces an NSIS installer, and verifies the packaged binary with a real app-server smoke.
+- [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) — explicit `--session-source app-server` plus two first-Turn durable Threads verified across an app-server cold restart with the same `CODEX_HOME`.
+- [PR #51](https://github.com/Taa965/zero3-pilot/pull/51) — exact pinned Codex Windows build, bundled runtime, legal resources, NSIS generation and real packaged app-server smoke.
+- [PR #54](https://github.com/Taa965/zero3-pilot/pull/54) — final release hygiene; every triggered PR workflow passed, including CI/Ubuntu Clippy, Codex Core/Overlay, D1/D2, R3C-R3F, H0-H5 and Windows Alpha Artifact.
 
-The #51 pull-request merge candidate already combined the merged #49 tree with #51 and passed the Windows Alpha Artifact workflow. That is useful integrated pre-tag evidence, but it is **not** substituted for final evidence on the exact release SHA.
-
-Before `v0.1.0-alpha` is presented as published software, the final documentation-closeout tree still needs its exact-candidate release gates, Windows artifact/checksum evidence, tag and GitHub pre-release publication. Until those facts exist, the repository remains pre-release and no installer/checksum is presented here as the final public release artifact.
+A separate full Windows acceptance on pre-#54 candidate `961c04c...` also passed the packaged runtime and #49 persistence path. The release owner explicitly waived one more post-#54 local Windows exact-main rerun; that status is recorded as `WAIVED_BY_RELEASE_OWNER`, not as PASS. The distributed Windows binary is therefore required to come from the **tag-triggered Windows Alpha Artifact** workflow, and its checksum is recorded on the GitHub Release.
 
 ### Explicitly deferred from the first alpha
 
-- [PR #48](https://github.com/Taa965/zero3-pilot/pull/48) — formal ACP external-executor runtime. It is **not** part of `v0.1.0-alpha`: its dedicated behavior suite currently fails on both Ubuntu and Windows (including deny -> `succeeded` instead of `cancelled`, and protocol-version mismatch -> `unavailable` instead of `unsupported`) and the branch needs replay/rebase onto the post-R4C stack. It will be repaired and revalidated in a later pre-release rather than waived into the first alpha.
+- [PR #48](https://github.com/Taa965/zero3-pilot/pull/48) — formal ACP external-executor runtime. It is **not** part of `v0.1.0-alpha`: its behavior gate exposed incorrect deny/cancellation and protocol-version classification semantics and the branch needs replay/rebase onto the post-R4C stack. It will be repaired and revalidated in a later pre-release rather than waived into the first alpha.
 
-See [`ROADMAP.md`](ROADMAP.md) for release criteria and the post-alpha direction.
+See [`ROADMAP.md`](ROADMAP.md) for the post-alpha direction.
 
 ## Architecture
 
@@ -136,7 +136,7 @@ zero3-pilot/
 ├─ apps/node/                   # legacy/extension host; NOT native runtime authority
 ├─ docs/                        # architecture, migration, audits and upstream notes
 ├─ ROADMAP.md                   # public release/product direction
-├─ CHANGELOG.md                 # public pre-release/release history
+├─ CHANGELOG.md                 # public release history
 └─ .github/workflows/           # CI and integration gates
 ```
 
@@ -162,22 +162,21 @@ For the target desktop shell:
 ```powershell
 cd apps/zero3-desktop
 npm run prepare
+npm run codex:verify
 npm run typecheck
 npm run dev
 ```
 
 `npm run dev` builds/resolves the pinned open-source Codex CLI when needed and points the desktop path at that exact binary. During migration, parts of the Hermes backend may still boot only to support UI surfaces that have not yet been ported; new or migrated Zero3 core capabilities must use Codex-owned/reviewed boundaries.
 
-The Windows packaging implementation is merged, but the public alpha installer is not considered shipped until the exact release candidate passes the final release gates and a GitHub pre-release is published. See [`docs/WINDOWS_INSTALL.md`](docs/WINDOWS_INSTALL.md).
+For a prebuilt Windows package, use the installer attached to the matching `v0.1.0-alpha` GitHub pre-release and verify the checksum recorded there. See [`docs/WINDOWS_INSTALL.md`](docs/WINDOWS_INSTALL.md).
 
 ## Releases and roadmap
 
-- [`ROADMAP.md`](ROADMAP.md) — what is merged, what remains before the first alpha, what is explicitly deferred and what comes after it.
-- [`CHANGELOG.md`](CHANGELOG.md) — public pre-release/release history.
+- [`ROADMAP.md`](ROADMAP.md) — frozen alpha baseline and post-alpha direction.
+- [`CHANGELOG.md`](CHANGELOG.md) — public release history.
 - [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md) — evidence required before a tag is presented as a release.
-- [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md) — draft first-alpha release notes and release checklist.
-
-The repository deliberately does **not** label the draft as a real release until a tag/artifact exists and the exact candidate has passed the required gates.
+- [`docs/releases/v0.1.0-alpha.md`](docs/releases/v0.1.0-alpha.md) — first-alpha release notes.
 
 ## Contributing
 
