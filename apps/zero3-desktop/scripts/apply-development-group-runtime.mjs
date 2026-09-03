@@ -18,6 +18,10 @@ function write(file, content) {
   fs.writeFileSync(file, content)
 }
 
+function normalizeRelativeTypeScriptSpecifiers(source) {
+  return source.replace(/(['"])(\.\.?\/[^'"\r\n]+)\.(?:ts|tsx)\1/gu, '$1$2$1')
+}
+
 function copyProductionTree(source, target) {
   if (!fs.statSync(source).isDirectory()) throw new Error(`Development Group source directory missing: ${source}`)
   fs.mkdirSync(target, { recursive: true })
@@ -26,7 +30,7 @@ function copyProductionTree(source, target) {
     const from = path.join(source, entry.name)
     const to = path.join(target, entry.name)
     if (entry.isDirectory()) copyProductionTree(from, to)
-    else if (entry.isFile() && /\.(ts|tsx)$/u.test(entry.name)) write(to, read(from))
+    else if (entry.isFile() && /\.(ts|tsx)$/u.test(entry.name)) write(to, normalizeRelativeTypeScriptSpecifiers(read(from)))
   }
 }
 
