@@ -1,0 +1,20 @@
+{
+  "milestone": "M1",
+  "status": "SUCCESS_STATIC",
+  "m0_sha": "5b6a062f84e79037ac2e48da79e235c423bf36ac",
+  "integrated_code_sha": "d0ba9aaf6e52c786c12b6b42d9f764c6dcf8f865",
+  "wave2_baseline_semantics": "the integration/development-group-v1 commit containing this manifest",
+  "merge_order": ["P01", "P02", "P03", "P04", "P05"],
+  "worker_prs": [58, 59, 60, 61, 62],
+  "c1_modified": false,
+  "red_zone_modified": false,
+  "worker_path_overlap": false,
+  "static_review": "PASS",
+  "tests": {
+    "node_contract_and_unit_tests": "NOT_RUN",
+    "real_git_worktree": "NOT_RUN",
+    "real_codex_session": "NOT_RUN",
+    "windows_integration": "NOT_RUN"
+  },
+  "next": ["P06", "P07", "P08", "P09", "P10"]
+}
