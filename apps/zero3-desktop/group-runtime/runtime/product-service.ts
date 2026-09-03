@@ -32,7 +32,15 @@ import type { RequirementProposal } from '../planning/index.ts'
 import { DevelopmentSessionRunner } from '../session/index.ts'
 import { DevelopmentGroupStore, readDurableJson, writeDurableJson } from '../store/index.ts'
 import { buildDevelopmentGroupViewModel, type DevelopmentGroupViewModel } from '../ui/index.ts'
-import { executeVerification, type VerificationCommandExecutor, type VerificationPlatform } from '../verification/index.ts'
+import {
+  attributeFailure,
+  executeVerification,
+  planRepairWave,
+  type FailureObservation,
+  type FailureSignal,
+  type VerificationCommandExecutor,
+  type VerificationPlatform
+} from '../verification/index.ts'
 import { computeDeliveryHash, GitWorkspaceAdapter, verifyDevelopmentDelivery, type DeliveryGateResult } from '../workspace/index.ts'
 
 const execFileAsync = promisify(execFile)
@@ -40,6 +48,7 @@ const PRODUCT_RECORD_SCHEMA = 'zero3.pilot.development-group-product.v1' as cons
 const VERIFICATION_POLICY_SCHEMA = 'zero3.pilot.verification-policy.v1' as const
 const ACTIVE_RUNTIME_STATES = new Set<DevelopmentSessionRuntime['status']>(['starting', 'running', 'waiting_input'])
 const TERMINAL_RUNTIME_STATES = new Set<DevelopmentSessionRuntime['status']>(['verified', 'cancelled', 'superseded'])
+const RETRYABLE_RUNTIME_STATES = new Set<DevelopmentSessionRuntime['status']>(['blocked', 'failed'])
 
 export interface ProductVerificationPolicy {
   schema: typeof VERIFICATION_POLICY_SCHEMA
@@ -281,6 +290,15 @@ function handoffConstraints(session: DevelopmentSessionDefinition): string[] {
   ]
 }
 
+function signalForRuntime(runtime: DevelopmentSessionRuntime): FailureSignal {
+  if (runtime.status === 'outcome_unknown') return 'outcome_unknown'
+  const blocker = runtime.blocker ?? ''
+  if (blocker.includes('permission_denied') || blocker.includes('policy_denied')) return 'permission_denied'
+  if (blocker.startsWith('integration:')) return 'integration_conflict'
+  if (blocker.includes('dependency')) return 'dependency_failed'
+  return runtime.status === 'failed' ? 'command_failed' : 'unknown'
+}
+
 export class DevelopmentGroupProductService {
   readonly store: DevelopmentGroupStore
   readonly controller: DevelopmentGroupController
@@ -450,7 +468,7 @@ export class DevelopmentGroupProductService {
       runtime
     )
     this.#runners.set(key, runner)
-    if (runtime.status === 'waiting_dependencies' || runtime.status === 'blocked') {
+    if (runtime.status === 'waiting_dependencies') {
       await runner.markReady()
       runtime = runner.snapshot()
     }
@@ -462,13 +480,37 @@ export class DevelopmentGroupProductService {
       .catch(error => {
         this.emit({ type: 'runtime.error', groupId, sessionId, detail: error instanceof Error ? error.message : String(error) })
       })
-      .finally(() => {
+      .finally(async () => {
         this.#activeTasks.delete(key)
+        const snapshot = runner.snapshot()
+        if (snapshot.status === 'blocked' || snapshot.status === 'failed' || snapshot.status === 'outcome_unknown') {
+          await this.recordSessionFailure(groupId, sessionId, snapshot).catch(error => {
+            this.emit({ type: 'runtime.error', groupId, sessionId, detail: `failure_record_error: ${String(error)}` })
+          })
+          await runner.close().catch(() => undefined)
+          this.#runners.delete(key)
+        }
         this.emit({ type: 'group.changed', groupId, sessionId, detail: 'turn.finished' })
       })
     this.#activeTasks.set(key, task)
     this.emit({ type: 'group.changed', groupId, sessionId, detail: 'started' })
     return runner.snapshot()
+  }
+
+  async retrySession(groupId: string, sessionId: string): Promise<DevelopmentSessionRuntime> {
+    const plan = await this.controller.loadPlan(groupId)
+    const runtime = await this.store.loadSession(groupId, sessionId)
+    if (!RETRYABLE_RUNTIME_STATES.has(runtime.status)) throw new Error(`only blocked/failed Sessions may be retried; got ${runtime.status}`)
+    if (runtime.attempt >= plan.definition.policy.maxSessionAttempts) throw new Error('Session attempt budget exhausted')
+    const repairs = await readRecords<RepairTask>(join(this.store.groupDir(groupId), 'repair'), name => !name.startsWith('failure-') && name.endsWith('.json'))
+    const repair = repairs
+      .filter(task => task.status === 'planned' && task.ownerSessionIds.includes(sessionId))
+      .sort((left, right) => right.waveOrdinal - left.waveOrdinal)[0]
+    if (!repair) throw new Error('no bounded planned RepairTask authorizes this Session retry; human review is required')
+    const next = await this.writeSessionStatus(runtime, 'ready', { blocker: undefined })
+    await this.store.writeRepair({ ...repair, status: 'running' })
+    this.emit({ type: 'group.changed', groupId, sessionId, detail: `retry.authorized:${repair.repairTaskId}` })
+    return next
   }
 
   async respondPermission(groupId: string, sessionId: string, response: ExecutorPermissionResponse): Promise<void> {
@@ -501,10 +543,10 @@ export class DevelopmentGroupProductService {
 
     const runtimeSession = absoluteSession(plan.definition.repository, session)
     const git = new GitWorkspaceAdapter(runtimeSession.worktree)
-    const [headSha, branch, changedPaths, status] = await Promise.all([
-      git.resolveHead(),
+    const headSha = await git.resolveHead()
+    const [branch, changedPaths, status] = await Promise.all([
       git.currentBranch(),
-      git.changedPaths(session.baselineSha, await git.resolveHead()),
+      git.changedPaths(session.baselineSha, headSha),
       git.status()
     ])
     if (branch !== session.branch) throw new Error(`Session worktree branch mismatch: expected ${session.branch}, got ${branch}`)
@@ -557,18 +599,17 @@ export class DevelopmentGroupProductService {
       createdAt: new Date().toISOString()
     }
     const delivery: DevelopmentDelivery = { ...unsigned, deliveryHash: computeDeliveryHash(unsigned) }
-    const gate = await verifyDevelopmentDelivery({
-      delivery,
-      session: runtimeSession,
-      git,
-      handoff: { checkpoint }
-    })
-    if (gate.decision !== 'DELIVERY_ACCEPT') return { accepted: false, gate }
+    const gate = await verifyDevelopmentDelivery({ delivery, session: runtimeSession, git, handoff: { checkpoint } })
+    if (gate.decision !== 'DELIVERY_ACCEPT') {
+      await this.controller.record(input.groupId, 'delivery.rejected', session.sessionId, session.waveId, gate.reasons.join('; '))
+      return { accepted: false, gate }
+    }
     await Promise.all([
       this.store.writeDelivery(delivery),
       writeDurableJson(handoffPath(this.store, input.groupId, session.sessionId), checkpoint)
     ])
     await this.writeSessionStatus(runtime, 'delivered', { headSha: delivery.headSha, blocker: undefined })
+    await this.resolveSessionFailures(input.groupId, session.sessionId)
     await this.controller.record(input.groupId, 'session.delivered', session.sessionId, session.waveId, delivery.deliveryHash)
     const runner = this.#runners.get(`${input.groupId}:${session.sessionId}`)
     if (runner) {
@@ -583,10 +624,11 @@ export class DevelopmentGroupProductService {
     const plan = await this.controller.loadPlan(groupId)
     const deliveries = await readRecords<DevelopmentDelivery>(join(this.store.groupDir(groupId), 'deliveries'), name => name.endsWith('.json') && !name.endsWith('.handoff.json'))
     const existing = await readRecords<IntegrationMilestone>(join(this.store.groupDir(groupId), 'integration'))
-    const integrated = new Set(existing.filter(record => record.status === 'merged').flatMap(record => record.mergedSessionIds))
+    const integratedSessions = new Set(existing.filter(record => record.status === 'merged').flatMap(record => record.mergedSessionIds))
+    const mergedDeliveryHashes = new Set(existing.filter(record => record.status === 'merged').flatMap(record => record.deliveryHashes))
     const queue = new IntegrationQueue()
     for (const delivery of deliveries) {
-      if (integrated.has(delivery.sessionId)) continue
+      if (mergedDeliveryHashes.has(delivery.deliveryHash)) continue
       const session = plan.sessions.find(candidate => candidate.sessionId === delivery.sessionId)
       if (!session) throw new Error(`Delivery references unknown Session ${delivery.sessionId}`)
       queue.enqueue(absoluteSession(plan.definition.repository, session), delivery, plan.waves)
@@ -599,16 +641,11 @@ export class DevelopmentGroupProductService {
       {
         verify: async item => {
           const handoff = await readDurableJson<Zero3HandoffCheckpointV1>(handoffPath(this.store, groupId, item.session.sessionId))
-          return verifyDevelopmentDelivery({
-            delivery: item.delivery,
-            session: item.session,
-            git: new GitWorkspaceAdapter(item.session.worktree),
-            handoff: { checkpoint: handoff }
-          })
+          return verifyDevelopmentDelivery({ delivery: item.delivery, session: item.session, git: new GitWorkspaceAdapter(item.session.worktree), handoff: { checkpoint: handoff } })
         }
       },
       this.store,
-      { integrationRef: plan.definition.integrationRef, initialIntegratedSessionIds: [...integrated] }
+      { integrationRef: plan.definition.integrationRef, initialIntegratedSessionIds: [...integratedSessions] }
     )
     const records = await integration.drainUntilBlocked()
     for (const record of records) {
@@ -620,7 +657,17 @@ export class DevelopmentGroupProductService {
         }
         await this.controller.record(groupId, 'integration.merged', undefined, undefined, record.headSha)
       } else {
-        await this.controller.record(groupId, 'session.blocked', undefined, undefined, record.conflicts.join('; '))
+        const failedDelivery = deliveries.find(delivery => record.deliveryHashes.includes(delivery.deliveryHash))
+        if (failedDelivery) {
+          const runtime = await this.store.loadSession(groupId, failedDelivery.sessionId)
+          const blocker = `integration:${record.integrationRunId}:${record.conflicts.join('; ') || record.status}`
+          if (runtime.status === 'delivered' || runtime.status === 'integrating') {
+            const blocked = await this.writeSessionStatus(runtime, 'blocked', { blocker })
+            await this.recordSessionFailure(groupId, failedDelivery.sessionId, blocked)
+          }
+        } else {
+          await this.controller.record(groupId, 'session.blocked', undefined, undefined, `integration:${record.integrationRunId}:${record.conflicts.join('; ')}`)
+        }
       }
     }
     this.emit({ type: 'group.changed', groupId, detail: 'integration.finished' })
@@ -658,14 +705,13 @@ export class DevelopmentGroupProductService {
     const postClean = await integrationGit.statusClean()
     if (postHead !== currentHead || !postClean) {
       verification.status = 'failed'
-      verification.environment = {
-        ...verification.environment,
-        workspacePostcondition: postHead !== currentHead ? `head_changed:${postHead}` : 'worktree_dirty'
-      }
+      verification.environment = { ...verification.environment, workspacePostcondition: postHead !== currentHead ? `head_changed:${postHead}` : 'worktree_dirty' }
     }
     await this.store.writeVerification(verification)
     if (verification.status !== 'passed') {
       await this.controller.record(groupId, 'verification.failed', undefined, undefined, verification.verificationRunId)
+      await this.recordVerificationFailures(groupId, verification, plan.sessions)
+      if (verification.status === 'outcome_unknown') await this.markGroupOutcomeUnknown(groupId)
       this.emit({ type: 'group.changed', groupId, detail: `verification.${verification.status}` })
       return { verification, completionIssues: [`verification_status=${verification.status}`] }
     }
@@ -676,6 +722,10 @@ export class DevelopmentGroupProductService {
       const runtime = await this.store.loadSession(groupId, sessionId)
       if (runtime.status === 'integrated') await this.writeSessionStatus(runtime, 'verified')
     }
+    const repairs = await readRecords<RepairTask>(join(this.store.groupDir(groupId), 'repair'), name => !name.startsWith('failure-') && name.endsWith('.json'))
+    for (const repair of repairs) {
+      if (repair.status === 'delivered') await this.store.writeRepair({ ...repair, status: 'verified' })
+    }
     const completion = await this.tryComplete(groupId, currentHead)
     this.emit({ type: 'group.changed', groupId, detail: completion.issues.length === 0 ? 'completed' : 'verification.passed' })
     return {
@@ -683,6 +733,92 @@ export class DevelopmentGroupProductService {
       completion: completion.issues.length === 0 ? completion.proof : undefined,
       completionIssues: completion.issues.map(issue => `${issue.code}@${issue.path}: ${issue.message}`)
     }
+  }
+
+  private async recordSessionFailure(groupId: string, sessionId: string, runtime: DevelopmentSessionRuntime): Promise<void> {
+    const plan = await this.controller.loadPlan(groupId)
+    const observation: FailureObservation = {
+      groupId,
+      signal: signalForRuntime(runtime),
+      message: runtime.blocker ?? `${sessionId} ${runtime.status}`,
+      evidence: [`session=${sessionId}`, `attempt=${runtime.attempt}`, `status=${runtime.status}`],
+      involvedSessionIds: [sessionId],
+      attempts: runtime.attempt
+    }
+    const failure: FailureRecord = { ...attributeFailure(observation, plan.sessions), sessionId }
+    await this.store.writeFailure(failure)
+    if (runtime.status === 'outcome_unknown') {
+      await this.markGroupOutcomeUnknown(groupId)
+      return
+    }
+    await this.controller.record(groupId, 'session.blocked', sessionId, plan.sessions.find(session => session.sessionId === sessionId)?.waveId, `session:${sessionId}:${failure.failureId}:${failure.message}`)
+    await this.planRepairs(groupId, [failure])
+  }
+
+  private async recordVerificationFailures(groupId: string, verification: VerificationRun, sessions: readonly DevelopmentSessionDefinition[]): Promise<void> {
+    const failures: FailureRecord[] = []
+    for (const result of verification.results.filter(result => result.status !== 'passed')) {
+      const signal: FailureSignal = result.status === 'not_run_platform' ? 'environment_unavailable' : result.status === 'not_run' ? 'outcome_unknown' : 'command_failed'
+      failures.push(attributeFailure({
+        groupId,
+        verificationRunId: verification.verificationRunId,
+        signal,
+        message: `verification ${result.commandId} ${result.status}`,
+        evidence: result.evidence,
+        involvedSessionIds: [],
+        attempts: 1
+      }, sessions))
+    }
+    if (failures.length === 0) {
+      failures.push(attributeFailure({
+        groupId,
+        verificationRunId: verification.verificationRunId,
+        signal: verification.status === 'outcome_unknown' ? 'outcome_unknown' : 'unknown',
+        message: 'verification failed its workspace or execution postcondition',
+        evidence: Object.entries(verification.environment).map(([key, value]) => `${key}=${value}`),
+        involvedSessionIds: [],
+        attempts: 1
+      }, sessions))
+    }
+    for (const failure of failures) await this.store.writeFailure(failure)
+    if (verification.status !== 'outcome_unknown') await this.planRepairs(groupId, failures)
+  }
+
+  private async planRepairs(groupId: string, failures: readonly FailureRecord[]): Promise<readonly RepairTask[]> {
+    const [plan, state] = await Promise.all([this.controller.loadPlan(groupId), this.store.loadState(groupId)])
+    if (state.repairWaveCount >= plan.definition.policy.maxRepairWaves) return []
+    const tasks = planRepairWave({
+      groupId,
+      waveOrdinal: state.repairWaveCount + 1,
+      failures,
+      policy: plan.definition.policy
+    })
+    for (const task of tasks) await this.store.writeRepair(task)
+    if (tasks.length > 0) await this.controller.record(groupId, 'repair.created', undefined, undefined, tasks.map(task => task.repairTaskId).join(','))
+    return tasks
+  }
+
+  private async resolveSessionFailures(groupId: string, sessionId: string): Promise<void> {
+    const failures = await readRecords<FailureRecord>(join(this.store.groupDir(groupId), 'repair'), name => name.startsWith('failure-') && name.endsWith('.json'))
+    for (const failure of failures) {
+      if (failure.unresolved && (failure.sessionId === sessionId || failure.ownerSessionIds.includes(sessionId))) {
+        await this.store.writeFailure({ ...failure, unresolved: false })
+      }
+    }
+    const repairs = await readRecords<RepairTask>(join(this.store.groupDir(groupId), 'repair'), name => !name.startsWith('failure-') && name.endsWith('.json'))
+    for (const repair of repairs) {
+      if (!repair.ownerSessionIds.includes(sessionId) || (repair.status !== 'planned' && repair.status !== 'running')) continue
+      const ownerRuntimes = await Promise.all(repair.ownerSessionIds.map(ownerId => this.store.loadSession(groupId, ownerId)))
+      if (ownerRuntimes.every(runtime => ['delivered', 'integrating', 'integrated', 'verified'].includes(runtime.status))) {
+        await this.store.writeRepair({ ...repair, status: 'delivered' })
+      }
+    }
+  }
+
+  private async markGroupOutcomeUnknown(groupId: string): Promise<void> {
+    const state = await this.store.loadState(groupId)
+    if (state.status === 'outcome_unknown') return
+    await this.store.writeState({ ...state, status: 'outcome_unknown', outcomeUnknownCount: state.outcomeUnknownCount + 1, updatedAt: new Date().toISOString() })
   }
 
   private async tryComplete(groupId: string, finalIntegrationSha: string) {
