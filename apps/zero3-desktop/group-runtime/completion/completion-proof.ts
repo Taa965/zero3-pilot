@@ -19,6 +19,15 @@ export interface CompletionProofBuildResult {
   issues: readonly ValidationIssue[]
 }
 
+function verificationQualifies(run: VerificationRun, finalIntegrationSha: string, policy: DevelopmentGroupPolicy): boolean {
+  if (run.status !== 'passed' || run.integrationSha !== finalIntegrationSha || run.policyRevision !== policy.verificationPolicyRevision) return false
+  const mandatory = [...new Set(policy.mandatoryTests ?? [])]
+  if (mandatory.length === 0) return true
+  const requiredCommands = new Set(run.commands.filter(command => command.required).map(command => command.id))
+  const passedResults = new Set(run.results.filter(result => result.status === 'passed').map(result => result.commandId))
+  return mandatory.every(id => requiredCommands.has(id) && passedResults.has(id))
+}
+
 export function buildCompletionProof(input: {
   groupId: string
   policy: DevelopmentGroupPolicy
@@ -42,10 +51,13 @@ export function buildCompletionProof(input: {
     integrations: input.integrations,
     verifications: input.verifications,
     finalIntegrationSha: input.finalIntegrationSha,
+    verificationPolicyRevision: input.policy.verificationPolicyRevision,
+    mandatoryTestIds: input.policy.mandatoryTests,
     waivers: input.waivers
   })
-  const latestIntegration = [...input.integrations].reverse().find(record => record.headSha === input.finalIntegrationSha)
-  const passedVerifications = input.verifications.filter(run => run.integrationSha === input.finalIntegrationSha && run.status === 'passed')
+  const cleanIntegration = input.integrations.find(record => record.status === 'merged' && record.headSha === input.finalIntegrationSha)
+  const conflictingIntegration = input.integrations.find(record => record.status === 'conflict' && record.headSha === input.finalIntegrationSha)
+  const passedVerifications = input.verifications.filter(run => verificationQualifies(run, input.finalIntegrationSha, input.policy))
   const outcomeUnknownCount = input.runtimes.filter(runtime => runtime.status === 'outcome_unknown').length
   const deliveryBySession = new Map(input.deliveries.map(delivery => [delivery.sessionId, delivery] as const))
   const sessionDeliveryCoverage = input.sessions.map(session => {
@@ -57,7 +69,7 @@ export function buildCompletionProof(input: {
     groupId: input.groupId,
     requirementCoverage: matrix,
     sessionDeliveryCoverage,
-    integrationStatus: latestIntegration?.status === 'merged' ? 'clean' : latestIntegration?.status === 'conflict' ? 'conflict' : 'failed',
+    integrationStatus: cleanIntegration ? 'clean' : conflictingIntegration ? 'conflict' : 'failed',
     verificationStatus: passedVerifications.length > 0 ? 'passed' : input.verifications.some(run => run.integrationSha === input.finalIntegrationSha) ? 'failed' : 'not_run',
     unresolvedBlockers: [...input.unresolvedBlockers],
     outcomeUnknownCount,
@@ -72,6 +84,9 @@ export function buildCompletionProof(input: {
   }
   if (input.policy.completionMode === 'strict' && matrix.some(record => record.state === 'waived')) {
     issues.push({ code: 'waiver_forbidden', path: 'proof.requirementCoverage', message: 'strict completion policy forbids Requirement waivers' })
+  }
+  if (input.verifications.some(run => run.integrationSha === input.finalIntegrationSha && run.status === 'passed') && passedVerifications.length === 0) {
+    issues.push({ code: 'verification_policy_mismatch', path: 'proof.verificationEvidence', message: 'passed verification does not satisfy the current policy revision and mandatory test set' })
   }
   return { proof, issues }
 }
