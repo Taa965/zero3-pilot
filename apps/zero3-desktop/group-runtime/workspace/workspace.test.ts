@@ -24,13 +24,17 @@ const session: DevelopmentSessionDefinition = {
 }
 
 class FakeGit implements GitWorkspacePort {
-  constructor(readonly changed: readonly string[], readonly dirty = false) {}
+  constructor(readonly changed: readonly string[], readonly dirty = false, readonly handoffFingerprint?: string) {}
   async resolveHead() { return head }
   async currentBranch() { return session.branch }
   async branchHead() { return head }
   async isAncestor() { return true }
   async changedPaths() { return this.changed }
   async status() { return this.dirty ? [{ status: ' M', path: 'src/owned/a.ts' }] : [] }
+  async handoffDirtyWorktreeFingerprint() {
+    if (!this.handoffFingerprint) throw new Error('handoff fingerprint unavailable')
+    return this.handoffFingerprint
+  }
 }
 
 function delivery(changedPaths: readonly string[]): DevelopmentDelivery {
@@ -69,8 +73,24 @@ test('delivery gate accepts only exact Git, ownership, hash and existing Handoff
   const checkpoint = handoff(pre.observed.workspaceFingerprint!)
   draft.handoffCheckpoint = checkpoint.checkpoint_hash
   draft.deliveryHash = computeDeliveryHash(draft)
-  const result = await verifyDevelopmentDelivery({ delivery: draft, session, git, handoff: { checkpoint } })
+  const result = await verifyDevelopmentDelivery({ delivery: draft, session, git: new FakeGit(changed, false, checkpoint.dirty_worktree_fingerprint), handoff: { checkpoint } })
   assert.equal(result.decision, 'DELIVERY_ACCEPT')
+})
+
+test('delivery gate rejects a stale Handoff fingerprint even when HEAD and branch still match', async () => {
+  const changed = ['src/owned/a.ts']
+  const draft = delivery(changed)
+  const checkpoint = handoff('checkpoint-fingerprint')
+  draft.handoffCheckpoint = checkpoint.checkpoint_hash
+  draft.deliveryHash = computeDeliveryHash(draft)
+  const result = await verifyDevelopmentDelivery({
+    delivery: draft,
+    session,
+    git: new FakeGit(changed, false, 'live-fingerprint-after-mutation'),
+    handoff: { checkpoint }
+  })
+  assert.equal(result.decision, 'DELIVERY_REJECT')
+  assert.ok(result.reasons.some(reason => reason.includes('worktree fingerprint mismatch')))
 })
 
 test('delivery gate fails closed on dirty worktree or ownership violation', async () => {
