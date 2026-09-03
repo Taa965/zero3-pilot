@@ -17,6 +17,10 @@ function initialState(groupId: string, at: string): DevelopmentGroupRuntimeState
   return { groupId, status: 'planning', lastEventSequence: 0, unresolvedBlockers: [], outcomeUnknownCount: 0, repairWaveCount: 0, updatedAt: at }
 }
 
+function clearBlockers(state: DevelopmentGroupRuntimeState, prefix: string): void {
+  state.unresolvedBlockers = state.unresolvedBlockers.filter(blocker => !blocker.startsWith(prefix))
+}
+
 export function reduceGroupEvents(state: DevelopmentGroupRuntimeState, events: readonly GroupEvent[]): DevelopmentGroupRuntimeState {
   const next: DevelopmentGroupRuntimeState = { ...state, unresolvedBlockers: [...state.unresolvedBlockers] }
   for (const event of events) {
@@ -27,10 +31,19 @@ export function reduceGroupEvents(state: DevelopmentGroupRuntimeState, events: r
       case 'group.created': next.status = 'planning'; break
       case 'plan.frozen': next.status = 'ready'; break
       case 'wave.started': next.status = 'running'; next.activeWaveId = event.waveId; break
-      case 'session.blocked': next.status = 'blocked'; if (event.detail && !next.unresolvedBlockers.includes(event.detail)) next.unresolvedBlockers = [...next.unresolvedBlockers, event.detail]; break
-      case 'session.delivered': next.status = 'running'; break
+      case 'session.blocked':
+        next.status = 'blocked'
+        if (event.detail && !next.unresolvedBlockers.includes(event.detail)) next.unresolvedBlockers = [...next.unresolvedBlockers, event.detail]
+        break
+      case 'session.delivered':
+        next.status = 'running'
+        if (event.sessionId) clearBlockers(next, `session:${event.sessionId}:`)
+        break
       case 'integration.started': next.status = 'integrating'; break
-      case 'integration.merged': next.status = 'verifying'; break
+      case 'integration.merged':
+        next.status = 'verifying'
+        clearBlockers(next, 'integration:')
+        break
       case 'verification.started': next.status = 'verifying'; break
       case 'verification.failed': next.status = 'repairing'; break
       case 'repair.created': next.status = 'repairing'; next.repairWaveCount += 1; break
