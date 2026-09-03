@@ -81,6 +81,44 @@ test('shared and protected paths never become freely owned', () => {
   assert.ok(plan.sessions[0].forbiddenPaths.includes('apps/zero3-desktop/package.json'))
 })
 
+test('overlapping globs across explicit Sessions are downgraded instead of double-owned', () => {
+  const plan = compilePlanningProposal(
+    request,
+    {
+      requirements: [
+        { id: 'REQ-001', title: 'Broad', description: 'Broad', acceptanceCriteria: ['Broad'], sourceAnchor: 'a', pathHints: ['src/**'] },
+        { id: 'REQ-002', title: 'Narrow', description: 'Narrow', acceptanceCriteria: ['Narrow'], sourceAnchor: 'b', pathHints: ['src/feature/**'] }
+      ],
+      sessions: [
+        { id: 'S01', objective: 'Broad', requirementIds: ['REQ-001'] },
+        { id: 'S02', objective: 'Narrow', requirementIds: ['REQ-002'] }
+      ]
+    },
+    { groupId: 'GOVERLAP', createdAt: '2026-09-03T00:00:00.000Z' }
+  )
+  assert.ok(plan.redZonePaths.includes('src/**'))
+  assert.ok(plan.redZonePaths.includes('src/feature/**'))
+  assert.ok(plan.sessions.every(session => session.ownedPaths.length === 0))
+  assert.ok(plan.sessions.find(session => session.sessionId === 'S01')?.readOnlyPaths.includes('src/**'))
+  assert.ok(plan.sessions.find(session => session.sessionId === 'S02')?.readOnlyPaths.includes('src/feature/**'))
+})
+
+test('broad ownership glob cannot silently swallow an exact protected path', () => {
+  const plan = compilePlanningProposal(
+    request,
+    {
+      requirements: [
+        { id: 'REQ-001', title: 'Desktop', description: 'Desktop', acceptanceCriteria: ['Desktop'], sourceAnchor: 'a', pathHints: ['apps/zero3-desktop/**'] }
+      ],
+      sessions: [{ id: 'S01', objective: 'Desktop', requirementIds: ['REQ-001'] }]
+    },
+    { groupId: 'GPROTECTED', createdAt: '2026-09-03T00:00:00.000Z' }
+  )
+  const session = plan.sessions[0]
+  assert.ok(session.forbiddenPaths.includes('apps/zero3-desktop/package.json'))
+  assert.ok(!session.ownedPaths.includes('apps/zero3-desktop/**'))
+})
+
 test('invalid controller proposal is rejected by frozen C1 validator', () => {
   assert.throws(
     () => compilePlanningProposal(
