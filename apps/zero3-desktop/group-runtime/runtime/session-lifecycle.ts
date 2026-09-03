@@ -26,6 +26,24 @@ async function existingDelivery(store: DevelopmentGroupStore, groupId: string, s
   }
 }
 
+export async function reconcileInterruptedExecutorRuntime(store: DevelopmentGroupStore, groupId: string, sessionId: string, processOwnsPrompt: boolean): Promise<DevelopmentSessionRuntime> {
+  const runtime = await store.loadSession(groupId, sessionId)
+  if (processOwnsPrompt || !['starting', 'running', 'waiting_input'].includes(runtime.status)) return runtime
+  const next = transition(runtime, 'outcome_unknown', {
+    blocker: 'runtime_restart_without_authoritative_executor_outcome'
+  })
+  await store.writeSession(next)
+  return next
+}
+
+export async function markSessionBlocked(store: DevelopmentGroupStore, groupId: string, sessionId: string, blocker: string): Promise<DevelopmentSessionRuntime> {
+  const runtime = await store.loadSession(groupId, sessionId)
+  if (runtime.status === 'blocked' && runtime.blocker === blocker) return runtime
+  const next = transition(runtime, 'blocked', { blocker })
+  await store.writeSession(next)
+  return next
+}
+
 export async function acceptDevelopmentDelivery(input: {
   store: DevelopmentGroupStore
   session: DevelopmentSessionDefinition
