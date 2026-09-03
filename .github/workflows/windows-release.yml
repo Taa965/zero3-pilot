@@ -1,13 +1,17 @@
-name: Windows Release
+name: Legacy Windows Installer Smoke
 
+# Historical Tao/Wry + zero3-node + Inno Setup packaging path.
+#
+# This workflow is NOT the Codex-native Windows release path and must never run
+# automatically for a release tag or publish a GitHub Release. The authoritative
+# v0.1.0-alpha artifact is produced by windows-alpha-artifact.yml.
+#
+# Keep this workflow manual-only for compatibility/history investigation.
 on:
-  workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch: {}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   package:
@@ -18,7 +22,7 @@ jobs:
           submodules: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build release desktop bundle
+      - name: Build legacy release desktop bundle
         run: cargo build --release -p zero3-node -p zero3-weixin -p zero3-desktop
       - name: Resolve Inno Setup compiler
         shell: pwsh
@@ -35,7 +39,7 @@ jobs:
           if (-not $iscc) { throw 'Inno Setup compiler not found' }
           $path = if ($iscc.Source) { $iscc.Source } else { $iscc.FullName }
           "ZERO3_ISCC=$path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Build installer
+      - name: Build legacy installer
         shell: pwsh
         run: |
           & $env:ZERO3_ISCC 'installer\Zero3Pilot.iss'
@@ -43,12 +47,6 @@ jobs:
           if (-not (Test-Path 'dist\Zero3Pilot-Setup.exe')) { throw 'installer artifact missing' }
       - uses: actions/upload-artifact@v4
         with:
-          name: Zero3Pilot-Setup-${{ github.sha }}
+          name: Legacy-Zero3Pilot-Setup-${{ github.sha }}
           path: dist/Zero3Pilot-Setup.exe
           if-no-files-found: error
-      - name: Publish tagged GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/Zero3Pilot-Setup.exe
-          generate_release_notes: true
