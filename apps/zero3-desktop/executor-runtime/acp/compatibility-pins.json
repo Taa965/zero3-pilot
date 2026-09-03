@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "zero3.pilot.acp.compatibility.v1",
+  "status": "frozen-exact-pins",
+  "frozenContract": "zero3.pilot.executor.v1",
+  "frozenContractSha": "45ba7325a4f29d7db1fce282bb8d46a5737f2a41",
+  "protocol": {
+    "generation": "ACP v1",
+    "sdk": {
+      "package": "@agentclientprotocol/sdk",
+      "version": "1.4.0"
+    }
+  },
+  "runtime": {
+    "package": "acpx",
+    "version": "0.13.2",
+    "minimumNode": "22.13.0"
+  },
+  "adapters": {
+    "claude": {
+      "package": "@agentclientprotocol/claude-agent-acp",
+      "version": "0.70.0",
+      "role": "external-agent",
+      "launchPolicy": "exact-local-installed-bin-only"
+    },
+    "codexExternal": {
+      "package": "@agentclientprotocol/codex-acp",
+      "version": "1.7.0",
+      "role": "optional-external-compatibility-only",
+      "launchPolicy": "exact-local-installed-bin-only",
+      "nativeAgentKernelAuthority": false
+    }
+  },
+  "constraints": [
+    "no-runtime-latest",
+    "no-runtime-semver-range-launch",
+    "no-dynamic-npx",
+    "no-acp-type-leakage-above-acp-directory",
+    "resume-must-use-session-load",
+    "resume-must-not-fallback-to-session-new",
+    "permissions-fail-closed",
+    "router-policy-outside-r4b",
+    "native-codex-authority-unchanged"
+  ]
+}
