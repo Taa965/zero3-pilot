@@ -24,13 +24,14 @@ const session: DevelopmentSessionDefinition = {
 }
 
 class FakeGit implements GitWorkspacePort {
-  constructor(readonly changed: readonly string[], readonly dirty = false) {}
+  constructor(readonly changed: readonly string[], readonly dirty = false, readonly handoffFingerprint = 'handoff-fingerprint') {}
   async resolveHead() { return head }
   async currentBranch() { return session.branch }
   async branchHead() { return head }
   async isAncestor() { return true }
   async changedPaths() { return this.changed }
   async status() { return this.dirty ? [{ status: ' M', path: 'src/owned/a.ts' }] : [] }
+  async handoffWorkspaceFingerprint() { return this.handoffFingerprint }
 }
 
 function delivery(changedPaths: readonly string[]): DevelopmentDelivery {
@@ -64,13 +65,21 @@ test('delivery gate accepts only exact Git, ownership, hash and existing Handoff
   const changed = ['src/owned/a.ts']
   const draft = delivery(changed)
   const git = new FakeGit(changed)
-  const pre = await verifyDevelopmentDelivery({ delivery: draft, session: { ...session, deliveryPolicy: { ...session.deliveryPolicy, requireHandoff: false } }, git })
-  assert.equal(pre.decision, 'DELIVERY_ACCEPT')
-  const checkpoint = handoff(pre.observed.workspaceFingerprint!)
+  const checkpoint = handoff(git.handoffFingerprint)
   draft.handoffCheckpoint = checkpoint.checkpoint_hash
   draft.deliveryHash = computeDeliveryHash(draft)
   const result = await verifyDevelopmentDelivery({ delivery: draft, session, git, handoff: { checkpoint } })
   assert.equal(result.decision, 'DELIVERY_ACCEPT')
+})
+
+test('delivery gate rejects Handoff evidence when independent R4E fingerprint differs', async () => {
+  const draft = delivery(['src/owned/a.ts'])
+  const checkpoint = handoff('checkpoint-fingerprint')
+  draft.handoffCheckpoint = checkpoint.checkpoint_hash
+  draft.deliveryHash = computeDeliveryHash(draft)
+  const result = await verifyDevelopmentDelivery({ delivery: draft, session, git: new FakeGit(['src/owned/a.ts'], false, 'observed-fingerprint'), handoff: { checkpoint } })
+  assert.equal(result.decision, 'DELIVERY_REJECT')
+  assert.ok(result.reasons.some(reason => reason.includes('worktree fingerprint mismatch')))
 })
 
 test('delivery gate fails closed on dirty worktree or ownership violation', async () => {
