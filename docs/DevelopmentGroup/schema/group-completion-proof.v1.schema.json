@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zero3.pilot.group-completion-proof.v1",
+  "title": "Zero3 Group Completion Proof V1",
+  "type": "object",
+  "required": ["contract", "groupId", "requirementCoverage", "sessionDeliveryCoverage", "integrationStatus", "verificationStatus", "unresolvedBlockers", "outcomeUnknownCount", "finalIntegrationSha", "verificationEvidence", "completionPolicyRevision", "generatedAt"],
+  "properties": {
+    "contract": { "const": "zero3.pilot.group-completion-proof.v1" },
+    "groupId": { "type": "string", "minLength": 1 },
+    "requirementCoverage": { "type": "array" },
+    "sessionDeliveryCoverage": { "type": "array" },
+    "integrationStatus": { "enum": ["clean", "conflict", "failed"] },
+    "verificationStatus": { "enum": ["passed", "failed", "not_run"] },
+    "unresolvedBlockers": { "type": "array", "items": { "type": "string" } },
+    "outcomeUnknownCount": { "type": "integer", "minimum": 0 },
+    "finalIntegrationSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "verificationEvidence": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "completionPolicyRevision": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}
