@@ -15,6 +15,7 @@ export interface DeliveryVerifierPort {
 
 export interface IntegrationControllerOptions {
   integrationRef: string
+  initialIntegratedSessionIds?: readonly string[]
   postMergeCheck?: (headSha: string, item: IntegrationQueueItem) => Promise<{ ok: boolean; detail?: string }>
 }
 
@@ -23,7 +24,7 @@ function runId(baseSha: string, item: IntegrationQueueItem): string {
 }
 
 export class IntegrationController {
-  readonly integratedSessionIds = new Set<string>()
+  readonly integratedSessionIds: Set<string>
 
   constructor(
     readonly queue: IntegrationQueue,
@@ -31,7 +32,9 @@ export class IntegrationController {
     private readonly verifier: DeliveryVerifierPort,
     private readonly store: IntegrationRecordStorePort,
     readonly options: IntegrationControllerOptions
-  ) {}
+  ) {
+    this.integratedSessionIds = new Set(options.initialIntegratedSessionIds ?? [])
+  }
 
   async integrateNext(): Promise<IntegrationMilestone | undefined> {
     const item = this.queue.ready(this.integratedSessionIds)[0]
