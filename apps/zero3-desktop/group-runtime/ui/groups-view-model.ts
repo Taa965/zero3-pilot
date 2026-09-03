@@ -76,6 +76,37 @@ export interface DevelopmentGroupViewModel {
   integrations: readonly IntegrationMilestone[]
 }
 
+function verificationQualifies(run: VerificationRun, definition: DevelopmentGroupDefinition): boolean {
+  if (run.status !== 'passed' || run.policyRevision !== definition.policy.verificationPolicyRevision) return false
+  const mandatory = [...new Set(definition.policy.mandatoryTests ?? [])]
+  if (mandatory.length === 0) return true
+  const requiredCommands = new Set(run.commands.filter(command => command.required).map(command => command.id))
+  const passedResults = new Set(run.results.filter(result => result.status === 'passed').map(result => result.commandId))
+  return mandatory.every(id => requiredCommands.has(id) && passedResults.has(id))
+}
+
+function sessionsCoveredByFinalVerification(integrations: readonly IntegrationMilestone[], finalSha: string): ReadonlySet<string> {
+  const byHead = new Map<string, IntegrationMilestone>()
+  for (const record of integrations) {
+    if (record.status !== 'merged') continue
+    const existing = byHead.get(record.headSha)
+    if (existing && existing.integrationRunId !== record.integrationRunId) throw new Error(`ambiguous merged IntegrationMilestone head ${record.headSha}`)
+    byHead.set(record.headSha, record)
+  }
+  const sessions = new Set<string>()
+  const visited = new Set<string>()
+  let cursor = finalSha
+  while (true) {
+    if (visited.has(cursor)) throw new Error(`IntegrationMilestone ancestry cycle at ${cursor}`)
+    visited.add(cursor)
+    const record = byHead.get(cursor)
+    if (!record) break
+    record.mergedSessionIds.forEach(sessionId => sessions.add(sessionId))
+    cursor = record.baseSha
+  }
+  return sessions
+}
+
 export function buildDevelopmentGroupViewModel(input: {
   definition: DevelopmentGroupDefinition
   state: DevelopmentGroupRuntimeState
@@ -93,12 +124,11 @@ export function buildDevelopmentGroupViewModel(input: {
   const sessionByRequirement = new Map<string, string>()
   for (const session of input.sessions) for (const requirementId of session.requirements) sessionByRequirement.set(requirementId, session.sessionId)
   const deliveryBySession = new Map(input.deliveries.map(delivery => [delivery.sessionId, delivery] as const))
-  const verificationBySha = new Map(input.verifications.filter(run => run.status === 'passed').map(run => [run.integrationSha, run] as const))
   const integratedSessions = new Set(input.integrations.filter(record => record.status === 'merged').flatMap(record => record.mergedSessionIds))
   const verifiedSessions = new Set<string>()
-  for (const integration of input.integrations) {
-    if (integration.status !== 'merged' || !verificationBySha.has(integration.headSha)) continue
-    integration.mergedSessionIds.forEach(sessionId => verifiedSessions.add(sessionId))
+  for (const verification of input.verifications) {
+    if (!verificationQualifies(verification, input.definition)) continue
+    sessionsCoveredByFinalVerification(input.integrations, verification.integrationSha).forEach(sessionId => verifiedSessions.add(sessionId))
   }
 
   const sessions = input.sessions.map(session => {
@@ -123,8 +153,6 @@ export function buildDevelopmentGroupViewModel(input: {
   const requirements = input.requirements.map(requirement => {
     const ownerSessionId = sessionByRequirement.get(requirement.requirementId)
     const delivery = ownerSessionId ? deliveryBySession.get(ownerSessionId) : undefined
-    const integration = ownerSessionId ? input.integrations.find(record => record.status === 'merged' && record.mergedSessionIds.includes(ownerSessionId)) : undefined
-    const verified = Boolean(integration && verificationBySha.has(integration.headSha))
     return {
       requirementId: requirement.requirementId,
       title: requirement.title,
@@ -132,7 +160,7 @@ export function buildDevelopmentGroupViewModel(input: {
       ownerSessionId,
       deliveryStatus: delivery?.status ?? 'none',
       integrated: Boolean(ownerSessionId && integratedSessions.has(ownerSessionId)),
-      verified,
+      verified: Boolean(ownerSessionId && verifiedSessions.has(ownerSessionId)),
       testEvidence: delivery?.testsExecuted ?? []
     } satisfies RequirementMatrixRowView
   })
