@@ -18,14 +18,18 @@ import { executeVerification, type VerificationCommandExecutor } from '../verifi
 import { assertGroupCompletable, buildCompletionProof, type CompletionProofBuildResult } from '../completion/index.ts'
 import type { WaveGateEvidence } from '../scheduler/index.ts'
 import type { RuntimeDeliveryVerifierPort } from './delivery-verifier.ts'
+import type { RuntimeDeliveryMaterializerPort } from './delivery-materializer.ts'
 import { loadDurableGroupRecords, type DurableGroupRecords } from './record-reader.ts'
 import {
   acceptDevelopmentDelivery,
   applyIntegrationMilestone,
+  markSessionBlocked,
   markSessionIntegrating,
   markSessionVerified,
-  reconcileAcceptedDelivery
+  reconcileAcceptedDelivery,
+  reconcileInterruptedExecutorRuntime
 } from './session-lifecycle.ts'
+import { DevelopmentGroupWorkerSupervisor, type WorkerLaunchResult } from './worker-supervisor.ts'
 
 export interface RuntimeVerificationCommandProvider {
   commands(definition: DevelopmentGroupDefinition): Promise<readonly VerificationCommand[]>
@@ -36,8 +40,10 @@ export interface DevelopmentGroupRuntimeFacadeOptions {
   executorManager: ExecutorManagerPort
   integrationGit: IntegrationGitPort
   deliveryVerifier: RuntimeDeliveryVerifierPort
+  deliveryMaterializer: RuntimeDeliveryMaterializerPort
   verificationCommands: RuntimeVerificationCommandProvider
   verificationExecutor: VerificationCommandExecutor
+  supervisor?: DevelopmentGroupWorkerSupervisor
   postMergeCheck?: (headSha: string) => Promise<{ ok: boolean; detail?: string }>
 }
 
@@ -52,8 +58,21 @@ function mergedSessionIds(records: DurableGroupRecords): Set<string> {
   return new Set(records.integrations.filter(record => record.status === 'merged').flatMap(record => record.mergedSessionIds))
 }
 
+function integrationByHead(records: DurableGroupRecords): Map<string, IntegrationMilestone> {
+  const byHead = new Map<string, IntegrationMilestone>()
+  for (const record of records.integrations) {
+    if (record.status !== 'merged') continue
+    const existing = byHead.get(record.headSha)
+    if (existing && existing.integrationRunId !== record.integrationRunId) {
+      throw new Error(`ambiguous merged IntegrationMilestone head ${record.headSha}`)
+    }
+    byHead.set(record.headSha, record)
+  }
+  return byHead
+}
+
 function finalIntegrationChain(records: DurableGroupRecords, finalSha: string): readonly IntegrationMilestone[] {
-  const byHead = new Map(records.integrations.filter(record => record.status === 'merged').map(record => [record.headSha, record] as const))
+  const byHead = integrationByHead(records)
   const chain: IntegrationMilestone[] = []
   const visited = new Set<string>()
   let cursor = finalSha
@@ -68,11 +87,36 @@ function finalIntegrationChain(records: DurableGroupRecords, finalSha: string): 
   return chain
 }
 
+function currentBlockers(records: DurableGroupRecords): string[] {
+  const values = new Set<string>()
+  for (const runtime of records.runtimes) {
+    if (!['blocked', 'waiting_input', 'outcome_unknown', 'failed'].includes(runtime.status)) continue
+    values.add(runtime.blocker?.trim() || `${runtime.sessionId}:${runtime.status}`)
+  }
+  for (const failure of records.failures) if (failure.unresolved) values.add(failure.message)
+  for (const repair of records.repairs) if (repair.status === 'waiting_human' || repair.status === 'failed') values.add(`${repair.repairTaskId}:${repair.status}`)
+  return [...values].filter(Boolean).sort()
+}
+
+function normalizeRuntimeState(state: DevelopmentGroupRuntimeState, records: DurableGroupRecords): DevelopmentGroupRuntimeState {
+  const outcomeUnknownCount = records.runtimes.filter(runtime => runtime.status === 'outcome_unknown').length
+  const unresolvedBlockers = currentBlockers(records)
+  const terminal = ['completed', 'cancelled', 'failed'].includes(state.status)
+  return {
+    ...state,
+    status: outcomeUnknownCount > 0 && !terminal ? 'outcome_unknown' : state.status,
+    unresolvedBlockers,
+    outcomeUnknownCount
+  }
+}
+
 export class DevelopmentGroupRuntimeFacade {
   readonly controller: DevelopmentGroupController
+  readonly supervisor: DevelopmentGroupWorkerSupervisor
 
   constructor(readonly options: DevelopmentGroupRuntimeFacadeOptions) {
     this.controller = new DevelopmentGroupController(options.store)
+    this.supervisor = options.supervisor ?? new DevelopmentGroupWorkerSupervisor()
   }
 
   createGroup(request: PlanningRequest, proposal: ControllerPlanningProposal, options?: { groupId?: string; createdAt?: string }): Promise<PlanningProposal> {
@@ -82,11 +126,16 @@ export class DevelopmentGroupRuntimeFacade {
   async snapshot(groupId: string): Promise<DevelopmentGroupRuntimeSnapshot> {
     const plan = await this.controller.loadPlan(groupId)
     await this.controller.resumeGroup(groupId)
-    await Promise.all(plan.sessions.map(session => reconcileAcceptedDelivery(this.options.store, session)))
-    const [state, records] = await Promise.all([
+    await Promise.all(plan.sessions.map(async session => {
+      await reconcileInterruptedExecutorRuntime(this.options.store, groupId, session.sessionId, this.supervisor.isActive(session.sessionId))
+      await reconcileAcceptedDelivery(this.options.store, session)
+    }))
+    const [rawState, records] = await Promise.all([
       this.options.store.loadState(groupId),
       loadDurableGroupRecords(this.options.store, plan)
     ])
+    const state = normalizeRuntimeState(rawState, records)
+    if (JSON.stringify(state) !== JSON.stringify(rawState)) await this.options.store.writeState(state)
     const view = buildDevelopmentGroupViewModel({
       definition: plan.definition,
       state,
@@ -103,8 +152,9 @@ export class DevelopmentGroupRuntimeFacade {
     return { plan, state, records, view }
   }
 
-  async startWave(groupId: string, waveId: string, requestIdPrefix = `wave-${Date.now()}`): Promise<readonly DevelopmentSessionRuntime[]> {
+  async startWave(groupId: string, waveId: string, requestIdPrefix = `wave-${Date.now()}`): Promise<readonly WorkerLaunchResult[]> {
     const snapshot = await this.snapshot(groupId)
+    if (snapshot.state.outcomeUnknownCount > 0) throw new Error('Development Group has unresolved OutcomeUnknown and cannot start more Sessions')
     const wave = snapshot.plan.waves.find(candidate => candidate.waveId === waveId)
     if (!wave) throw new Error(`unknown Development Wave ${waveId}`)
     const waveEvidence = await this.buildWaveEvidence(snapshot)
@@ -114,13 +164,30 @@ export class DevelopmentGroupRuntimeFacade {
     if (eligible.length === 0) throw new Error(`Development Wave ${waveId} has no eligible Sessions`)
 
     await this.controller.record(groupId, 'wave.started', undefined, waveId)
-    return Promise.all(eligible.map(async (sessionId, index) => {
+    const launches: WorkerLaunchResult[] = []
+    for (const [index, sessionId] of eligible.entries()) {
+      const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)!
       const runner = await this.controller.sessionRunner(groupId, sessionId, this.options.executorManager)
       if (runner.snapshot().status === 'waiting_dependencies') await runner.markReady()
       await this.controller.record(groupId, 'session.started', sessionId, waveId)
       await runner.start()
-      return runner.sendInitialInstruction(`${requestIdPrefix}:${index + 1}:${sessionId}`)
-    }))
+      launches.push(this.supervisor.launch({
+        runner,
+        clientRequestId: `${requestIdPrefix}:${index + 1}:${sessionId}`,
+        afterSettled: async runtime => {
+          if (runtime.status !== 'delivering') return
+          try {
+            const delivery = await this.options.deliveryMaterializer.materialize(snapshot.plan.definition, session, runtime)
+            await this.submitDelivery(delivery)
+          } catch (error) {
+            const blocker = `delivery_materialization_failed: ${String(error)}`
+            await markSessionBlocked(this.options.store, groupId, sessionId, blocker)
+            await this.controller.record(groupId, 'session.blocked', sessionId, waveId, blocker)
+          }
+        }
+      }))
+    }
+    return launches
   }
 
   async submitDelivery(delivery: DevelopmentDelivery): Promise<DevelopmentSessionRuntime> {
@@ -139,6 +206,7 @@ export class DevelopmentGroupRuntimeFacade {
 
   async integrateDelivery(groupId: string, sessionId: string): Promise<IntegrationMilestone> {
     const snapshot = await this.snapshot(groupId)
+    if (snapshot.state.outcomeUnknownCount > 0) throw new Error('Development Group has unresolved OutcomeUnknown and cannot integrate')
     const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
     const delivery = snapshot.records.deliveries.find(candidate => candidate.sessionId === sessionId)
     if (!session || !delivery) throw new Error(`missing Session or Delivery for ${sessionId}`)
@@ -147,9 +215,7 @@ export class DevelopmentGroupRuntimeFacade {
     const initialIntegratedSessionIds = [...mergedSessionIds(snapshot.records)]
     if (queue.ready(new Set(initialIntegratedSessionIds)).length === 0) throw new Error(`Delivery ${delivery.deliveryHash} is not dependency-ready for integration`)
 
-    const verifier = {
-      verify: async () => this.options.deliveryVerifier.verify(session, delivery)
-    }
+    const verifier = { verify: async () => this.options.deliveryVerifier.verify(session, delivery) }
     const integration = new IntegrationController(queue, this.options.integrationGit, verifier, this.options.store, {
       integrationRef: session.integrationRef,
       initialIntegratedSessionIds,
@@ -172,6 +238,7 @@ export class DevelopmentGroupRuntimeFacade {
 
   async runVerification(groupId: string, verificationRunId?: string): Promise<VerificationRun> {
     const snapshot = await this.snapshot(groupId)
+    if (snapshot.state.outcomeUnknownCount > 0) throw new Error('Development Group has unresolved OutcomeUnknown and cannot verify')
     const finalSha = snapshot.state.integrationSha ?? snapshot.records.integrations.filter(record => record.status === 'merged').at(-1)?.headSha
     if (!finalSha) throw new Error('verification requires a merged integration SHA')
     const commands = await this.options.verificationCommands.commands(snapshot.plan.definition)
