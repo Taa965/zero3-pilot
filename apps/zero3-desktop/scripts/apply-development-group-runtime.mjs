@@ -72,8 +72,8 @@ ipcMain.handle('zero3:development-groups:session:permission', (_event, request: 
 ipcMain.handle('zero3:development-groups:session:cancel', (_event, request: { groupId: string; sessionId: string }) =>
   zero3DevelopmentGroups.cancelSession(request.groupId, request.sessionId)
 )
-ipcMain.handle('zero3:development-groups:delivery:accept', (_event, request: unknown) =>
-  zero3DevelopmentGroups.acceptDelivery(request as never)
+ipcMain.handle('zero3:development-groups:delivery:finalize', (_event, request: unknown) =>
+  zero3DevelopmentGroups.finalizeDelivery(request as never)
 )
 ipcMain.handle('zero3:development-groups:integrate', (_event, groupId: string) => zero3DevelopmentGroups.integrate(groupId))
 ipcMain.handle('zero3:development-groups:verify', (_event, groupId: string) => zero3DevelopmentGroups.verify(groupId))
@@ -86,7 +86,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Developme
   startSession: request => ipcRenderer.invoke('zero3:development-groups:session:start', request),
   respondPermission: request => ipcRenderer.invoke('zero3:development-groups:session:permission', request),
   cancelSession: request => ipcRenderer.invoke('zero3:development-groups:session:cancel', request),
-  acceptDelivery: request => ipcRenderer.invoke('zero3:development-groups:delivery:accept', request),
+  finalizeDelivery: request => ipcRenderer.invoke('zero3:development-groups:delivery:finalize', request),
   integrate: groupId => ipcRenderer.invoke('zero3:development-groups:integrate', groupId),
   verify: groupId => ipcRenderer.invoke('zero3:development-groups:verify', groupId),
   onEvent: callback => {
@@ -105,7 +105,7 @@ const globalBridge = String.raw`    zero3DevelopmentGroups: {
       startSession: (request: { groupId: string; sessionId: string }) => Promise<any>
       respondPermission: (request: { groupId: string; sessionId: string; response: { requestId: string; decision: 'approve_once' | 'approve_session' | 'deny' } }) => Promise<void>
       cancelSession: (request: { groupId: string; sessionId: string }) => Promise<void>
-      acceptDelivery: (request: any) => Promise<{ accepted: boolean; gate: { decision: string; reasons: string[] } }>
+      finalizeDelivery: (request: { groupId: string; sessionId: string; testsAdded?: string[]; testsExecuted?: string[]; artifacts?: string[]; knownIssues?: string[]; downstreamNotes?: string[] }) => Promise<{ accepted: boolean; gate: { decision: string; reasons: string[] }; handoffCheckpointHash?: string }>
       integrate: (groupId: string) => Promise<any[]>
       verify: (groupId: string) => Promise<any>
       onEvent: (callback: (event: any) => void) => () => void
