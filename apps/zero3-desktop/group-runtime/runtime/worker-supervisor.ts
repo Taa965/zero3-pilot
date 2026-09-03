@@ -28,19 +28,18 @@ export class DevelopmentGroupWorkerSupervisor {
     const before = input.runner.snapshot()
     if (before.status !== 'running') throw new Error(`supervised prompt requires running Session; got ${before.status}`)
 
-    const job = input.runner.sendInitialInstruction(input.clientRequestId)
-      .then(async runtime => {
-        await input.afterSettled?.(runtime)
-      })
-      .catch(async error => {
+    const prompt = input.runner.sendInitialInstruction(input.clientRequestId)
+    const job = prompt.then(
+      async runtime => { await input.afterSettled?.(runtime) },
+      async error => {
         const current = input.runner.snapshot()
         if (!['outcome_unknown', 'failed', 'blocked', 'cancelled'].includes(current.status)) {
           await input.runner.markOutcomeUnknown(`supervisor_prompt_exception: ${String(error)}`)
         }
-      })
-      .finally(() => {
-        if (this.#active.get(sessionId) === job) this.#active.delete(sessionId)
-      })
+      }
+    ).finally(() => {
+      if (this.#active.get(sessionId) === job) this.#active.delete(sessionId)
+    })
     this.#active.set(sessionId, job)
     return { sessionId, runtime: before, active: true }
   }
