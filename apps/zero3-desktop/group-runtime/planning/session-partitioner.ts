@@ -1,4 +1,5 @@
 import type { DevelopmentRequirement } from '../contracts/index.ts'
+import { normalizePlanningPathScope, planningScopeOverlapScore } from './path-scope.ts'
 import type { PlanningModuleHint } from './planning-types.ts'
 
 export interface SessionPartitionPolicy {
@@ -25,17 +26,10 @@ function positive(value: number, name: string): number {
   return value
 }
 
-function overlap(a: Set<string>, b: readonly string[]): number {
+function exactOverlap(a: Set<string>, b: readonly string[]): number {
   let score = 0
   for (const value of b) if (a.has(value)) score += 1
   return score
-}
-
-function modulePrefix(path: string): string {
-  const normalized = path.replaceAll('\\', '/').replace(/^\.\//, '')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.length <= 1) return normalized
-  return parts.slice(0, Math.min(parts.length, 3)).join('/')
 }
 
 export function partitionRequirements(
@@ -62,7 +56,7 @@ export function partitionRequirements(
   const ordered = [...requirements].sort((left, right) => left.requirementId.localeCompare(right.requirementId))
   for (const requirement of ordered) {
     const hint = hintByRequirement.get(requirement.requirementId)
-    const pathHints = [...new Set((hint?.pathHints ?? []).map(modulePrefix).filter(Boolean))]
+    const pathHints = [...new Set((hint?.pathHints ?? []).map(normalizePlanningPathScope).filter(Boolean))]
     const tags = [...new Set((hint?.tags ?? []).map(value => value.trim()).filter(Boolean))]
 
     let selected = 0
@@ -70,7 +64,7 @@ export function partitionRequirements(
     for (let index = 0; index < partitions.length; index += 1) {
       const partition = partitions[index]
       if (partition.requirementIds.length >= hardCapacity && partitions.some(candidate => candidate.requirementIds.length < hardCapacity)) continue
-      let score = overlap(partition.pathHints, pathHints) * 8 + overlap(partition.tags, tags) * 4
+      let score = planningScopeOverlapScore(partition.pathHints, pathHints) * 8 + exactOverlap(partition.tags, tags) * 4
       for (const dependency of requirement.dependencies) {
         if (ownerByRequirement.get(dependency) === index) score += 5
       }
