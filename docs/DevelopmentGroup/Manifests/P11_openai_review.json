@@ -1,0 +1,22 @@
+{
+  "session": "P11",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "382c4ced5f9b765545e71776468de32fa6f4f237",
+  "branch": "parallel/dg-p11-openai-review",
+  "implementation_head": "029b39e757271936cf435d8ae6820fb239711559",
+  "owned_paths": ["plugins/zero3-development-group/**"],
+  "delivered": [
+    ".codex-plugin/plugin.json",
+    "bounded Development Group Skill",
+    "minimal review-facing MCP tool contract",
+    "OpenAI review-readiness checklist",
+    "five positive and three negative review test specifications"
+  ],
+  "tests_run": ["static package/review-contract review"],
+  "not_run": ["production plugin install", "public MCP tool scan", "5+3 production review tests", "OpenAI public submission/review"],
+  "not_implemented": ["production public HTTPS MCP server for the review-facing contract"],
+  "c1_modified": false,
+  "public_submission_status": "NOT_READY_FOR_PUBLIC_SUBMISSION",
+  "known_risks": ["publisher/legal/production endpoint evidence must not be inferred from repository files"],
+  "p99_wiring": ["keep first public surface narrower than internal Zero3 control plane"]
+}
