@@ -66,6 +66,9 @@ ipcMain.handle('zero3:development-groups:create', (_event, request: unknown) => 
 ipcMain.handle('zero3:development-groups:session:start', (_event, request: { groupId: string; sessionId: string }) =>
   zero3DevelopmentGroups.startSession(request.groupId, request.sessionId)
 )
+ipcMain.handle('zero3:development-groups:session:retry', (_event, request: { groupId: string; sessionId: string }) =>
+  zero3DevelopmentGroups.retrySession(request.groupId, request.sessionId)
+)
 ipcMain.handle('zero3:development-groups:session:permission', (_event, request: { groupId: string; sessionId: string; response: never }) =>
   zero3DevelopmentGroups.respondPermission(request.groupId, request.sessionId, request.response)
 )
@@ -84,6 +87,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Developme
   get: groupId => ipcRenderer.invoke('zero3:development-groups:get', groupId),
   create: request => ipcRenderer.invoke('zero3:development-groups:create', request),
   startSession: request => ipcRenderer.invoke('zero3:development-groups:session:start', request),
+  retrySession: request => ipcRenderer.invoke('zero3:development-groups:session:retry', request),
   respondPermission: request => ipcRenderer.invoke('zero3:development-groups:session:permission', request),
   cancelSession: request => ipcRenderer.invoke('zero3:development-groups:session:cancel', request),
   finalizeDelivery: request => ipcRenderer.invoke('zero3:development-groups:delivery:finalize', request),
@@ -103,6 +107,7 @@ const globalBridge = String.raw`    zero3DevelopmentGroups: {
       get: (groupId: string) => Promise<any>
       create: (request: any) => Promise<any>
       startSession: (request: { groupId: string; sessionId: string }) => Promise<any>
+      retrySession: (request: { groupId: string; sessionId: string }) => Promise<any>
       respondPermission: (request: { groupId: string; sessionId: string; response: { requestId: string; decision: 'approve_once' | 'approve_session' | 'deny' } }) => Promise<void>
       cancelSession: (request: { groupId: string; sessionId: string }) => Promise<void>
       finalizeDelivery: (request: { groupId: string; sessionId: string; testsAdded?: string[]; testsExecuted?: string[]; artifacts?: string[]; knownIssues?: string[]; downstreamNotes?: string[] }) => Promise<{ accepted: boolean; gate: { decision: string; reasons: string[] }; handoffCheckpointHash?: string }>
