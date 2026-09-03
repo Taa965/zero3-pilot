@@ -1,0 +1,33 @@
+{
+  "name": "zero3-development-group",
+  "version": "0.1.0",
+  "description": "Persistent, evidence-gated development orchestration for coding projects.",
+  "author": {
+    "name": "Zero3 Pilot"
+  },
+  "repository": "https://github.com/Taa965/zero3-pilot",
+  "license": "Apache-2.0",
+  "keywords": [
+    "development",
+    "orchestration",
+    "verification",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Zero3 Development Group",
+    "shortDescription": "Persistent, evidence-gated coding orchestration",
+    "longDescription": "Plan coding work into bounded development sessions, coordinate dependency waves, verify deliveries and integrations, and produce fail-closed completion evidence.",
+    "developerName": "Zero3 Pilot",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use Zero3 Development Group to plan this coding goal into bounded development sessions.",
+      "Review the current Development Group and tell me what is blocking completion.",
+      "Show me the evidence required before this Development Group can be marked complete."
+    ]
+  }
+}
