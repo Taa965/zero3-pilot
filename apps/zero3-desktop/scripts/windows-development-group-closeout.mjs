@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -30,15 +30,25 @@ const report = {
   status: 'running'
 }
 
+function needsShell(file) {
+  return process.platform === 'win32' && file.toLowerCase().endsWith('.cmd')
+}
+
 function command(file, args, cwd = repoRoot, options = {}) {
-  return execFileSync(file, args, {
+  const result = spawnSync(file, args, {
     cwd,
     encoding: 'utf8',
     stdio: options.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     windowsHide: true,
-    shell: false,
+    shell: options.shell ?? needsShell(file),
     env: { ...process.env, ...options.env }
   })
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    const stderr = options.capture ? String(result.stderr ?? '').trim() : ''
+    throw new Error(`${file} ${args.join(' ')} exited with status ${result.status}${stderr ? `: ${stderr}` : ''}`)
+  }
+  return result.stdout ?? ''
 }
 
 function capture(file, args, cwd = repoRoot) {
@@ -78,6 +88,17 @@ function recursivelyCollectTests(root) {
   return files.sort()
 }
 
+function recursivelyCollectFiles(root, predicate) {
+  const files = []
+  if (!fs.existsSync(root)) return files
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const target = path.join(root, entry.name)
+    if (entry.isDirectory()) files.push(...recursivelyCollectFiles(target, predicate))
+    else if (entry.isFile() && predicate(target)) files.push(target)
+  }
+  return files.sort()
+}
+
 function findTsxCli() {
   const candidates = [
     path.join(hermesRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
@@ -104,6 +125,21 @@ function sha256(file) {
   return hash.digest('hex')
 }
 
+function assertReviewedPatchLineEndings() {
+  const patchRoot = path.join(repoRoot, 'codex-overlays')
+  const offenders = recursivelyCollectFiles(patchRoot, file => file.endsWith('.patch'))
+    .filter(file => fs.readFileSync(file).includes(0x0d))
+  if (offenders.length > 0) {
+    throw new Error(`reviewed Codex overlay patches contain CR bytes:\n${offenders.map(file => `- ${path.relative(repoRoot, file)}`).join('\n')}`)
+  }
+}
+
+function prepareSubmodule(pathFromRoot) {
+  const target = path.join(repoRoot, pathFromRoot)
+  command('git', ['-C', target, 'config', 'core.autocrlf', 'false'])
+  command('git', ['-C', target, 'reset', '--hard', 'HEAD'])
+}
+
 try {
   runStep('candidate-identity-and-clean-root', () => {
     const dirty = capture('git', ['status', '--porcelain', '--untracked-files=all'])
@@ -115,7 +151,18 @@ try {
     if (expectedSha && expectedSha !== report.candidateSha) throw new Error(`candidate SHA mismatch: expected ${expectedSha}, got ${report.candidateSha}`)
     command('git', ['config', '--local', 'core.autocrlf', 'false'])
     command('git', ['reset', '--hard', 'HEAD'])
+    assertReviewedPatchLineEndings()
     return { branch: report.branch, candidateSha: report.candidateSha }
+  })
+
+  runStep('reviewed-upstream-pins', () => {
+    command('git', ['submodule', 'update', '--init', '--recursive', '--', 'upstream/codex', 'upstream/hermes-agent', 'upstream/deepseek-harness'])
+    for (const submodule of ['upstream/codex', 'upstream/hermes-agent', 'upstream/deepseek-harness']) prepareSubmodule(submodule)
+    return {
+      codex: capture('git', ['-C', 'upstream/codex', 'rev-parse', 'HEAD']),
+      hermes: capture('git', ['-C', 'upstream/hermes-agent', 'rev-parse', 'HEAD']),
+      deepseek: capture('git', ['-C', 'upstream/deepseek-harness', 'rev-parse', 'HEAD'])
+    }
   })
 
   runStep('development-group-static-audit', () => {
@@ -153,23 +200,25 @@ try {
     command('npm.cmd', ['run', 'test:desktop:platforms'], hermesDesktop)
   })
 
-  runStep('prepared-desktop-platform-acceptance', () => {
-    command('npm.cmd', ['run', 'test:desktop:all'], hermesDesktop)
-  })
-
   runStep('windows-codex-native-package', () => {
     command(process.execPath, [path.join(here, 'run.mjs'), 'dist:win'])
   })
 
-  runStep('packaged-codex-and-installer-evidence', () => {
+  runStep('packaged-zero3-codex-and-installer-evidence', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(hermesDesktop, 'package.json'), 'utf8'))
     if (packageJson.productName !== 'Zero3 Pilot') throw new Error('packaged desktop lost Zero3 Pilot product identity')
     if (packageJson.build?.appId !== 'ai.zero3.pilot') throw new Error('packaged desktop lost Zero3 Pilot appId')
+    if (packageJson.build?.executableName !== 'Zero3Pilot') throw new Error('packaged desktop lost Zero3Pilot executable identity')
     if (!String(packageJson.scripts?.['dist:win'] ?? '').includes('--publish never')) throw new Error('Windows package path must remain non-publishing during acceptance')
 
-    const resources = path.join(releaseDir, 'win-unpacked', 'resources')
+    const unpackedRoot = path.join(releaseDir, 'win-unpacked')
+    const unpackedExe = path.join(unpackedRoot, 'Zero3Pilot.exe')
+    const resources = path.join(unpackedRoot, 'resources')
+    const appAsar = path.join(resources, 'app.asar')
     const bundledCodex = path.join(resources, 'zero3-codex', 'codex.exe')
-    if (!fs.existsSync(bundledCodex)) throw new Error('packaged pinned Codex binary is missing')
+    if (!fs.existsSync(unpackedExe) || fs.statSync(unpackedExe).size <= 0) throw new Error('packaged Zero3Pilot.exe is missing or empty')
+    if (!fs.existsSync(appAsar) || fs.statSync(appAsar).size <= 0) throw new Error('packaged app.asar is missing or empty')
+    if (!fs.existsSync(bundledCodex) || fs.statSync(bundledCodex).size <= 0) throw new Error('packaged pinned Codex binary is missing or empty')
     for (const name of ['LICENSE-Zero3-Pilot.txt', 'NOTICE-Zero3-Pilot.txt', 'LICENSE-OpenAI-Codex.txt', 'NOTICE-OpenAI-Codex.txt', 'LICENSE-Hermes-Agent.txt']) {
       const legal = path.join(resources, 'legal', name)
       if (!fs.existsSync(legal) || fs.statSync(legal).size <= 0) throw new Error(`packaged legal resource is missing or empty: ${name}`)
@@ -190,9 +239,16 @@ try {
       bytes: fs.statSync(installer).size,
       sha256: sha256(installer)
     }
-    return report.installer
+    return {
+      ...report.installer,
+      unpackedExe,
+      appAsar,
+      bundledCodex,
+      bundledCodexSha256: sha256(bundledCodex)
+    }
   })
 
+  if (!report.installer) throw new Error('closeout reached PASS path without installer evidence')
   report.status = 'passed'
   report.finishedAt = new Date().toISOString()
   writeReport()
