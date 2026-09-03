@@ -1,17 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { access, readdir } from 'node:fs/promises'
+import { access, readFile, readdir } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 import { Zero3ExecutorManager } from '../../executor-runtime/executor-manager.ts'
 import { Zero3ExecutorRegistry } from '../../executor-runtime/executor-registry.ts'
 import type { ExecutorEvent, ExecutorPermissionResponse } from '../../executor-runtime/executor-types.ts'
+import { buildHandoffCheckpoint } from '../../executor-runtime/handoff/handoff-builder.ts'
+import type { Zero3HandoffCheckpointV1 } from '../../executor-runtime/handoff/handoff-types.ts'
 import { NativeCodexAppServerDriver, type NativeCodexAppServerTransport } from '../../executor-runtime/native/native-app-server-driver.ts'
 import { NativeCodexExecutor } from '../../executor-runtime/native/native-codex-executor.ts'
-import type { Zero3HandoffCheckpointV1 } from '../../executor-runtime/handoff/handoff-types.ts'
 import { assertGroupCompletable, buildCompletionProof } from '../completion/index.ts'
 import {
+  ZERO3_DEVELOPMENT_DELIVERY_CONTRACT,
   validateSessionStateTransition,
   type DevelopmentDelivery,
   type DevelopmentGroupPolicy,
@@ -27,10 +29,11 @@ import {
 import { DevelopmentGroupController } from '../controller/index.ts'
 import { IntegrationController, IntegrationGitAdapter, IntegrationQueue } from '../integration/index.ts'
 import type { RequirementProposal } from '../planning/index.ts'
-import { readDurableJson, writeDurableJson, DevelopmentGroupStore } from '../store/index.ts'
+import { DevelopmentSessionRunner } from '../session/index.ts'
+import { DevelopmentGroupStore, readDurableJson, writeDurableJson } from '../store/index.ts'
 import { buildDevelopmentGroupViewModel, type DevelopmentGroupViewModel } from '../ui/index.ts'
 import { executeVerification, type VerificationCommandExecutor, type VerificationPlatform } from '../verification/index.ts'
-import { GitWorkspaceAdapter, verifyDevelopmentDelivery, type DeliveryGateResult } from '../workspace/index.ts'
+import { computeDeliveryHash, GitWorkspaceAdapter, verifyDevelopmentDelivery, type DeliveryGateResult } from '../workspace/index.ts'
 
 const execFileAsync = promisify(execFile)
 const PRODUCT_RECORD_SCHEMA = 'zero3.pilot.development-group-product.v1' as const
@@ -85,15 +88,21 @@ export interface DevelopmentGroupProductSnapshot {
   verificationPolicy: { revision: string; mandatoryTests: readonly string[] }
 }
 
-export interface AcceptDeliveryInput {
+export interface FinalizeDeliveryInput {
   groupId: string
-  delivery: DevelopmentDelivery
-  handoff: Zero3HandoffCheckpointV1
+  sessionId: string
+  testsAdded?: readonly string[]
+  testsExecuted?: readonly string[]
+  artifacts?: readonly string[]
+  knownIssues?: readonly string[]
+  downstreamNotes?: readonly string[]
 }
 
-export interface AcceptDeliveryResult {
+export interface FinalizeDeliveryResult {
   accepted: boolean
   gate: DeliveryGateResult
+  delivery?: DevelopmentDelivery
+  handoffCheckpointHash?: string
 }
 
 function assertNonEmpty(value: string, label: string, max = 16_384): string {
@@ -106,6 +115,12 @@ function boundedPositiveInt(value: number | undefined, fallback: number, max: nu
   if (value == null) return fallback
   if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`value must be an integer between 1 and ${max}`)
   return value
+}
+
+function boundedStrings(values: readonly string[] | undefined, label: string, maxItems = 256): string[] {
+  const items = (values ?? []).map((value, index) => assertNonEmpty(value, `${label}[${index}]`, 8192))
+  if (items.length > maxItems) throw new Error(`${label} exceeds ${maxItems} items`)
+  return [...new Set(items)]
 }
 
 function platformName(): VerificationPlatform {
@@ -158,8 +173,7 @@ async function readRecords<T>(directory: string, predicate: (name: string) => bo
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw error
   }
-  const selected = names.filter(predicate).sort()
-  return Promise.all(selected.map(name => readDurableJson<T>(join(directory, name))))
+  return Promise.all(names.filter(predicate).sort().map(name => readDurableJson<T>(join(directory, name))))
 }
 
 function parseArgv(command: string): readonly string[] {
@@ -181,11 +195,9 @@ class ShelllessVerificationExecutor implements VerificationCommandExecutor {
 
   async run(command: VerificationCommand): Promise<{ exitCode: number; evidence: readonly string[] }> {
     const argv = parseArgv(command.command)
-    const executable = argv[0]
-    const args = argv.slice(1)
     const cwd = command.cwd ? resolveInside(this.repositoryRoot, command.cwd) : this.repositoryRoot
     try {
-      const result = await execFileAsync(executable, [...args], {
+      const result = await execFileAsync(argv[0], [...argv.slice(1)], {
         cwd,
         encoding: 'utf8',
         windowsHide: true,
@@ -206,7 +218,12 @@ class ShelllessVerificationExecutor implements VerificationCommandExecutor {
 
 async function loadVerificationPolicy(repositoryRoot: string): Promise<{ policy: ProductVerificationPolicy; hash: string }> {
   const file = join(repositoryRoot, '.zero3', 'verification-policy.json')
-  const policy = await readDurableJson<ProductVerificationPolicy>(file)
+  let policy: ProductVerificationPolicy
+  try {
+    policy = JSON.parse(await readFile(file, 'utf8')) as ProductVerificationPolicy
+  } catch (error) {
+    throw new Error(`cannot read frozen verification policy ${file}: ${String(error)}`)
+  }
   if (policy.schema !== VERIFICATION_POLICY_SCHEMA) throw new Error(`unsupported verification policy schema in ${file}`)
   assertNonEmpty(policy.revision, 'verification policy revision', 256)
   if (!Array.isArray(policy.commands) || policy.commands.length === 0) throw new Error('verification policy commands are required')
@@ -245,10 +262,23 @@ function requirementProposal(input: ProductRequirementInput, index: number): Req
     mandatory: input.mandatory ?? true,
     acceptanceCriteria,
     sourceAnchor: `product:create#requirement-${index + 1}`,
-    dependencies: [...(input.dependencies ?? [])],
-    pathHints: [...(input.pathHints ?? [])],
-    tags: [...(input.tags ?? [])]
+    dependencies: boundedStrings(input.dependencies, `requirements[${index}].dependencies`),
+    pathHints: boundedStrings(input.pathHints, `requirements[${index}].pathHints`),
+    tags: boundedStrings(input.tags, `requirements[${index}].tags`)
   }
+}
+
+function handoffConstraints(session: DevelopmentSessionDefinition): string[] {
+  return [
+    `baseline=${session.baselineSha}`,
+    `integration_ref=${session.integrationRef}`,
+    ...session.ownedPaths.map(path => `owned:${path}`),
+    ...session.readOnlyPaths.map(path => `read_only:${path}`),
+    ...session.forbiddenPaths.map(path => `forbidden:${path}`),
+    'delivery_contract=zero3.pilot.development-delivery.v1',
+    `subagent_max=${session.subagentPolicy.maxConcurrency}`,
+    'recursive_group_creation=false'
+  ]
 }
 
 export class DevelopmentGroupProductService {
@@ -256,7 +286,7 @@ export class DevelopmentGroupProductService {
   readonly controller: DevelopmentGroupController
   readonly executorManager: Zero3ExecutorManager
   readonly #listeners = new Set<(event: DevelopmentGroupProductEvent) => void>()
-  readonly #runners = new Map<string, Awaited<ReturnType<DevelopmentGroupController['sessionRunner']>>>()
+  readonly #runners = new Map<string, DevelopmentSessionRunner>()
   readonly #activeTasks = new Map<string, Promise<void>>()
   readonly #reconciled = new Set<string>()
 
@@ -381,28 +411,34 @@ export class DevelopmentGroupProductService {
     const plan = await this.controller.loadPlan(groupId)
     const session = plan.sessions.find(candidate => candidate.sessionId === sessionId)
     if (!session) throw new Error(`unknown Development Session ${sessionId}`)
-    const repositoryRoot = plan.definition.repository
-    const runtimeSession = absoluteSession(repositoryRoot, session)
-    const runtime = await this.store.loadSession(groupId, sessionId)
-    if (runtime.status === 'waiting_dependencies') {
-      const dependencies = await Promise.all(session.dependencies.map(id => this.store.loadSession(groupId, id)))
-      if (dependencies.some(item => !['delivered', 'integrating', 'integrated', 'verified'].includes(item.status))) {
-        throw new Error('Development Session dependencies have not produced integration-eligible evidence')
-      }
-    }
-    const activeCount = (await Promise.all(plan.sessions.map(item => this.store.loadSession(groupId, item.sessionId))))
-      .filter(item => ['starting', 'running', 'waiting_input'].includes(item.status)).length
-    if (activeCount >= plan.definition.policy.maxParallelSessions) throw new Error('Development Group parallel Session budget is full')
+    const runtimeSession = absoluteSession(plan.definition.repository, session)
+    let runtime = await this.store.loadSession(groupId, sessionId)
 
-    const worktreeGit = new GitWorkspaceAdapter(repositoryRoot)
+    const [runtimes, deliveries, integrations] = await Promise.all([
+      Promise.all(plan.sessions.map(item => this.store.loadSession(groupId, item.sessionId))),
+      readRecords<DevelopmentDelivery>(join(this.store.groupDir(groupId), 'deliveries'), name => name.endsWith('.json') && !name.endsWith('.handoff.json')),
+      readRecords<IntegrationMilestone>(join(this.store.groupDir(groupId), 'integration'))
+    ])
+    const acceptedDeliverySessions = new Set(deliveries.map(delivery => delivery.sessionId))
+    const integratedSessions = new Set(integrations.filter(record => record.status === 'merged').flatMap(record => record.mergedSessionIds))
+    const waveEvidence = new Map(plan.waves.map(wave => [wave.waveId, {
+      waveId: wave.waveId,
+      integrationValid: wave.requiredSessionIds.every(id => integratedSessions.has(id)),
+      requiredDeliveriesValid: wave.requiredSessionIds.every(id => acceptedDeliverySessions.has(id)),
+      ownershipValid: wave.requiredSessionIds.every(id => acceptedDeliverySessions.has(id))
+    }] as const))
+    const runningSessionCount = runtimes.filter(item => ACTIVE_RUNTIME_STATES.has(item.status)).length
+    const schedule = await this.controller.schedule(groupId, waveEvidence, runningSessionCount)
+    if (!schedule.readySessionIds.includes(sessionId)) throw new Error(`Development Session ${sessionId} is not scheduler-ready`)
+
+    const repositoryGit = new GitWorkspaceAdapter(plan.definition.repository)
     if (!(await exists(runtimeSession.worktree))) {
-      await worktreeGit.createSessionWorktree(runtimeSession.worktree, session.branch, session.baselineSha)
+      await repositoryGit.createSessionWorktree(runtimeSession.worktree, session.branch, session.baselineSha)
     }
-    const runner = await this.controller.sessionRunner(groupId, sessionId, this.executorManager)
-    const runtimeRunner = new (runner.constructor as typeof runner.constructor)(
-      runner.group,
+    const runner = new DevelopmentSessionRunner(
+      plan.definition,
       runtimeSession,
-      runner.requirements,
+      plan.requirements,
       this.executorManager,
       { save: next => this.store.writeSession(next) },
       {
@@ -412,12 +448,16 @@ export class DevelopmentGroupProductService {
         }
       },
       runtime
-    ) as typeof runner
-    this.#runners.set(key, runtimeRunner)
-    if (runtimeRunner.snapshot().status === 'waiting_dependencies') await runtimeRunner.markReady()
-    await runtimeRunner.start()
+    )
+    this.#runners.set(key, runner)
+    if (runtime.status === 'waiting_dependencies' || runtime.status === 'blocked') {
+      await runner.markReady()
+      runtime = runner.snapshot()
+    }
+    await this.controller.record(groupId, 'wave.started', undefined, session.waveId)
+    await runner.start()
     await this.controller.record(groupId, 'session.started', sessionId, session.waveId)
-    const task = runtimeRunner.sendInitialInstruction(`dg:${groupId}:${sessionId}:${randomUUID()}`)
+    const task = runner.sendInitialInstruction(`dg:${groupId}:${sessionId}:${randomUUID()}`)
       .then(() => undefined)
       .catch(error => {
         this.emit({ type: 'runtime.error', groupId, sessionId, detail: error instanceof Error ? error.message : String(error) })
@@ -428,7 +468,7 @@ export class DevelopmentGroupProductService {
       })
     this.#activeTasks.set(key, task)
     this.emit({ type: 'group.changed', groupId, sessionId, detail: 'started' })
-    return runtimeRunner.snapshot()
+    return runner.snapshot()
   }
 
   async respondPermission(groupId: string, sessionId: string, response: ExecutorPermissionResponse): Promise<void> {
@@ -451,33 +491,92 @@ export class DevelopmentGroupProductService {
     this.emit({ type: 'group.changed', groupId, sessionId, detail: 'cancelled' })
   }
 
-  async acceptDelivery(input: AcceptDeliveryInput): Promise<AcceptDeliveryResult> {
+  async finalizeDelivery(input: FinalizeDeliveryInput): Promise<FinalizeDeliveryResult> {
     const plan = await this.controller.loadPlan(input.groupId)
-    const session = plan.sessions.find(candidate => candidate.sessionId === input.delivery.sessionId)
-    if (!session) throw new Error(`unknown Development Session ${input.delivery.sessionId}`)
+    const session = plan.sessions.find(candidate => candidate.sessionId === input.sessionId)
+    if (!session) throw new Error(`unknown Development Session ${input.sessionId}`)
+    const runtime = await this.store.loadSession(input.groupId, input.sessionId)
+    if (runtime.status !== 'delivering') throw new Error(`Delivery can be finalized only from delivering; got ${runtime.status}`)
+    if (!runtime.executorId || !runtime.executorSessionId || !runtime.executorGeneration) throw new Error('Session executor identity is incomplete')
+
     const runtimeSession = absoluteSession(plan.definition.repository, session)
+    const git = new GitWorkspaceAdapter(runtimeSession.worktree)
+    const [headSha, branch, changedPaths, status] = await Promise.all([
+      git.resolveHead(),
+      git.currentBranch(),
+      git.changedPaths(session.baselineSha, await git.resolveHead()),
+      git.status()
+    ])
+    if (branch !== session.branch) throw new Error(`Session worktree branch mismatch: expected ${session.branch}, got ${branch}`)
+    if (headSha === session.baselineSha) throw new Error('Session has no committed change relative to the frozen baseline')
+    if (status.length > 0) throw new Error('Session worktree must be clean before Delivery finalization; commit or discard pending changes first')
+
+    const testsAdded = boundedStrings(input.testsAdded, 'testsAdded')
+    const testsExecuted = boundedStrings(input.testsExecuted, 'testsExecuted')
+    const artifacts = boundedStrings(input.artifacts, 'artifacts')
+    const knownIssues = boundedStrings(input.knownIssues, 'knownIssues')
+    const downstreamNotes = boundedStrings(input.downstreamNotes, 'downstreamNotes')
+    const checkpoint = await buildHandoffCheckpoint({
+      taskId: `${input.groupId}:${session.sessionId}`,
+      executionId: session.executionId,
+      workspace: runtimeSession.worktree,
+      repoId: plan.definition.repository,
+      baseSha: session.baselineSha,
+      objective: session.objective,
+      constraints: handoffConstraints(session),
+      acceptanceCriteria: session.acceptanceCriteria,
+      completed: session.requirements.map(id => `requirement:${id}`),
+      inProgress: [],
+      remaining: knownIssues,
+      testsRun: testsExecuted,
+      testResults: testsExecuted.map(name => ({ name, status: 'unknown' as const, detail: 'Delivery-reported; final VerificationRun is authoritative.' })),
+      pendingApprovals: [],
+      lastExecutor: runtime.executorId,
+      lastSessionId: runtime.executorSessionId,
+      stopReason: 'development_delivery',
+      nextAction: 'delivery_gate_then_controlled_integration',
+      previousGeneration: Math.max(0, runtime.executorGeneration - 1)
+    })
+    const unsigned: DevelopmentDelivery = {
+      contract: ZERO3_DEVELOPMENT_DELIVERY_CONTRACT,
+      groupId: input.groupId,
+      sessionId: session.sessionId,
+      executionId: session.executionId,
+      status: 'completed',
+      baseSha: session.baselineSha,
+      headSha,
+      changedPaths: [...changedPaths],
+      requirements: [...session.requirements],
+      testsAdded,
+      testsExecuted,
+      artifacts,
+      knownIssues,
+      downstreamNotes,
+      handoffCheckpoint: checkpoint.checkpoint_hash,
+      deliveryHash: '',
+      createdAt: new Date().toISOString()
+    }
+    const delivery: DevelopmentDelivery = { ...unsigned, deliveryHash: computeDeliveryHash(unsigned) }
     const gate = await verifyDevelopmentDelivery({
-      delivery: input.delivery,
+      delivery,
       session: runtimeSession,
-      git: new GitWorkspaceAdapter(runtimeSession.worktree),
-      handoff: { checkpoint: input.handoff }
+      git,
+      handoff: { checkpoint }
     })
     if (gate.decision !== 'DELIVERY_ACCEPT') return { accepted: false, gate }
     await Promise.all([
-      this.store.writeDelivery(input.delivery),
-      writeDurableJson(handoffPath(this.store, input.groupId, session.sessionId), input.handoff)
+      this.store.writeDelivery(delivery),
+      writeDurableJson(handoffPath(this.store, input.groupId, session.sessionId), checkpoint)
     ])
-    const runtime = await this.store.loadSession(input.groupId, session.sessionId)
-    if (runtime.status !== 'delivering') throw new Error(`accepted Delivery requires Session status delivering; got ${runtime.status}`)
-    await this.writeSessionStatus(runtime, 'delivered', { headSha: input.delivery.headSha, blocker: undefined })
-    await this.controller.record(input.groupId, 'session.delivered', session.sessionId, session.waveId, input.delivery.deliveryHash)
+    await this.writeSessionStatus(runtime, 'delivered', { headSha: delivery.headSha, blocker: undefined })
+    await this.controller.record(input.groupId, 'session.delivered', session.sessionId, session.waveId, delivery.deliveryHash)
     const runner = this.#runners.get(`${input.groupId}:${session.sessionId}`)
     if (runner) {
       await runner.close().catch(() => undefined)
       this.#runners.delete(`${input.groupId}:${session.sessionId}`)
     }
     this.emit({ type: 'group.changed', groupId: input.groupId, sessionId: session.sessionId, detail: 'delivery.accepted' })
-    return { accepted: true, gate }
+    return { accepted: true, gate, delivery, handoffCheckpointHash: checkpoint.checkpoint_hash }
   }
 
   async integrate(groupId: string): Promise<readonly IntegrationMilestone[]> {
@@ -531,10 +630,17 @@ export class DevelopmentGroupProductService {
   async verify(groupId: string): Promise<{ verification: VerificationRun; completion?: GroupCompletionProof; completionIssues: readonly string[] }> {
     const plan = await this.controller.loadPlan(groupId)
     const product = await readDurableJson<ProductRecord>(productRecordPath(this.store, groupId))
+    const runtimes = await Promise.all(plan.sessions.map(session => this.store.loadSession(groupId, session.sessionId)))
+    const incomplete = runtimes.filter(runtime => runtime.status !== 'integrated' && runtime.status !== 'verified')
+    if (incomplete.length > 0) throw new Error(`final verification requires every Session integrated: ${incomplete.map(runtime => `${runtime.sessionId}=${runtime.status}`).join(', ')}`)
+
     const currentPolicy = await loadVerificationPolicy(product.repositoryRoot)
     if (currentPolicy.hash !== product.verificationPolicyHash) throw new Error('verification policy changed after Group planning; create a reviewed new Group or restore the frozen policy')
     if (currentPolicy.policy.revision !== plan.definition.policy.verificationPolicyRevision) throw new Error('verification policy revision does not match frozen Group policy')
-    const currentHead = await new IntegrationGitAdapter(product.repositoryRoot).currentHead()
+    const integrationGit = new IntegrationGitAdapter(product.repositoryRoot)
+    if ((await integrationGit.currentBranch()) !== plan.definition.integrationRef) throw new Error('final verification workspace is on the wrong integration branch')
+    if (!(await integrationGit.statusClean())) throw new Error('final verification requires a clean integration worktree')
+    const currentHead = await integrationGit.currentHead()
     await this.controller.record(groupId, 'verification.started', undefined, undefined, currentHead)
     const verification = await executeVerification(
       {
@@ -548,6 +654,15 @@ export class DevelopmentGroupProductService {
       },
       new ShelllessVerificationExecutor(product.repositoryRoot)
     )
+    const postHead = await integrationGit.currentHead()
+    const postClean = await integrationGit.statusClean()
+    if (postHead !== currentHead || !postClean) {
+      verification.status = 'failed'
+      verification.environment = {
+        ...verification.environment,
+        workspacePostcondition: postHead !== currentHead ? `head_changed:${postHead}` : 'worktree_dirty'
+      }
+    }
     await this.store.writeVerification(verification)
     if (verification.status !== 'passed') {
       await this.controller.record(groupId, 'verification.failed', undefined, undefined, verification.verificationRunId)
