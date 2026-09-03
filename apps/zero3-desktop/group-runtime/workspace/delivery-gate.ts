@@ -24,6 +24,7 @@ export interface DeliveryGateResult {
     changedPaths: readonly string[]
     dirty: boolean
     workspaceFingerprint?: string
+    handoffDirtyWorktreeFingerprint?: string
   }
   ownership?: OwnershipAudit
 }
@@ -63,6 +64,7 @@ export async function verifyDevelopmentDelivery(input: {
   let changedPaths: readonly string[] = []
   let status = [] as Awaited<ReturnType<GitWorkspacePort['status']>>
   let fingerprint: string | undefined
+  let handoffDirtyWorktreeFingerprint: string | undefined
   let ownership: OwnershipAudit | undefined
 
   try {
@@ -117,21 +119,37 @@ export async function verifyDevelopmentDelivery(input: {
       if (checkpoint.execution_id !== session.executionId) reasons.push('handoff execution identity does not match Development Session')
       if (checkpoint.base_sha !== session.baselineSha) reasons.push('handoff baseline does not match Development Session')
       if (delivery.handoffCheckpoint && delivery.handoffCheckpoint !== checkpoint.checkpoint_hash) reasons.push('delivery handoff checkpoint reference does not match supplied checkpoint')
-      const observed: HandoffObservedWorkspace = {
-        workspace: session.worktree,
-        branch,
-        headSha,
-        dirtyWorktreeFingerprint: fingerprint
+      try {
+        handoffDirtyWorktreeFingerprint = git.handoffDirtyWorktreeFingerprint
+          ? await git.handoffDirtyWorktreeFingerprint()
+          : fingerprint
+      } catch (error) {
+        reasons.push(`handoff fingerprint evidence unavailable: ${String(error)}`)
       }
-      const handoffResult = verifyHandoff(checkpoint, observed)
-      if (handoffResult.decision !== 'HANDOFF_ACCEPT') reasons.push(...handoffResult.reasons.map(reason => `handoff: ${reason}`))
+      if (handoffDirtyWorktreeFingerprint) {
+        const observed: HandoffObservedWorkspace = {
+          workspace: session.worktree,
+          branch,
+          headSha,
+          dirtyWorktreeFingerprint: handoffDirtyWorktreeFingerprint
+        }
+        const handoffResult = verifyHandoff(checkpoint, observed)
+        if (handoffResult.decision !== 'HANDOFF_ACCEPT') reasons.push(...handoffResult.reasons.map(reason => `handoff: ${reason}`))
+      }
     }
   }
 
   return {
     decision: reasons.length === 0 ? 'DELIVERY_ACCEPT' : 'DELIVERY_REJECT',
     reasons,
-    observed: { branch, headSha, changedPaths: observedChangedPaths, dirty: status.length > 0, workspaceFingerprint: fingerprint },
+    observed: {
+      branch,
+      headSha,
+      changedPaths: observedChangedPaths,
+      dirty: status.length > 0,
+      workspaceFingerprint: fingerprint,
+      handoffDirtyWorktreeFingerprint
+    },
     ownership
   }
 }
