@@ -66,7 +66,9 @@ zero3DevelopmentGroups.subscribe(event => {
 
 ipcMain.handle('zero3:development-groups:list', () => zero3DevelopmentGroups.list())
 ipcMain.handle('zero3:development-groups:get', (_event, groupId: string) => zero3DevelopmentGroups.get(groupId))
-ipcMain.handle('zero3:development-groups:create', (_event, request: unknown) => zero3DevelopmentGroups.create(request as never))
+ipcMain.handle('zero3:development-groups:create', (_event, request: unknown) =>
+  zero3DevelopmentGroups.create(validateDevelopmentGroupCreateRequest(request))
+)
 ipcMain.handle('zero3:development-groups:session:start', (_event, request: { groupId: string; sessionId: string }) =>
   zero3DevelopmentGroups.startSession(request.groupId, request.sessionId)
 )
@@ -107,17 +109,17 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Developme
 contextBridge.exposeInMainWorld('hermesDesktop', {`
 
 const globalBridge = String.raw`    zero3DevelopmentGroups: {
-      list: () => Promise<any[]>
-      get: (groupId: string) => Promise<any>
-      create: (request: any) => Promise<any>
-      startSession: (request: { groupId: string; sessionId: string }) => Promise<any>
-      retrySession: (request: { groupId: string; sessionId: string }) => Promise<any>
+      list: () => Promise<unknown[]>
+      get: (groupId: string) => Promise<unknown>
+      create: (request: unknown) => Promise<unknown>
+      startSession: (request: { groupId: string; sessionId: string }) => Promise<unknown>
+      retrySession: (request: { groupId: string; sessionId: string }) => Promise<unknown>
       respondPermission: (request: { groupId: string; sessionId: string; response: { requestId: string; decision: 'approve_once' | 'approve_session' | 'deny' } }) => Promise<void>
       cancelSession: (request: { groupId: string; sessionId: string }) => Promise<void>
       finalizeDelivery: (request: { groupId: string; sessionId: string; testsAdded?: string[]; testsExecuted?: string[]; artifacts?: string[]; knownIssues?: string[]; downstreamNotes?: string[] }) => Promise<{ accepted: boolean; gate: { decision: string; reasons: string[] }; handoffCheckpointHash?: string }>
-      integrate: (groupId: string) => Promise<any[]>
-      verify: (groupId: string) => Promise<any>
-      onEvent: (callback: (event: any) => void) => () => void
+      integrate: (groupId: string) => Promise<unknown[]>
+      verify: (groupId: string) => Promise<unknown>
+      onEvent: (callback: (event: unknown) => void) => () => void
     }
     hermesDesktop:`
 
@@ -130,7 +132,7 @@ export function applyZero3DevelopmentGroupRuntime() {
     {
       label: 'end of Electron import block',
       from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
-      to: "import { DevelopmentGroupProductService } from './zero3/group-runtime/runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      to: "import { DevelopmentGroupProductService, validateDevelopmentGroupCreateRequest } from './zero3/group-runtime/runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
     },
     {
       label: 'Codex app-server singleton',
