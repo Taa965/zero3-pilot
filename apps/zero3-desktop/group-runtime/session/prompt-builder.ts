@@ -47,8 +47,10 @@ export function buildDevelopmentSessionPrompt(input: {
     '- Do not create another Development Group or a replacement agent loop.',
     '- Do not bypass Codex/Executor permission requests.',
     '- Do not modify read-only, forbidden, or otherwise unowned paths.',
-    `- Final delivery must satisfy ${'zero3.pilot.development-delivery.v1'} and bind exact Git/Handoff evidence.`,
-    '- A textual claim of completion is not delivery evidence.',
+    '- Commit all intended changes to the bound Session branch before finishing; leave the worktree clean and do not merge it yourself.',
+    '- Report tests, artifacts, known issues, and downstream notes in your final message for the human/controller to review.',
+    '- The Zero3 product runtime, not agent text, derives the authoritative DevelopmentDelivery, Handoff checkpoint, changed paths, exact HEAD, and delivery hash from Git evidence after the turn succeeds.',
+    '- A textual claim of completion is never delivery evidence.',
     '- If execution outcome may have external side effects but cannot be confirmed, stop as OutcomeUnknown; do not blindly retry.'
   ].join('\n')
 }
