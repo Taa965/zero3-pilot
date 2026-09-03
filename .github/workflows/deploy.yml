@@ -1,23 +1,13 @@
-name: Deploy
+name: Legacy Zero3 Web Deploy
 
-# Strict release gate: test -> build -> deploy, as three jobs in ONE
-# workflow run so they always share the same $GITHUB_SHA and can never
-# race against each other. A push to main that fails fmt/clippy/build/test
-# never reaches `build` or `deploy` — GitHub Actions skips downstream jobs
-# automatically when a `needs:` dependency fails.
+# Manual-only legacy deployment path for the historical zero3-web/control-server
+# prototype. This workflow is NOT part of the Codex-native desktop product or
+# v0.1.0-alpha release path and must never deploy merely because `main` moved.
 #
-# Isolated deploy path for the zero3-pilot control server only.
-# - Builds on a GitHub-hosted runner (never the existing self-hosted
-#   runner on the target host, which belongs to a different repo/project).
-# - Deploys as the dedicated `zero3pilot` Linux account via a key that
-#   can only SSH in as that account, which in turn can only sudo one
-#   fixed script (`zero3pilot-deploy-release`: daemon-reload + restart
-#   zero3-pilot.service, nothing else). It never has access to the
-#   unrelated Zero3 self-media system's credentials, database, or sudo
-#   entries. See docs/DEPLOYMENT.md.
+# When a maintainer explicitly dispatches this legacy workflow, it still keeps
+# the original test -> build -> deploy ordering on one exact SHA and preserves
+# the isolated `zero3pilot` SSH/service boundary.
 on:
-  push:
-    branches: [main]
   workflow_dispatch: {}
 
 jobs:
