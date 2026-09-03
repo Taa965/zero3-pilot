@@ -13,6 +13,7 @@ export interface VerificationRunRequest {
   integrationSha: string
   policyRevision: string
   commands: readonly VerificationCommand[]
+  mandatoryCommandIds?: readonly string[]
   environment: Readonly<Record<string, string>>
   platform: VerificationPlatform
   verificationRunId?: string
@@ -36,10 +37,18 @@ export function validateVerificationCommands(commands: readonly VerificationComm
   return errors
 }
 
+export function assertMandatoryVerificationIds(commands: readonly VerificationCommand[], mandatoryIds: readonly string[]): readonly string[] {
+  const required = new Set(commands.filter(command => command.required).map(command => command.id))
+  return [...new Set(mandatoryIds)].filter(id => !required.has(id)).sort()
+}
+
 export async function executeVerification(request: VerificationRunRequest, executor: VerificationCommandExecutor): Promise<VerificationRun> {
   assertExactSha(request.integrationSha)
   const commandErrors = validateVerificationCommands(request.commands)
   if (commandErrors.length > 0) throw new Error(commandErrors.join('; '))
+  const missingMandatory = assertMandatoryVerificationIds(request.commands, request.mandatoryCommandIds ?? [])
+  if (missingMandatory.length > 0) throw new Error(`mandatory verification commands missing or not required: ${missingMandatory.join(', ')}`)
+
   const startedAt = request.startedAt ?? new Date().toISOString()
   const run: VerificationRun = {
     verificationRunId: request.verificationRunId ?? `V-${randomUUID()}`,
@@ -79,9 +88,4 @@ export async function executeVerification(request: VerificationRunRequest, execu
   run.finishedAt = new Date().toISOString()
   run.status = outcomeUnknown ? 'outcome_unknown' : requiredIncomplete ? 'failed' : 'passed'
   return run
-}
-
-export function assertMandatoryVerificationIds(commands: readonly VerificationCommand[], mandatoryIds: readonly string[]): readonly string[] {
-  const present = new Set(commands.map(command => command.id))
-  return [...new Set(mandatoryIds)].filter(id => !present.has(id)).sort()
 }
