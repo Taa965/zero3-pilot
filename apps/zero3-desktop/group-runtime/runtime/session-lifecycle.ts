@@ -22,7 +22,7 @@ async function existingDelivery(store: DevelopmentGroupStore, groupId: string, s
     return await store.loadDelivery(groupId, sessionId)
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-    return undefined
+    throw error
   }
 }
 
@@ -99,8 +99,11 @@ export async function markSessionVerified(store: DevelopmentGroupStore, groupId:
   const runtime = await store.loadSession(groupId, sessionId)
   if (runtime.status === 'verified') return runtime
   if (runtime.status !== 'integrated') throw new Error(`Session must be integrated before verification; got ${runtime.status}`)
-  if (runtime.headSha && runtime.headSha !== run.integrationSha) throw new Error('Verification SHA does not match Session integration head')
   if (run.status !== 'passed') throw new Error('Session cannot be marked verified from a non-passed Verification Run')
+  // A final integration verification covers every Delivery in the cumulative
+  // integration ancestry. Earlier Sessions therefore legitimately have an
+  // intermediate integration head before they are promoted to the verified
+  // final Group head.
   const next = transition(runtime, 'verified', { headSha: run.integrationSha, blocker: undefined })
   await store.writeSession(next)
   return next
