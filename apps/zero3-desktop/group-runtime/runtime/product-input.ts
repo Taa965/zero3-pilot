@@ -35,10 +35,9 @@ function ownershipPattern(value: string, label: string): string {
   const normalized = value.replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/+$/u, '')
   if (!normalized) throw new Error(`${label} must not be empty`)
   if (/^(?:[A-Za-z]:\/|\/)/u.test(normalized)) throw new Error(`${label} must be repository-relative`)
-  if (normalized.split('/').includes('..')) throw new Error(`${label} must not traverse outside the repository`)
-  if (normalized === '.git' || normalized.startsWith('.git/') || normalized === '.zero3' || normalized.startsWith('.zero3/')) {
-    throw new Error(`${label} overlaps a protected Zero3/Git path`)
-  }
+  const segments = normalized.split('/')
+  if (segments.includes('..')) throw new Error(`${label} must not traverse outside the repository`)
+  if (segments.includes('.git') || segments.includes('.zero3')) throw new Error(`${label} overlaps a protected Zero3/Git path`)
   if (['*', '**', '**/*', '**/**'].includes(normalized)) {
     throw new Error(`${label} is too broad for isolated Development Sessions; declare a bounded file or directory glob`)
   }
@@ -54,7 +53,9 @@ function requirement(value: unknown, index: number): ProductRequirementInput {
   return {
     title: text(input.title, `requirements[${index}].title`, 512),
     description: optionalText(input.description, `requirements[${index}].description`, 4096),
-    acceptanceCriteria: stringList(input.acceptanceCriteria, `requirements[${index}].acceptanceCriteria`, { maxItems: 64, maxItemLength: 2048 }),
+    acceptanceCriteria: input.acceptanceCriteria == null
+      ? undefined
+      : stringList(input.acceptanceCriteria, `requirements[${index}].acceptanceCriteria`, { required: true, maxItems: 64, maxItemLength: 2048 }),
     pathHints,
     tags: stringList(input.tags, `requirements[${index}].tags`, { maxItems: 64, maxItemLength: 256 }),
     dependencies: stringList(input.dependencies, `requirements[${index}].dependencies`, { maxItems: 64, maxItemLength: 256 }),
