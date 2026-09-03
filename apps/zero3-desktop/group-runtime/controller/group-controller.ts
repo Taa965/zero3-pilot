@@ -47,6 +47,8 @@ export function reduceGroupEvents(state: DevelopmentGroupRuntimeState, events: r
 }
 
 export class DevelopmentGroupController {
+  #recordQueue: Promise<void> = Promise.resolve()
+
   constructor(readonly store: DevelopmentGroupStore) {}
 
   async createGroup(request: PlanningRequest, proposal: ControllerPlanningProposal, options?: { groupId?: string; createdAt?: string }): Promise<PlanningProposal> {
@@ -78,11 +80,19 @@ export class DevelopmentGroupController {
 
   async record(groupId: string, type: GroupEvent['type'], sessionId?: string, waveId?: string, detail?: string): Promise<DevelopmentGroupRuntimeState> {
     const path = join(this.store.groupDir(groupId), 'events.jsonl')
-    const event: GroupEvent = { eventId: `${groupId}:${await nextEventSequence(path)}:${type}`, sequence: await nextEventSequence(path), at: new Date().toISOString(), groupId, type, sessionId, waveId, detail }
-    await this.store.appendEvent(event)
-    const state = reduceGroupEvents(await this.store.loadState(groupId), [event])
-    await this.store.writeState(state)
-    return state
+    let result: DevelopmentGroupRuntimeState | undefined
+    const job = this.#recordQueue.then(async () => {
+      const sequence = await nextEventSequence(path)
+      const event: GroupEvent = { eventId: `${groupId}:${sequence}:${type}`, sequence, at: new Date().toISOString(), groupId, type, sessionId, waveId, detail }
+      await this.store.appendEvent(event)
+      const state = reduceGroupEvents(await this.store.loadState(groupId), [event])
+      await this.store.writeState(state)
+      result = state
+    })
+    this.#recordQueue = job.then(() => undefined, () => undefined)
+    await job
+    if (!result) throw new Error('group event recording completed without durable state')
+    return result
   }
 
   async schedule(groupId: string, waveEvidence: ReadonlyMap<string, WaveGateEvidence>, runningSessionCount: number) {
