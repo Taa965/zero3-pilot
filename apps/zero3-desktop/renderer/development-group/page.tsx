@@ -5,6 +5,25 @@ type SessionStatus =
   | 'delivering' | 'delivered' | 'integrating' | 'integrated' | 'verified' | 'paused'
   | 'blocked' | 'outcome_unknown' | 'failed' | 'cancelled' | 'superseded'
 
+type FailureView = {
+  failureId: string
+  kind: string
+  message: string
+  evidence: readonly string[]
+  ownerSessionIds: readonly string[]
+  attempts: number
+  unresolved: boolean
+}
+
+type RepairView = {
+  repairTaskId: string
+  waveOrdinal: number
+  failureIds: readonly string[]
+  ownerSessionIds: readonly string[]
+  objective: string
+  status: string
+}
+
 type GroupSnapshot = {
   view: {
     summary: {
@@ -42,8 +61,8 @@ type GroupSnapshot = {
     }>
     waves: Array<{ waveId: string; ordinal: number; sessionIds: readonly string[]; dependencies: readonly string[]; integrated: boolean }>
     verifications: Array<{ verificationRunId: string; integrationSha: string; status: string; passed: number; failed: number; notRun: number }>
-    failures: readonly unknown[]
-    repairs: readonly unknown[]
+    failures: FailureView[]
+    repairs: RepairView[]
     integrations: Array<{ integrationRunId: string; headSha: string; status: string; mergedSessionIds: readonly string[]; conflicts: readonly string[] }>
   }
   completion?: { finalIntegrationSha: string; generatedAt: string }
@@ -81,8 +100,8 @@ const primaryButtonClass = 'inline-flex items-center justify-center rounded-md b
 
 function statusTone(status: string): string {
   if (['completed', 'verified', 'passed', 'integrated', 'delivered'].includes(status)) return 'text-emerald-600 dark:text-emerald-400'
-  if (['failed', 'blocked', 'outcome_unknown'].includes(status)) return 'text-red-600 dark:text-red-400'
-  if (['running', 'starting', 'integrating', 'verifying', 'waiting_input', 'delivering'].includes(status)) return 'text-amber-600 dark:text-amber-400'
+  if (['failed', 'blocked', 'outcome_unknown', 'waiting_human'].includes(status)) return 'text-red-600 dark:text-red-400'
+  if (['running', 'starting', 'integrating', 'verifying', 'waiting_input', 'delivering', 'repairing', 'planned'].includes(status)) return 'text-amber-600 dark:text-amber-400'
   return 'text-muted-foreground'
 }
 
@@ -311,6 +330,7 @@ export function DevelopmentGroupPage() {
                         </div>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button className={primaryButtonClass} disabled={Boolean(busy) || !['ready', 'waiting_dependencies'].includes(session.status)} onClick={() => void run(`start:${session.sessionId}`, () => window.zero3DevelopmentGroups.startSession({ groupId: selected.view.summary.groupId, sessionId: session.sessionId }))}>{busy === `start:${session.sessionId}` ? '启动中…' : '启动 Session'}</button>
+                          {['blocked', 'failed'].includes(session.status) ? <button className={buttonClass} disabled={Boolean(busy)} onClick={() => void run(`retry:${session.sessionId}`, () => window.zero3DevelopmentGroups.retrySession({ groupId: selected.view.summary.groupId, sessionId: session.sessionId }))}>{busy === `retry:${session.sessionId}` ? '授权中…' : '按 RepairTask 重试'}</button> : null}
                           {!['verified', 'cancelled', 'superseded'].includes(session.status) ? <button className={buttonClass} disabled={Boolean(busy)} onClick={() => void run(`cancel:${session.sessionId}`, () => window.zero3DevelopmentGroups.cancelSession({ groupId: selected.view.summary.groupId, sessionId: session.sessionId }))}>取消</button> : null}
                         </div>
                         {session.status === 'delivering' ? <DeliveryFinalizer groupId={selected.view.summary.groupId} sessionId={session.sessionId} busy={busy === `delivery:${session.sessionId}`} notes={deliveryNotes[notesKey] ?? emptyDeliveryNotes} onNotes={next => setDeliveryNotes(current => ({ ...current, [notesKey]: next }))} onFinalize={() => finalize(selected.view.summary.groupId, session.sessionId)} /> : null}
@@ -319,6 +339,35 @@ export function DevelopmentGroupPage() {
                   })}
                 </div>
               </section>
+
+              {(selected.view.failures.length > 0 || selected.view.repairs.length > 0) ? (
+                <section className="grid gap-4 xl:grid-cols-2">
+                  <div className="rounded-lg border border-border bg-card p-4">
+                    <h3 className="mb-3 text-sm font-semibold">Failure Attribution</h3>
+                    <div className="space-y-2 text-xs">
+                      {selected.view.failures.length === 0 ? <span className="text-muted-foreground">无 FailureRecord</span> : selected.view.failures.slice().reverse().map(failure => (
+                        <div key={failure.failureId} className="rounded-md border border-border p-3">
+                          <div className="flex items-center justify-between gap-2"><span className="font-medium">{failure.failureId} · {failure.kind}</span><span className={failure.unresolved ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}>{failure.unresolved ? 'UNRESOLVED' : 'RESOLVED'}</span></div>
+                          <div className="mt-1 text-muted-foreground">{failure.message}</div>
+                          <div className="mt-1 text-muted-foreground">owner: {failure.ownerSessionIds.join(', ') || 'human attribution required'} · attempts: {failure.attempts}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-border bg-card p-4">
+                    <h3 className="mb-3 text-sm font-semibold">Bounded Repair Plan</h3>
+                    <div className="space-y-2 text-xs">
+                      {selected.view.repairs.length === 0 ? <span className="text-muted-foreground">无 RepairTask</span> : selected.view.repairs.slice().reverse().map(repair => (
+                        <div key={repair.repairTaskId} className="rounded-md border border-border p-3">
+                          <div className="flex items-center justify-between gap-2"><span className="font-medium">Wave {repair.waveOrdinal} · {repair.repairTaskId}</span><span className={statusTone(repair.status)}>{repair.status}</span></div>
+                          <div className="mt-1 text-muted-foreground">{repair.objective}</div>
+                          <div className="mt-1 text-muted-foreground">owner: {repair.ownerSessionIds.join(', ') || '人工处理'} · failures: {repair.failureIds.join(', ')}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              ) : null}
 
               <section className="grid gap-4 xl:grid-cols-2">
                 <div className="rounded-lg border border-border bg-card p-4">
