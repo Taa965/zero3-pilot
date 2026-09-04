@@ -129,7 +129,7 @@ requireAll(taskDock, [
   'bridges.tasks.reviewGet({ taskId })',
   "protocol: 'zero3.pilot.review-decision.v1'",
   "decisionKind: 'APPROVED' | 'CHANGES_REQUESTED'",
-  'CHANGES_REQUESTED 会进入现有同 Provider 自动返工链路'
+  'CHANGES_REQUESTED 仍进入同 Provider 自动返工链路'
 ], 'Zero3 durable task/review board')
 
 requireAll(workspaceOverlay, [
