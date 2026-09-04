@@ -1,6 +1,24 @@
 name: Gemini Antigravity Static Gate
 
 on:
+  push:
+    branches:
+      - 'feature/gpt-web-gemini-antigravity-v1'
+    paths:
+      - 'apps/zero3-desktop/gemini-web-runtime/**'
+      - 'apps/zero3-desktop/antigravity-runtime/**'
+      - 'apps/zero3-desktop/agent-routing-runtime/**'
+      - 'apps/zero3-desktop/agent-desktop-bridge/**'
+      - 'apps/zero3-desktop/artifact-runtime/**'
+      - 'apps/zero3-desktop/mcp-runtime/**'
+      - 'apps/zero3-desktop/gpt-web-ui/**'
+      - 'apps/zero3-desktop/host-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-agent-*.mjs'
+      - 'apps/zero3-desktop/scripts/prepare-gemini-integration.mjs'
+      - 'apps/zero3-desktop/package.json'
+      - 'scripts/check-gemini-antigravity-architecture.mjs'
+      - 'scripts/check-prepared-gemini-integration.mjs'
+      - '.github/workflows/gemini-antigravity-static-gate.yml'
   pull_request:
     paths:
       - 'apps/zero3-desktop/gemini-web-runtime/**'
