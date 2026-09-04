@@ -1,9 +1,22 @@
-import type { Zero3AntigravityAdapter } from '../antigravity-runtime/antigravity-adapter'
-import { reconcileOutcomeUnknown, type Zero3OutcomeReconciliation } from '../artifact-runtime/verification'
 import type { Zero3GitEvidence } from './git-authority'
 import { Zero3AgentTaskStore, type Zero3AgentTaskRecord } from './agent-task-store'
 
 export type Zero3RecoveryResolution = 'KEEP_UNKNOWN' | 'ACCEPT_PARTIAL' | 'MARK_FAILED'
+
+export type Zero3OutcomeReconciliation = {
+  state: 'RUNNING' | 'PARTIAL' | 'FAILED' | 'RESULT_READY' | 'OUTCOME_UNKNOWN'
+  reasons: string[]
+}
+
+export type Zero3RecoveryRuntimeStatus = {
+  available: boolean
+  binary: string | null
+  activeSessions: string[]
+}
+
+export type Zero3RecoveryRuntimeBinding = {
+  state: 'STOPPED' | 'STARTING' | 'READY' | 'RUNNING' | 'OUTCOME_UNKNOWN' | 'ERROR'
+} | null
 
 export type Zero3AgentRecoverySnapshot = {
   taskId: string
@@ -19,9 +32,19 @@ export type Zero3AgentRecoverySnapshot = {
 
 export type Zero3AgentRecoveryDependencies = {
   taskStore: Zero3AgentTaskStore
-  antigravity: Pick<Zero3AntigravityAdapter, 'status' | 'binding'>
+  antigravity: {
+    status(): Zero3RecoveryRuntimeStatus
+    binding(logicalSessionId: string): Promise<Zero3RecoveryRuntimeBinding>
+  }
   collectGitEvidence: (workspace: string, requestedBaseSha?: string | null) => Promise<Zero3GitEvidence>
   artifactsPresent: (taskId: string) => Promise<boolean>
+  reconcileOutcome: (input: {
+    processAlive: boolean | null
+    terminalResultSeen: boolean
+    worktreeChanged: boolean | null
+    artifactsPresent: boolean | null
+    latestResultStatus?: string | null
+  }) => Zero3OutcomeReconciliation
   audit?: (entry: Record<string, unknown>) => Promise<void> | void
 }
 
@@ -65,7 +88,7 @@ export class Zero3AgentRecoveryController {
     }
 
     const terminalResultSeen = Boolean(record.result && record.result.status !== 'OUTCOME_UNKNOWN')
-    const reconciliation = reconcileOutcomeUnknown({
+    const reconciliation = this.deps.reconcileOutcome({
       processAlive: runtimeAlive,
       terminalResultSeen,
       worktreeChanged: git ? !git.clean || git.headSha !== (git.baseSha ?? git.headSha) : null,
