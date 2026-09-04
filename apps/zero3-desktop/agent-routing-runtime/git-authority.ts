@@ -11,6 +11,8 @@ export type Zero3GitEvidence = {
   branch: string | null
   clean: boolean
   changedFiles: string[]
+  committedChangedFiles: string[]
+  workingTreeChangedFiles: string[]
 }
 
 const COMMAND_TIMEOUT_MS = 10_000
@@ -25,6 +27,10 @@ function firstLine(value: string, label: string): string {
   const text = value.trim().split(/\r?\n/, 1)[0]?.trim() ?? ''
   if (!text) throw new Error(`${label} returned no output`)
   return text
+}
+
+function lines(value: string): string[] {
+  return value.split(/\r?\n/).map(item => item.trim()).filter(Boolean)
 }
 
 async function git(executor: Zero3CodexCommandExecutor, cwd: string, args: string[], label: string): Promise<string> {
@@ -55,6 +61,10 @@ function inside(root: string, candidate: string): boolean {
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
+function unique(values: string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b))
+}
+
 export async function zero3GitEvidence(
   executor: Zero3CodexCommandExecutor,
   workspaceValue: string,
@@ -73,15 +83,40 @@ export async function zero3GitEvidence(
       'base commit'
     )
   }
+
   const branchRaw = await git(executor, workspace, ['branch', '--show-current'], 'Git branch check')
   const branch = branchRaw.trim() || null
   const porcelain = await git(executor, workspace, ['status', '--porcelain=v1', '--untracked-files=normal'], 'Git worktree check')
-  const changedFiles = porcelain
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map(line => line.slice(3).trim())
-    .filter(Boolean)
-  return { repositoryRoot, headSha, baseSha, branch, clean: changedFiles.length === 0, changedFiles }
+  const workingTreeChangedFiles = unique(
+    porcelain
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map(line => line.slice(3).trim())
+      .filter(Boolean)
+  )
+
+  let committedChangedFiles: string[] = []
+  if (baseSha && baseSha.toLowerCase() !== headSha.toLowerCase()) {
+    const changed = await git(
+      executor,
+      workspace,
+      ['diff', '--name-only', '--diff-filter=ACMRTUXB', '--no-renames', `${baseSha}..${headSha}`],
+      'Git committed changed-files check'
+    )
+    committedChangedFiles = unique(lines(changed))
+  }
+
+  const changedFiles = unique([...committedChangedFiles, ...workingTreeChangedFiles])
+  return {
+    repositoryRoot,
+    headSha,
+    baseSha,
+    branch,
+    clean: workingTreeChangedFiles.length === 0,
+    changedFiles,
+    committedChangedFiles,
+    workingTreeChangedFiles
+  }
 }
 
 export function assertZero3GitPreflight(evidence: Zero3GitEvidence, requestedBaseSha?: string | null): void {
@@ -89,6 +124,6 @@ export function assertZero3GitPreflight(evidence: Zero3GitEvidence, requestedBas
     throw new Error(`task workspace HEAD ${evidence.headSha} does not match requested base ${evidence.baseSha}`)
   }
   if (!evidence.clean) {
-    throw new Error(`task worktree must start clean; changed files: ${evidence.changedFiles.join(', ')}`)
+    throw new Error(`task worktree must start clean; changed files: ${evidence.workingTreeChangedFiles.join(', ')}`)
   }
 }
