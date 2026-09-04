@@ -18,7 +18,7 @@ function write(file, content) {
 function copyOwnedRenderer() {
   fs.rmSync(targetDir, { recursive: true, force: true })
   fs.mkdirSync(targetDir, { recursive: true })
-  for (const file of ['App.tsx', 'styles.css']) {
+  for (const file of ['App.tsx', 'styles.css', 'layout.css']) {
     const source = path.join(sourceDir, file)
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
       throw new Error(`Zero3 owned renderer source is missing: ${source}`)
@@ -33,6 +33,7 @@ import { createRoot } from 'react-dom/client'
 
 import { App } from './zero3-ui/App'
 import './zero3-ui/styles.css'
+import './zero3-ui/layout.css'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('Zero3 renderer root element is missing')
