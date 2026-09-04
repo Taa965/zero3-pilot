@@ -15,6 +15,7 @@ import {
   type Zero3RenameWorkspaceEntryInput,
   type Zero3ResolveGeminiWebNavigationResult,
   type Zero3ResolveGptWebNavigationResult,
+  type Zero3SetWorkspaceProjectInput,
   type Zero3UpdateGeminiWebNavigationInput,
   type Zero3UpdateGptWebNavigationInput,
   type Zero3WorkspaceEntry,
@@ -178,6 +179,23 @@ export class Zero3WorkspaceEntryStore {
       const next = {
         ...existing,
         localDisplayTitle: optionalText(input.title, 'title', MAX_TITLE),
+        lastActiveAt: new Date().toISOString()
+      } as Zero3WorkspaceEntry
+      state.entries[id] = next
+      await this.write(state)
+      return { ...next }
+    })
+  }
+
+  setProject(input: Zero3SetWorkspaceProjectInput): Promise<Zero3WorkspaceEntry> {
+    return this.mutate(async () => {
+      const id = requiredText(input.id, 'workspace entry id', MAX_ID)
+      const state = await this.read()
+      const existing = state.entries[id]
+      if (!existing) throw new Error('workspace entry was not found')
+      const next = {
+        ...existing,
+        projectId: optionalText(input.projectId, 'projectId', MAX_PROJECT_ID),
         lastActiveAt: new Date().toISOString()
       } as Zero3WorkspaceEntry
       state.entries[id] = next
