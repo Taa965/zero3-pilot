@@ -103,8 +103,8 @@ requireAll(handoff, [
   'bridges.zero3AgentTask.get({ taskId: id })',
   'bridges.zero3Projects?.getActive()',
   'bridges.zero3Workspace.setProject({ id: source.id, projectId: project.id })',
-  'project.defaultWorktreePath',
-  'project.baseRef ?? project.defaultBranch'
+  'next?.defaultWorktreePath',
+  'next?.baseRef ?? next?.defaultBranch'
 ], 'Zero3 project-aware real task handoff surface')
 
 requireAll(taskStore, [
