@@ -98,7 +98,7 @@ async function localBranchHead(repositoryRoot: string, branch: string): Promise<
     })
     return exactSha(result.stdout.trim(), 'branch head')
   } catch (error) {
-    const failure = error as NodeJS.ErrnoException & { code?: number }
+    const failure = error as { code?: number | string }
     if (failure.code === 128) return undefined
     throw error
   }
@@ -160,7 +160,7 @@ class ShelllessVerificationExecutor {
         evidence: [result.stdout.trim(), result.stderr.trim()].filter(Boolean).map(text => text.slice(-16_384))
       }
     } catch (error) {
-      const failure = error as NodeJS.ErrnoException & { code?: number; stdout?: string; stderr?: string }
+      const failure = error as Error & { code?: number; stdout?: string; stderr?: string }
       if (typeof failure.code !== 'number') throw error
       return {
         exitCode: failure.code,
@@ -277,6 +277,17 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
   async resolveOutcomeUnknown(groupId: string, sessionId: string, resolution: OutcomeUnknownResolution, evidence: string): Promise<unknown> {
     const facade = await this.facadeFor(groupId)
     await resolveSessionOutcomeUnknown(this.store, groupId, sessionId, resolution, evidence)
+    const taskId = `${groupId}:${sessionId}`
+    if (this.executorManager.active(taskId, (await this.store.loadSession(groupId, sessionId)).executionId)) {
+      try {
+        const runtime = await this.store.loadSession(groupId, sessionId)
+        await this.executorManager.close(taskId, runtime.executionId)
+      } catch {
+        // Zero3ExecutorManager.close removes the in-memory binding in finally;
+        // recovery classification is already durable and must not be rolled back
+        // because a dead provider session could not acknowledge cleanup.
+      }
+    }
     return facade.snapshot(groupId)
   }
 
