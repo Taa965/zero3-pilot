@@ -8,7 +8,7 @@ import type { Zero3GitEvidence } from './git-authority'
 
 export type Zero3AuthoritativeResultDependencies = {
   collectGitEvidence: (workspace: string, requestedBaseSha?: string | null) => Promise<Zero3GitEvidence>
-  verifyArtifact: (artifact: Zero3ArtifactRef) => Promise<boolean>
+  verifyArtifact: (task: Zero3TaskSpecV2, artifact: Zero3ArtifactRef) => Promise<boolean>
   collectVerification: (task: Zero3TaskSpecV2, candidate: Zero3ExecutionResultV2) => Promise<Zero3VerificationResult[]>
 }
 
@@ -90,7 +90,7 @@ export class Zero3AuthoritativeResultFinalizer {
 
     const artifactChecks = await Promise.all(candidate.artifacts.map(async artifact => ({
       artifact,
-      verified: await this.deps.verifyArtifact(artifact).catch(() => false)
+      verified: await this.deps.verifyArtifact(task, artifact).catch(() => false)
     })))
     const invalidArtifacts = artifactChecks.filter(value => !value.verified).map(value => value.artifact.artifactId)
     const artifactsVerified = invalidArtifacts.length === 0
