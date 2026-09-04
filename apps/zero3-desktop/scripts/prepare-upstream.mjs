@@ -20,6 +20,7 @@ import { applyZero3CodexPrompts } from './apply-codex-prompts.mjs'
 import { applyZero3CodexSessionListGuard } from './apply-codex-session-list-guard.mjs'
 import { applyZero3CodexStructuredInput } from './apply-codex-structured-input.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
+import { applyZero3ControlRuntime } from './apply-control-runtime.mjs'
 import { applyZero3GptWebProvider } from './apply-gpt-web-provider.mjs'
 import { applyZero3RemoteHostRuntime } from './apply-remote-host-runtime.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
@@ -264,6 +265,7 @@ applyZero3ChineseUi()
 applyZero3CodexTransport()
 applyZero3WorkspaceEntryRuntime()
 applyZero3GptWebProvider()
+applyZero3ControlRuntime()
 applyZero3CodexPrimaryChat()
 applyZero3CodexPrompts()
 applyZero3CodexPromptQueueHardening()
@@ -282,3 +284,4 @@ console.log('R3C: Hermes composer images use native Codex localImage; other atta
 console.log('R3C safety: Renderer may submit only text/localImage structured inputs; default sandbox stays read-only and unsupported server requests stay fail-closed.')
 console.log('R3D: archive/unarchive/delete/rename/whole-thread fork/active-turn steer use typed Codex app-server operations.')
 console.log('Remote Host H0-H3: external tasks enter the same pinned Codex Thread/Turn runtime through an outbound HTTPS host node; no second agent loop or direct remote shell is introduced.')
+console.log('GPT Web handoff: renderer dispatch uses a purpose-specific Control Plane bridge; control credentials remain in Electron main.')
