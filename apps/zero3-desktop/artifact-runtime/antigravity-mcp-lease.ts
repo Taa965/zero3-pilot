@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -25,6 +25,16 @@ function required(value: unknown, label: string, max = 4096) {
   return text
 }
 
+function scopedId(value: unknown, label: string): string {
+  const text = required(value, label, 256)
+  if (!/^[A-Za-z0-9._:-]+$/.test(text)) throw new Error(`${label} is invalid`)
+  return text
+}
+
+function storageName(logicalId: string): string {
+  return createHash('sha256').update(logicalId, 'utf8').digest('hex')
+}
+
 export class Zero3AntigravityMcpLease {
   private backup: Backup | null = null
   private configPath: string | null = null
@@ -33,10 +43,10 @@ export class Zero3AntigravityMcpLease {
   async install(input: Zero3TaskMcpLeaseInput): Promise<void> {
     if (this.backup) throw new Error('Antigravity MCP lease is already installed')
     const workspace = path.resolve(required(input.workspace, 'workspace'))
-    const taskId = required(input.taskId, 'taskId', 256)
-    const projectId = required(input.projectId, 'projectId', 256)
+    const taskId = scopedId(input.taskId, 'taskId')
+    const projectId = scopedId(input.projectId, 'projectId')
     const configPath = path.join(workspace, CONFIG_RELATIVE)
-    const taskSnapshotPath = path.join(path.resolve(input.stateDir), 'tasks', `${taskId}.json`)
+    const taskSnapshotPath = path.join(path.resolve(input.stateDir), 'tasks', `${storageName(taskId)}.json`)
     await fs.mkdir(path.dirname(taskSnapshotPath), { recursive: true })
     await atomicJson(taskSnapshotPath, input.taskSnapshot)
 
