@@ -18,7 +18,7 @@ function write(file, content) {
 function copyOwnedRenderer() {
   fs.rmSync(targetDir, { recursive: true, force: true })
   fs.mkdirSync(targetDir, { recursive: true })
-  for (const file of ['App.tsx', 'styles.css', 'layout.css']) {
+  for (const file of ['App.tsx', 'ProductApp.tsx', 'HandoffDock.tsx', 'styles.css', 'layout.css', 'handoff.css']) {
     const source = path.join(sourceDir, file)
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
       throw new Error(`Zero3 owned renderer source is missing: ${source}`)
@@ -31,16 +31,17 @@ function replaceRendererEntrypoint() {
   const entry = String.raw`import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import { App } from './zero3-ui/App'
+import { ProductApp } from './zero3-ui/ProductApp'
 import './zero3-ui/styles.css'
 import './zero3-ui/layout.css'
+import './zero3-ui/handoff.css'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('Zero3 renderer root element is missing')
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <ProductApp />
   </StrictMode>
 )
 `
@@ -77,11 +78,15 @@ function recordRendererProvenance() {
 
 function assertSoleRenderer() {
   const entry = read(path.join(hermesDesktopDir, 'src', 'main.tsx'))
-  if (!entry.includes("import { App } from './zero3-ui/App'")) {
+  if (!entry.includes("import { ProductApp } from './zero3-ui/ProductApp'")) {
     throw new Error('Zero3 three-column renderer is not the desktop renderer entrypoint')
   }
   if (/from ['\"]\.\/app|<RouterProvider|<Hermes/i.test(entry)) {
     throw new Error('Legacy Hermes renderer leaked back into the Zero3 desktop entrypoint')
+  }
+  const productApp = read(path.join(targetDir, 'ProductApp.tsx'))
+  if (!productApp.includes('<App />') || !productApp.includes('<HandoffDock />')) {
+    throw new Error('Zero3 product renderer lost the real session workspace or task-handoff surface')
   }
   const packageJson = JSON.parse(read(path.join(hermesDesktopDir, 'package.json')))
   if (!String(packageJson.scripts?.typecheck ?? '').includes('tsconfig.zero3-renderer.json')) {
@@ -95,7 +100,7 @@ export function applyZero3OwnedUi() {
   configureOwnedRendererTooling()
   recordRendererProvenance()
   assertSoleRenderer()
-  console.log('Zero3 owned three-column renderer is the sole desktop UI entrypoint and renderer typecheck surface; Hermes/Codex product UIs are disabled.')
+  console.log('Zero3 owned three-column renderer is the sole desktop UI entrypoint and renderer typecheck surface; real task handoff is included; Hermes/Codex product UIs are disabled.')
 }
 
 if (process.argv[1]?.endsWith('apply-zero3-owned-ui.mjs')) applyZero3OwnedUi()
