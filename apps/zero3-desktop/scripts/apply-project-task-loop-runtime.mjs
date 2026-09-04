@@ -38,7 +38,7 @@ function applyTaskListAndReviewBridge() {
       to:
         'const zero3AgentDesktopHandlers = createZero3AgentDesktopHandlers({\n' +
         '  task: taskId => zero3AgentRuntime.task(taskId),\n' +
-        '  tasks: input => zero3AgentTaskStore.list(input),\n' +
+        '  tasks: input => zero3AgentTaskStore.list(input as never),\n' +
         '  review: taskId => zero3ReviewStore.get(taskId),\n' +
         '  dispatch:'
     },
