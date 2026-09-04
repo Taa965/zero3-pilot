@@ -34,6 +34,7 @@ exec('git', ['-C', hermesRoot, 'reset', '--hard', pins.hermes])
 const generatedFiles = [
   path.join(hermesDesktopDir, 'public', 'zero3-upstream.json'),
   path.join(hermesDesktopDir, 'public', 'zero3-pilot.png'),
+  path.join(hermesDesktopDir, 'tsconfig.zero3-renderer.json'),
   path.join(hermesDesktopDir, 'src', 'app', 'settings', 'zero3-control-settings.tsx'),
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'primary-chat.ts'),
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'prompt-store.ts'),
