@@ -58,7 +58,10 @@ test('unsafe-but-valid logical identities are hash-encoded for durable paths wit
     const executionId = 'G1:S01:attempt-1'
     const cp = await checkpoint(f.repo, taskId, executionId)
     const target = await f.store.save(cp)
-    assert.equal(target.includes(':'), false)
+    const durableRelativePath = path.relative(path.join(f.root, 'checkpoints'), target)
+    assert.equal(durableRelativePath.includes(':'), false)
+    assert.equal(durableRelativePath.includes(taskId), false)
+    assert.equal(durableRelativePath.includes(executionId), false)
     const loaded = await f.store.load(taskId, executionId, 2)
     assert.equal(loaded.task_id, taskId)
     assert.equal(loaded.execution_id, executionId)
