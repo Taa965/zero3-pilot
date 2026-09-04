@@ -80,6 +80,8 @@ function normalizeEntry(value: unknown): Zero3WorkspaceEntry {
 }
 
 export class Zero3WorkspaceEntryStore {
+  private mutations: Promise<void> = Promise.resolve()
+
   constructor(private readonly file: string) {}
 
   async list(): Promise<Zero3WorkspaceEntry[]> {
@@ -96,75 +98,92 @@ export class Zero3WorkspaceEntryStore {
     return entry ? { ...entry } : null
   }
 
-  async createGptWeb(input: Zero3CreateGptWebEntryInput = {}): Promise<Zero3GptWebWorkspaceEntry> {
-    const state = await this.read()
-    if (Object.keys(state.entries).length >= MAX_ENTRIES) throw new Error('workspace entry limit reached')
+  createGptWeb(input: Zero3CreateGptWebEntryInput = {}): Promise<Zero3GptWebWorkspaceEntry> {
+    return this.mutate(async () => {
+      const state = await this.read()
+      if (Object.keys(state.entries).length >= MAX_ENTRIES) throw new Error('workspace entry limit reached')
 
-    const now = new Date().toISOString()
-    const entry: Zero3GptWebWorkspaceEntry = {
-      id: `gpt-web-${randomUUID()}`,
-      kind: 'gpt_web',
-      projectId: optionalText(input.projectId, 'projectId', MAX_PROJECT_ID),
-      browserProfileId: ZERO3_GPT_WEB_PROFILE_ID,
-      conversationUrl: null,
-      currentUrl: ZERO3_GPT_WEB_HOME,
-      pageTitle: null,
-      localDisplayTitle: null,
-      createdAt: now,
-      lastActiveAt: now
-    }
-    state.entries[entry.id] = entry
-    await this.write(state)
-    return { ...entry }
+      const now = new Date().toISOString()
+      const entry: Zero3GptWebWorkspaceEntry = {
+        id: `gpt-web-${randomUUID()}`,
+        kind: 'gpt_web',
+        projectId: optionalText(input.projectId, 'projectId', MAX_PROJECT_ID),
+        browserProfileId: ZERO3_GPT_WEB_PROFILE_ID,
+        conversationUrl: null,
+        currentUrl: ZERO3_GPT_WEB_HOME,
+        pageTitle: null,
+        localDisplayTitle: null,
+        createdAt: now,
+        lastActiveAt: now
+      }
+      state.entries[entry.id] = entry
+      await this.write(state)
+      return { ...entry }
+    })
   }
 
-  async updateGptWebNavigation(input: Zero3UpdateGptWebNavigationInput): Promise<Zero3GptWebWorkspaceEntry> {
-    const id = requiredText(input.id, 'workspace entry id', MAX_ID)
-    const state = await this.read()
-    const existing = state.entries[id]
-    if (!existing || existing.kind !== 'gpt_web') throw new Error('GPT Web workspace entry was not found')
+  updateGptWebNavigation(input: Zero3UpdateGptWebNavigationInput): Promise<Zero3GptWebWorkspaceEntry> {
+    return this.mutate(async () => {
+      const id = requiredText(input.id, 'workspace entry id', MAX_ID)
+      const state = await this.read()
+      const existing = state.entries[id]
+      if (!existing || existing.kind !== 'gpt_web') throw new Error('GPT Web workspace entry was not found')
 
-    const next: Zero3GptWebWorkspaceEntry = {
-      ...existing,
-      currentUrl: safeHttpsUrl(input.currentUrl, 'currentUrl'),
-      conversationUrl:
-        input.conversationUrl === undefined
-          ? existing.conversationUrl
-          : input.conversationUrl == null
-            ? null
-            : safeHttpsUrl(input.conversationUrl, 'conversationUrl'),
-      pageTitle: input.pageTitle === undefined ? existing.pageTitle : optionalText(input.pageTitle, 'pageTitle', MAX_TITLE),
-      lastActiveAt: new Date().toISOString()
-    }
-    state.entries[id] = next
-    await this.write(state)
-    return { ...next }
+      const next: Zero3GptWebWorkspaceEntry = {
+        ...existing,
+        currentUrl: safeHttpsUrl(input.currentUrl, 'currentUrl'),
+        conversationUrl:
+          input.conversationUrl === undefined
+            ? existing.conversationUrl
+            : input.conversationUrl == null
+              ? null
+              : safeHttpsUrl(input.conversationUrl, 'conversationUrl'),
+        pageTitle: input.pageTitle === undefined ? existing.pageTitle : optionalText(input.pageTitle, 'pageTitle', MAX_TITLE),
+        lastActiveAt: new Date().toISOString()
+      }
+      state.entries[id] = next
+      await this.write(state)
+      return { ...next }
+    })
   }
 
-  async rename(input: Zero3RenameWorkspaceEntryInput): Promise<Zero3WorkspaceEntry> {
-    const id = requiredText(input.id, 'workspace entry id', MAX_ID)
-    const state = await this.read()
-    const existing = state.entries[id]
-    if (!existing) throw new Error('workspace entry was not found')
+  rename(input: Zero3RenameWorkspaceEntryInput): Promise<Zero3WorkspaceEntry> {
+    return this.mutate(async () => {
+      const id = requiredText(input.id, 'workspace entry id', MAX_ID)
+      const state = await this.read()
+      const existing = state.entries[id]
+      if (!existing) throw new Error('workspace entry was not found')
 
-    const next: Zero3WorkspaceEntry = {
-      ...existing,
-      localDisplayTitle: optionalText(input.title, 'title', MAX_TITLE),
-      lastActiveAt: new Date().toISOString()
-    }
-    state.entries[id] = next
-    await this.write(state)
-    return { ...next }
+      const next: Zero3WorkspaceEntry = {
+        ...existing,
+        localDisplayTitle: optionalText(input.title, 'title', MAX_TITLE),
+        lastActiveAt: new Date().toISOString()
+      }
+      state.entries[id] = next
+      await this.write(state)
+      return { ...next }
+    })
   }
 
-  async remove(id: string): Promise<{ removed: boolean }> {
-    const key = requiredText(id, 'workspace entry id', MAX_ID)
-    const state = await this.read()
-    const removed = Boolean(state.entries[key])
-    if (!removed) return { removed: false }
-    delete state.entries[key]
-    await this.write(state)
-    return { removed: true }
+  remove(id: string): Promise<{ removed: boolean }> {
+    return this.mutate(async () => {
+      const key = requiredText(id, 'workspace entry id', MAX_ID)
+      const state = await this.read()
+      const removed = Boolean(state.entries[key])
+      if (!removed) return { removed: false }
+      delete state.entries[key]
+      await this.write(state)
+      return { removed: true }
+    })
+  }
+
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    const task = this.mutations.then(operation, operation)
+    this.mutations = task.then(
+      () => undefined,
+      () => undefined
+    )
+    return task
   }
 
   private async read(): Promise<Zero3WorkspaceEntryFile> {
@@ -190,7 +209,7 @@ export class Zero3WorkspaceEntryStore {
 
   private async write(state: Zero3WorkspaceEntryFile): Promise<void> {
     await fs.mkdir(path.dirname(this.file), { recursive: true })
-    const temporary = `${this.file}.tmp-${process.pid}-${Date.now()}`
+    const temporary = `${this.file}.tmp-${process.pid}-${randomUUID()}`
     await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     await fs.rename(temporary, this.file)
   }
