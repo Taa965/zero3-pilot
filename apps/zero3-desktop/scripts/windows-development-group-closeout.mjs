@@ -70,7 +70,7 @@ function runStep(id, fn) {
     writeReport()
     return detail
   } catch (error) {
-    report.steps.push({ id, status: 'failed', startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now() - started, error: error instanceof Error ? error.stack ?? error.message : String(error) })
+    report.steps.push({ id, status: 'failed', startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now().toISOString?.() ?? new Date().toISOString(), durationMs: Date.now() - started, error: error instanceof Error ? error.stack ?? error.message : String(error) })
     report.status = 'failed'
     report.finishedAt = new Date().toISOString()
     writeReport()
@@ -226,6 +226,7 @@ try {
 
     command(bundledCodex, ['--version'])
     command(process.execPath, [path.join(here, 'smoke-codex-app-server.mjs'), bundledCodex])
+    command(process.execPath, [path.join(here, 'smoke-codex-session-persistence.mjs'), bundledCodex])
 
     const installers = fs.readdirSync(releaseDir)
       .filter(name => /^Zero3Pilot-.*\.exe$/iu.test(name) && name.toLowerCase() !== 'zero3pilot.exe')
