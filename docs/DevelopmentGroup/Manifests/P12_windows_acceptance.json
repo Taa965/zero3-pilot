@@ -1,0 +1,18 @@
+{
+  "schema": "zero3.pilot.development-group-windows-acceptance.v1",
+  "handoff": "P12_product_wiring_closeout",
+  "target_branch": "integration/development-group-v1",
+  "candidate_sha": "POST_MERGE_EXACT_SHA_REQUIRED",
+  "command": "npm --prefix apps/zero3-desktop run acceptance:dg:win",
+  "expected_sha_env": "ZERO3_EXPECTED_SHA",
+  "report_default": "%TEMP%\\zero3-pilot-development-group-closeout.json",
+  "required_terminal_markers": [
+    "DEVELOPMENT_GROUP_CLOSEOUT=PASS",
+    "CANDIDATE_SHA=<EXACT_INTEGRATION_SHA>",
+    "REPORT=<path>",
+    "INSTALLER=<path>",
+    "INSTALLER_SHA256=<64-hex>"
+  ],
+  "current_status": "NOT_RUN",
+  "promotion_requires_pass": true
+}
