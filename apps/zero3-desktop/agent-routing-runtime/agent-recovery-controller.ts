@@ -1,3 +1,4 @@
+import type { Zero3ExecutionResultV2 } from './agent-contracts'
 import type { Zero3GitEvidence } from './git-authority'
 import { Zero3AgentTaskStore, type Zero3AgentTaskRecord } from './agent-task-store'
 
@@ -52,6 +53,27 @@ function rationale(value: unknown): string {
   const text = typeof value === 'string' ? value.trim() : ''
   if (!text || text.length > 8_000) throw new Error('recovery rationale is required and must be <= 8000 characters')
   return text
+}
+
+function recoveredResult(
+  before: Zero3AgentTaskRecord,
+  status: 'PARTIAL' | 'FAILED',
+  reason: string
+): Zero3ExecutionResultV2 {
+  if (!before.result) throw new Error('OutcomeUnknown task has no durable ExecutionResultV2 to classify')
+  if (before.result.status !== 'OUTCOME_UNKNOWN') throw new Error('recovery result is no longer OutcomeUnknown')
+  const blockers = [...new Set([
+    ...before.result.blockers,
+    `Explicit recovery classification: ${status} — ${reason}`
+  ])]
+  return {
+    ...before.result,
+    status,
+    summary: `${before.result.summary}\n\nRecovery classification: ${reason}`,
+    blockers,
+    recommendedAction: status === 'PARTIAL' ? 'GPT_REVIEW' : 'HUMAN_REVIEW',
+    completedAt: new Date().toISOString()
+  }
 }
 
 export class Zero3AgentRecoveryController {
@@ -124,15 +146,15 @@ export class Zero3AgentRecoveryController {
       if (!['PARTIAL', 'RESULT_READY'].includes(snapshot.reconciliation.state)) {
         throw new Error(`authoritative evidence does not support partial recovery; reconciliation=${snapshot.reconciliation.state}`)
       }
-      const next = before.task.reviewPolicy.required ? 'REVIEW_PENDING' : 'RESULT_READY'
-      const record = await this.deps.taskStore.setState(taskId, next)
+      const nextState = before.task.reviewPolicy.required ? 'REVIEW_PENDING' : 'RESULT_READY'
+      const record = await this.deps.taskStore.setResult(taskId, recoveredResult(before, 'PARTIAL', reason), nextState)
       await this.audit('resolve', record, { resolution, rationale: reason, snapshot })
       return record
     }
 
     if (resolution === 'MARK_FAILED') {
       if (snapshot.runtimeAlive === true) throw new Error('cannot mark failed while the bound runtime is still active')
-      const record = await this.deps.taskStore.setState(taskId, 'FAILED')
+      const record = await this.deps.taskStore.setResult(taskId, recoveredResult(before, 'FAILED', reason), 'FAILED')
       await this.audit('resolve', record, { resolution, rationale: reason, snapshot })
       return record
     }
@@ -145,7 +167,7 @@ export class Zero3AgentRecoveryController {
   async assertRetryAllowed(taskId: string): Promise<void> {
     const record = await this.deps.taskStore.get(taskId)
     if (!record) throw new Error('agent task record not found')
-    if (record.state === 'OUTCOME_UNKNOWN') {
+    if (record.state === 'OUTCOME_UNKNOWN' || record.result?.status === 'OUTCOME_UNKNOWN') {
       throw new Error('automatic retry is forbidden while OutcomeUnknown is unresolved; inspect and explicitly classify authoritative evidence first')
     }
   }
@@ -153,8 +175,8 @@ export class Zero3AgentRecoveryController {
   private async requireUnknown(taskId: string): Promise<Zero3AgentTaskRecord> {
     const record = await this.deps.taskStore.get(taskId)
     if (!record) throw new Error('agent task record not found')
-    if (record.state !== 'OUTCOME_UNKNOWN' && record.result?.status !== 'OUTCOME_UNKNOWN') {
-      throw new Error('recovery controller only accepts OutcomeUnknown tasks')
+    if (record.state !== 'OUTCOME_UNKNOWN' || record.result?.status !== 'OUTCOME_UNKNOWN') {
+      throw new Error('recovery controller requires state and ExecutionResultV2 to both be OutcomeUnknown')
     }
     return record
   }
