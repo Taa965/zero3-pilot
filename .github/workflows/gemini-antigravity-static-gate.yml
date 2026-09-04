@@ -1,0 +1,26 @@
+name: Gemini Antigravity Static Gate
+
+on:
+  pull_request:
+    paths:
+      - 'apps/zero3-desktop/gemini-web-runtime/**'
+      - 'apps/zero3-desktop/antigravity-runtime/**'
+      - 'apps/zero3-desktop/agent-routing-runtime/**'
+      - 'apps/zero3-desktop/artifact-runtime/**'
+      - 'apps/zero3-desktop/mcp-runtime/**'
+      - 'apps/zero3-desktop/gpt-web-ui/gemini-session-section.tsx'
+      - 'scripts/check-gemini-antigravity-architecture.mjs'
+      - '.github/workflows/gemini-antigravity-static-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  architecture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Gemini/Antigravity architecture invariants
+        run: node scripts/check-gemini-antigravity-architecture.mjs
