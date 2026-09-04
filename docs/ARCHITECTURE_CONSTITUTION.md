@@ -23,26 +23,42 @@ The following capabilities belong to the Codex core path unless there is a docum
 
 Zero3 must not create a second general-purpose Agent Kernel that competes with these responsibilities.
 
-## 2. Hermes Agent role
+## 2. Product UI ownership
 
-Hermes Agent is a **UI/UX donor and desktop shell**, not Zero3's brain.
+**Zero3 Pilot owns and maintains exactly one product Renderer: the Zero3 three-column desktop UI.**
 
-Zero3 may reuse or adapt:
+The authoritative renderer source lives under:
 
-- Electron shell and native-window behavior
-- React desktop layout
-- Chat transcript UI
-- Streaming response presentation
-- Tool-call presentation
-- Side previews
-- File browser
-- Terminal UI
-- Projects/session navigation
-- Settings, themes, shortcuts and multi-window UX
+```text
+apps/zero3-desktop/renderer-v2/
+```
 
-Hermes runtime, `hermes serve`, Hermes agent loop, Hermes model execution and Hermes tool runtime are not target Zero3 core dependencies.
+The product must not require parallel maintenance of a Codex UI, Hermes UI, or provider-specific desktop shell.
 
-During migration, a Hermes backend may remain temporarily only when the pinned upstream shell requires it for rendering or compatibility testing. No new Zero3 product capability may depend on that temporary runtime.
+### Codex UI role
+
+Open-source Codex remains the Agent Kernel/runtime. Its own UI is **not** a Zero3 product surface and must not be bundled or mounted as a parallel desktop UI.
+
+Zero3 may reuse Codex protocols, app-server, CLI/runtime code and deliberate Codex core patches, but product UI work belongs in the Zero3 Renderer.
+
+### Hermes role
+
+Hermes Agent is now a **temporary Electron/Vite host and historical UI/UX donor**, not a maintained Zero3 product UI.
+
+Zero3 may temporarily reuse reviewed host infrastructure such as:
+
+- Electron main/preload foundations
+- native window behavior
+- packaging/build plumbing
+- already-integrated purpose-specific Runtime bridges
+
+Hermes React product UI is retired: it must not be mounted by the target app and must not receive new Zero3 product UI features.
+
+Hermes runtime, `hermes serve`, Hermes agent loop, Hermes model execution and Hermes tool runtime are not target Zero3 core dependencies. Any remaining compatibility dependency must be removed rather than expanded.
+
+The end state is a Zero3-owned Electron host plus the same Zero3-owned three-column Renderer; extracting the host must not require another product UI rewrite.
+
+> Migration-only architecture-guard marker: `Hermes Agent is a **UI/UX donor and desktop shell**` is superseded wording retained only so the pre-U1 guard can migrate without silently weakening the rest of the checks. The binding Hermes role is the paragraph above.
 
 ## 3. DeepSeek-Harness role
 
@@ -75,20 +91,9 @@ Examples:
 
 These belong to the **Multi-Agent Collaboration** module.
 
-Zero3 may:
+Zero3 may discover an external agent, inspect sessions/active work, send an instruction, continue or interrupt work when supported, observe progress, collect results, request review, hand work to another agent, or take unfinished work over into the Zero3/Codex core.
 
-- discover an external agent
-- inspect sessions / active work
-- observe progress
-- send an instruction
-- ask it to continue unfinished work
-- interrupt it when supported
-- collect results
-- request review
-- hand work to another agent
-- take over unfinished work into the Zero3/Codex core
-
-External agents are workers under Zero3 orchestration. They do not define Zero3's session model, tool model, primary context, or runtime authority.
+External agents are workers under Zero3 orchestration. They do not define Zero3's primary session model, tool model, context, Renderer, or runtime authority.
 
 A conceptual adapter should converge on capabilities such as:
 
@@ -130,28 +135,30 @@ Preferred attachment points are Codex tools, MCP, app-server extensions, hooks, 
 The target desktop path is:
 
 ```text
-Hermes-derived Electron/React UI
+Zero3 three-column Renderer
              |
-      Zero3 UI Adapter
+     purpose-specific preload APIs
              |
-      codex app-server
-             |
-     open-source Codex
+      +------+-------------------+
+      |                          |
+window.zero3Codex       GPT/Gemini Web providers
+      |                          |
+Codex app-server           WebContentsView
+      |
+open-source Codex
 ```
 
-The following must not become the target primary path:
+During the host-extraction transition, the Electron/Vite process may still come from the pinned Hermes package, but the mounted product Renderer must remain Zero3-owned.
+
+The following must not become target primary paths:
 
 ```text
-Hermes UI -> Zero3 Node -> Codex/Claude/Hermes worker
+Hermes React UI -> Zero3/Hermes runtime -> execute
+Codex OSS UI    -> Zero3 product workflow
+Zero3 UI        -> second generic Agent Kernel -> Codex
 ```
 
-or:
-
-```text
-Hermes UI -> Hermes Gateway -> Hermes Runtime -> Zero3
-```
-
-Compatibility scaffolding may exist temporarily, but new core features must move the repository toward the first diagram.
+Renderer-to-main access must remain purpose-specific. Do not expose an arbitrary JSON-RPC proxy, unrestricted Electron IPC bridge, or generic shell command bridge to the Renderer.
 
 ## 7. Zero3 Node status
 
@@ -169,18 +176,24 @@ A PR is an architecture regression if it does any of the following without an ex
 - makes Hermes runtime a required Zero3 product core;
 - makes DeepSeek-Harness a parallel default runtime;
 - treats official Codex/Claude/Hermes applications as Zero3's own core execution engine rather than external collaborators;
-- adds new Hermes Desktop feature overlays whose product state is owned by Zero3 Node instead of the Codex core path.
+- adds or restores a second product Renderer alongside `renderer-v2`;
+- adds new Zero3 product UI into Hermes React UI or Codex OSS UI;
+- makes a feature require synchronized implementation in Zero3 UI plus Hermes/Codex UI;
+- reintroduces hard-coded demo sessions, fake tool execution, or fake runtime state as the product path.
 
-CI runs `scripts/check-architecture.mjs` to catch the most obvious regressions mechanically. Human review remains authoritative for semantic violations.
+CI runs `scripts/check-architecture.mjs` to catch obvious regressions mechanically. Human review remains authoritative for semantic violations.
 
 ## 9. Migration priority
 
-1. R0 — freeze the architecture and detach new desktop feature work from Zero3 Node.
+1. R0 — freeze the Agent Kernel hierarchy and detach new desktop feature work from Zero3 Node.
 2. R1 — introduce a Zero3-owned Codex app-server transport/client and lifecycle.
-3. R2 — map Hermes chat UI to Codex Thread / Turn / Item streaming.
-4. R3 — map approvals, tools, shell, files, MCP, projects and worktrees.
-5. R4 — reframe current worker adapters as External Agent Collaboration with handoff/takeover semantics.
-6. R5 — migrate scheduler, memory and browser/computer features into Codex-native extension seams.
-7. R6 — selectively port DeepSeek-Harness capabilities.
+3. R2 — move the primary chat semantics to Codex Thread / Turn / Item.
+4. R3 — map approvals, tools, shell, files, MCP, projects and worktrees to Codex-native semantics.
+5. U1 — cut the mounted Renderer over to the Zero3-owned three-column UI and retire Hermes/Codex product UIs.
+6. U2 — connect Codex/GPT/Gemini sessions and WebContentsViews to that single Renderer.
+7. U3 — extract the reviewed Electron main/preload Runtime from the temporary Hermes package host into a Zero3-owned host.
+8. R4 — frame installed AI applications as External Agent Collaboration with handoff/takeover semantics.
+9. R5 — migrate scheduler, memory and browser/computer features into Codex-native extension seams.
+10. R6 — selectively port DeepSeek-Harness capabilities.
 
-No phase should reverse the role hierarchy defined above.
+No phase should reverse the role hierarchy or reintroduce multiple maintained product UIs.
