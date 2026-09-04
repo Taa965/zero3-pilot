@@ -52,7 +52,7 @@ function configureOwnedRendererTooling() {
   const tsconfig = {
     extends: './tsconfig.json',
     compilerOptions: { noEmit: true },
-    include: ['src/main.tsx', 'src/zero3-ui/**/*.ts', 'src/zero3-ui/**/*.tsx'],
+    include: ['src/vite-env.d.ts', 'src/main.tsx', 'src/zero3-ui/**/*.ts', 'src/zero3-ui/**/*.tsx'],
     exclude: []
   }
   write(path.join(hermesDesktopDir, 'tsconfig.zero3-renderer.json'), `${JSON.stringify(tsconfig, null, 2)}\n`)
