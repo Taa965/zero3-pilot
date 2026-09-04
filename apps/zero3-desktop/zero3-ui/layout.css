@@ -1,0 +1,39 @@
+.workspace-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-heading {
+  flex: 0 0 72px;
+}
+
+.notice {
+  flex: 0 0 auto;
+}
+
+.content-scroll,
+.web-workspace,
+.provider-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.composer-area {
+  left: 0;
+  right: 0;
+}
+
+.workspace.with-properties .composer-area {
+  right: 0;
+}
+
+@media (max-width: 1100px) {
+  .composer-area { left: 0; }
+}
+
+@media (max-width: 860px) {
+  .composer-area { left: 0; right: 0; }
+}
