@@ -1,0 +1,63 @@
+name: Zero3 Owned UI Static Gate
+
+on:
+  pull_request:
+    paths:
+      - 'apps/zero3-desktop/zero3-ui/**'
+      - 'apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs'
+      - 'apps/zero3-desktop/scripts/prepare-upstream.mjs'
+      - 'apps/zero3-desktop/scripts/prepare-gemini-integration.mjs'
+      - 'apps/zero3-desktop/package.json'
+      - 'scripts/check-zero3-owned-ui.mjs'
+      - 'docs/ARCHITECTURE_CONSTITUTION.md'
+      - '.github/workflows/zero3-owned-ui-static-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: zero3-owned-ui-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  renderer-and-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+          cache: npm
+          cache-dependency-path: upstream/hermes-agent/package-lock.json
+
+      - name: Check owned-renderer source invariants
+        run: node scripts/check-zero3-owned-ui.mjs
+
+      - name: Prepare the full pinned desktop composition
+        run: npm --prefix apps/zero3-desktop run prepare
+
+      - name: Install pinned desktop dependencies
+        working-directory: upstream/hermes-agent
+        run: npm install --workspace apps/desktop
+
+      - name: Typecheck Zero3 renderer and Electron host only
+        working-directory: upstream/hermes-agent
+        run: npm --workspace apps/desktop run typecheck
+
+      - name: Verify the final renderer entrypoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/App.tsx
+          test -f upstream/hermes-agent/apps/desktop/tsconfig.zero3-renderer.json
+          grep -F "import { App } from './zero3-ui/App'" upstream/hermes-agent/apps/desktop/src/main.tsx
+          ! grep -E "RouterProvider|from ['\"]\\./app|Hermes" upstream/hermes-agent/apps/desktop/src/main.tsx
+          node scripts/check-prepared-gemini-integration.mjs
+
+      - name: Reject whitespace errors
+        run: git diff --check
