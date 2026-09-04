@@ -1,0 +1,14 @@
+{
+  "schema": "zero3.pilot.development-group-static-review.v1",
+  "handoff": "P12_product_wiring_closeout",
+  "mode": "STATIC_ONLY",
+  "result": "PASS",
+  "windows_authenticity": "NOT_RUN",
+  "linux_authenticity": "NOT_RUN",
+  "claims": {
+    "product_wiring_authored": true,
+    "cross_module_static_review_completed": true,
+    "exact_sha_windows_acceptance_completed": false,
+    "promotion_to_main_allowed": false
+  }
+}
