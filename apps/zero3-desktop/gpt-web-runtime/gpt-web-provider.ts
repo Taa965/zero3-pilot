@@ -67,9 +67,8 @@ function resumeChatGptUrl(entry: Zero3GptWebWorkspaceEntry): string {
     try {
       return chatGptNavigationUrl(candidate)
     } catch {
-      // Login/OAuth or an external page can temporarily become currentUrl.
-      // Resume only a canonical ChatGPT URL; auth state itself lives in the
-      // persistent Electron partition and is never copied into Zero3 metadata.
+      // OAuth/login navigation is intentionally not persisted. Authentication
+      // state itself remains inside the persistent Electron partition.
     }
   }
   return ZERO3_GPT_WEB_HOME
@@ -80,6 +79,16 @@ function observedHttpsUrl(value: string): string | null {
     const parsed = new URL(value)
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null
     return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+function observedChatGptUrl(value: string): string | null {
+  const normalized = observedHttpsUrl(value)
+  if (!normalized) return null
+  try {
+    return new URL(normalized).hostname.toLowerCase() === CHATGPT_HOST ? normalized : null
   } catch {
     return null
   }
@@ -220,7 +229,7 @@ export class Zero3GptWebProvider {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     const entry = await this.requireEntry(id)
     const target = entry.conversationUrl ?? entry.currentUrl
-    const parsed = safeHttpsUrl(target, 'GPT Web external URL')
+    const parsed = new URL(chatGptNavigationUrl(target))
     await shell.openExternal(parsed.toString())
     return { opened: true }
   }
@@ -321,12 +330,28 @@ export class Zero3GptWebProvider {
         }
       }
     })
+
+    contents.on('did-create-window', childWindow => {
+      const childContents = childWindow.webContents
+      childContents.on('will-navigate', event => {
+        if (observedHttpsUrl(event.url)) return
+        event.preventDefault()
+      })
+      childContents.setWindowOpenHandler(details => {
+        const target = observedHttpsUrl(details.url)
+        if (target) void shell.openExternal(target)
+        return { action: 'deny' }
+      })
+    })
   }
 
   private installViewObservers(live: LiveGptWebView): void {
     const contents = live.view.webContents
     const observe = () => {
-      const currentUrl = observedHttpsUrl(contents.getURL())
+      // Persist only chatgpt.com URLs. OAuth providers can contain transient
+      // authorization codes in their query string and must never enter the
+      // Zero3 workspace metadata store.
+      const currentUrl = observedChatGptUrl(contents.getURL())
       if (!currentUrl) return
       this.queueObservedState(live.entryId, currentUrl, contents.getTitle())
     }
