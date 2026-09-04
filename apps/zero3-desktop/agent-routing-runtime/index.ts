@@ -1,3 +1,6 @@
 export * from './agent-contracts'
 export * from './agent-router'
+export * from './agent-task-store'
+export * from './git-authority'
 export * from './review-loop-store'
+export * from './agent-runtime-orchestrator'
