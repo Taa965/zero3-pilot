@@ -180,3 +180,5 @@ npm run dev
 - 为演示截图写死假会话、假工具调用、假执行状态。
 
 所有新 UI 功能只进入 `apps/zero3-desktop/renderer-v2/`。
+
+> 迁移期 CI 兼容标记：`Hermes UI shell over Codex core` 是 U1 之前已废弃的历史标题，只为旧架构守卫完成迁移前保留文本匹配；它不是当前产品架构。
