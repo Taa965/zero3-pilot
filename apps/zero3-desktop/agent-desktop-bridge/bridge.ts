@@ -5,6 +5,8 @@ import type {
 
 export const ZERO3_AGENT_DESKTOP_CHANNELS = {
   taskGet: 'zero3:agent-task:get',
+  taskList: 'zero3:agent-task:list',
+  reviewGet: 'zero3:agent-task:review-get',
   dispatch: 'zero3:agent-task:dispatch',
   reviewDecision: 'zero3:agent-task:review-decision',
   recoveryInspect: 'zero3:agent-task:recovery-inspect',
@@ -15,6 +17,8 @@ export type Zero3AgentRecoveryResolution = 'KEEP_UNKNOWN' | 'ACCEPT_PARTIAL' | '
 
 export type Zero3AgentDesktopRuntime = {
   task(taskId: string): Promise<unknown>
+  tasks(input: { projectId?: string | null; states?: string[] | null; limit?: number | null }): Promise<unknown>
+  review(taskId: string): Promise<unknown>
   dispatch(task: Zero3TaskSpecV2, context: {
     targetLogicalSessionId: string
     reviewSessionId?: string | null
@@ -27,6 +31,8 @@ export type Zero3AgentDesktopRuntime = {
 
 export type Zero3AgentDesktopHandlers = {
   taskGet(request: unknown): Promise<unknown>
+  taskList(request: unknown): Promise<unknown>
+  reviewGet(request: unknown): Promise<unknown>
   dispatch(request: unknown): Promise<unknown>
   reviewDecision(request: unknown): Promise<unknown>
   recoveryInspect(request: unknown): Promise<unknown>
@@ -54,6 +60,19 @@ function safeContextVersion(value: unknown): number {
   const number = Number(value)
   if (!Number.isSafeInteger(number) || number < 1) throw new Error('contextVersion must be a positive integer')
   return number
+}
+
+function safeTaskListLimit(value: unknown): number | null {
+  if (value == null) return null
+  const number = Number(value)
+  if (!Number.isSafeInteger(number) || number < 1 || number > 1_000) throw new Error('task list limit is invalid')
+  return number
+}
+
+function safeStates(value: unknown): string[] | null {
+  if (value == null) return null
+  if (!Array.isArray(value) || value.length > 32) throw new Error('task list states are invalid')
+  return value.map((state, index) => boundedString(state, `states[${index}]`, 64))
 }
 
 function taskSpec(value: unknown): Zero3TaskSpecV2 {
@@ -104,6 +123,20 @@ export function createZero3AgentDesktopHandlers(runtime: Zero3AgentDesktopRuntim
     async taskGet(request) {
       const input = record(request)
       return runtime.task(boundedString(input.taskId, 'taskId', 128))
+    },
+
+    async taskList(request) {
+      const input = record(request)
+      return runtime.tasks({
+        projectId: optionalBoundedString(input.projectId, 'projectId', 256),
+        states: safeStates(input.states),
+        limit: safeTaskListLimit(input.limit)
+      })
+    },
+
+    async reviewGet(request) {
+      const input = record(request)
+      return runtime.review(boundedString(input.taskId, 'taskId', 128))
     },
 
     async dispatch(request) {

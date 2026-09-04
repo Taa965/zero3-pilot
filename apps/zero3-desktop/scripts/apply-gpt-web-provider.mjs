@@ -8,25 +8,15 @@ import { applyZero3ProjectContextMcp } from './apply-project-context-mcp.mjs'
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'gpt-web-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'gpt-web')
 
-function read(file) {
-  return fs.readFileSync(file, 'utf8')
-}
-
-function write(file, content) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, content)
-}
-
+function read(file) { return fs.readFileSync(file, 'utf8') }
+function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
 function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = read(file)
   for (const replacement of replacements) {
     if (source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) {
-      throw new Error(
-        `Zero3 GPT Web overlay drift in ${relativePath}: could not find ${replacement.label}. ` +
-          'Review the pinned Hermes desktop boundary before updating the upstream pin.'
-      )
+      throw new Error(`Zero3 GPT Web overlay drift in ${relativePath}: could not find ${replacement.label}. Review the pinned Hermes desktop boundary before updating the upstream pin.`)
     }
     source = source.replace(replacement.from, replacement.to)
   }
@@ -45,43 +35,35 @@ function copyRuntimeSources() {
 const mainHandlers = String.raw`
 function broadcastZero3GptWebEvent(event: unknown) {
   for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-      window.webContents.send('zero3:gpt-web:event', event)
-    }
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('zero3:gpt-web:event', event)
   }
 }
-
 const zero3GptWeb = new Zero3GptWebProvider(zero3WorkspaceEntries, broadcastZero3GptWebEvent)
-
 function zero3GptWebRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
-
 function zero3GptWebId(value: unknown): string {
   const input = zero3GptWebRecord(value)
   const id = typeof input.id === 'string' ? input.id.trim() : ''
   if (!id || id.length > 256) throw new Error('GPT Web entry id is required and must be at most 256 characters')
   return id
 }
-
 function zero3GptWebParent(event: Electron.IpcMainInvokeEvent): BrowserWindow {
   const parent = BrowserWindow.fromWebContents(event.sender)
   if (!parent || parent.isDestroyed()) throw new Error('GPT Web parent window is unavailable')
   return parent
 }
-
-ipcMain.handle('zero3:gpt-web:create', (_event, request: unknown) => {
+ipcMain.handle('zero3:gpt-web:create', async (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
-  const projectId = input.projectId == null ? null : input.projectId
-  if (projectId != null && typeof projectId !== 'string') throw new Error('projectId must be a string or null')
-  return zero3GptWeb.create(projectId as string | null)
+  const requestedProjectId = input.projectId == null ? null : input.projectId
+  if (requestedProjectId != null && typeof requestedProjectId !== 'string') throw new Error('projectId must be a string or null')
+  const activeProject = requestedProjectId == null ? await zero3ProjectStore.getActive() : null
+  const projectId = (requestedProjectId as string | null) ?? activeProject?.id ?? null
+  return zero3GptWeb.create(projectId)
 })
 ipcMain.handle('zero3:gpt-web:show', (event, request: unknown) => {
   const input = zero3GptWebRecord(request)
-  return zero3GptWeb.show(zero3GptWebParent(event), {
-    id: zero3GptWebId(input),
-    bounds: input.bounds
-  })
+  return zero3GptWeb.show(zero3GptWebParent(event), { id: zero3GptWebId(input), bounds: input.bounds })
 })
 ipcMain.handle('zero3:gpt-web:hide', (_event, request: unknown) => zero3GptWeb.hide(zero3GptWebId(request)))
 ipcMain.handle('zero3:gpt-web:set-bounds', (_event, request: unknown) => {
@@ -95,9 +77,7 @@ ipcMain.handle('zero3:gpt-web:navigate', (_event, request: unknown) => {
 ipcMain.handle('zero3:gpt-web:reload', (_event, request: unknown) => zero3GptWeb.reload(zero3GptWebId(request)))
 ipcMain.handle('zero3:gpt-web:suspend', (_event, request: unknown) => zero3GptWeb.suspend(zero3GptWebId(request)))
 ipcMain.handle('zero3:gpt-web:remove', (_event, request: unknown) => zero3GptWeb.remove(zero3GptWebId(request)))
-ipcMain.handle('zero3:gpt-web:open-external', (_event, request: unknown) =>
-  zero3GptWeb.openExternal(zero3GptWebId(request))
-)
+ipcMain.handle('zero3:gpt-web:open-external', (_event, request: unknown) => zero3GptWeb.openExternal(zero3GptWebId(request)))
 app.on('before-quit', () => zero3GptWeb.stop())
 `
 
@@ -123,20 +103,8 @@ contextBridge.exposeInMainWorld('zero3Workspace', {`
 const globalTypeDefinitions = String.raw`
 type Zero3GptWebBounds = { x: number; y: number; width: number; height: number }
 type Zero3GptWebEvent =
-  | {
-      kind: 'state'
-      entryId: string
-      state: 'created' | 'loading' | 'ready' | 'shown' | 'hidden' | 'suspended' | 'error'
-      detail?: string
-    }
-  | {
-      kind: 'navigation'
-      entryId: string
-      previousEntryId: string | null
-      currentUrl: string
-      conversationUrl: string | null
-      pageTitle: string | null
-    }
+  | { kind: 'state'; entryId: string; state: 'created' | 'loading' | 'ready' | 'shown' | 'hidden' | 'suspended' | 'error'; detail?: string }
+  | { kind: 'navigation'; entryId: string; previousEntryId: string | null; currentUrl: string; conversationUrl: string | null; pageTitle: string | null }
 `
 
 const globalWindowSurface = String.raw`    zero3GptWeb: {
@@ -155,45 +123,19 @@ const globalWindowSurface = String.raw`    zero3GptWeb: {
 
 export function applyZero3GptWebProvider() {
   copyRuntimeSources()
-
   patchFile('electron/main.ts', [
     {
       label: 'GPT Web provider import beside workspace runtime',
       from: "import { Zero3WorkspaceEntryStore } from './zero3/workspace/index'",
-      to:
-        "import { Zero3WorkspaceEntryStore } from './zero3/workspace/index'\n" +
-        "import { Zero3GptWebProvider } from './zero3/gpt-web/index'"
+      to: "import { Zero3WorkspaceEntryStore } from './zero3/workspace/index'\nimport { Zero3GptWebProvider } from './zero3/gpt-web/index'"
     },
-    {
-      label: 'GPT Web provider handlers before Codex singleton',
-      from: 'const zero3CodexAppServer = createZero3CodexAppServer()',
-      to: mainHandlers + '\nconst zero3CodexAppServer = createZero3CodexAppServer()'
-    }
+    { label: 'GPT Web provider handlers before Codex singleton', from: 'const zero3CodexAppServer = createZero3CodexAppServer()', to: mainHandlers + '\nconst zero3CodexAppServer = createZero3CodexAppServer()' }
   ])
-
-  patchFile('electron/preload.ts', [
-    {
-      label: 'GPT Web preload surface before workspace surface',
-      from: "contextBridge.exposeInMainWorld('zero3Workspace', {",
-      to: preloadBridge
-    }
-  ])
-
+  patchFile('electron/preload.ts', [{ label: 'GPT Web preload surface before workspace surface', from: "contextBridge.exposeInMainWorld('zero3Workspace', {", to: preloadBridge }])
   patchFile('src/global.d.ts', [
-    {
-      label: 'GPT Web renderer type definitions',
-      from: 'type Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry',
-      to:
-        globalTypeDefinitions +
-        '\ntype Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry'
-    },
-    {
-      label: 'GPT Web renderer window surface',
-      from: '    zero3Workspace: {',
-      to: globalWindowSurface
-    }
+    { label: 'GPT Web renderer type definitions', from: 'type Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry', to: globalTypeDefinitions + '\ntype Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry' },
+    { label: 'GPT Web renderer window surface', from: '    zero3Workspace: {', to: globalWindowSurface }
   ])
-
   applyZero3GptWebUi()
   applyZero3ProjectContextMcp()
 }

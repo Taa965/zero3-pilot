@@ -4,8 +4,15 @@ on:
   pull_request:
     paths:
       - 'apps/zero3-desktop/zero3-ui/**'
+      - 'apps/zero3-desktop/project-runtime/**'
       - 'apps/zero3-desktop/workspace-runtime/**'
+      - 'apps/zero3-desktop/mcp-runtime/project-context-server.mjs'
+      - 'apps/zero3-desktop/agent-routing-runtime/agent-task-store.ts'
+      - 'apps/zero3-desktop/agent-desktop-bridge/**'
       - 'apps/zero3-desktop/scripts/apply-workspace-entry-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-project-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-project-task-loop-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-project-context-mcp.mjs'
       - 'apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs'
       - 'apps/zero3-desktop/scripts/prepare-upstream.mjs'
       - 'apps/zero3-desktop/scripts/prepare-gemini-integration.mjs'
@@ -38,10 +45,14 @@ jobs:
       - name: Check owned-renderer source invariants
         run: node scripts/check-zero3-owned-ui.mjs
 
-      - name: Syntax-check owned renderer staging scripts
+      - name: Syntax-check owned renderer and project staging scripts
         run: |
           node --check apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs
           node --check apps/zero3-desktop/scripts/apply-workspace-entry-runtime.mjs
+          node --check apps/zero3-desktop/scripts/apply-project-runtime.mjs
+          node --check apps/zero3-desktop/scripts/apply-project-task-loop-runtime.mjs
+          node --check apps/zero3-desktop/scripts/apply-project-context-mcp.mjs
+          node --check apps/zero3-desktop/mcp-runtime/project-context-server.mjs
           node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
           node --check apps/zero3-desktop/scripts/prepare-gemini-integration.mjs
 

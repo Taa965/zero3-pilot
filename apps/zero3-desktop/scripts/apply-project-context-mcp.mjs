@@ -19,13 +19,6 @@ function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let content = read(file)
   for (const replacement of replacements) {
-    // The default "already applied" test is the replacement text itself, but that
-    // only holds while the inserted block stays adjacent to its anchor. This
-    // overlay runs twice (applyZero3GptWebProvider during prepare-upstream, then
-    // prepare-gemini-integration), and the overlays in between insert their own
-    // code at the same "const zero3CodexAppServer = ..." anchor, which pushes the
-    // helper away from it. Replacements that can drift apart from their anchor
-    // therefore declare a stable marker instead.
     if (content.includes(replacement.appliedMarker ?? replacement.to)) continue
     if (!content.includes(replacement.from)) {
       throw new Error(`Zero3 project-context MCP overlay drift in ${relativePath}: missing ${replacement.label}`)
@@ -54,26 +47,31 @@ function zero3ProjectContextMcpConfig(): Record<string, unknown> {
       args: [serverPath],
       env: {
         ELECTRON_RUN_AS_NODE: '1',
-        ZERO3_PROJECT_CONTEXT_DIR: stateDir
+        ZERO3_PROJECT_CONTEXT_DIR: stateDir,
+        ZERO3_PROJECT_REGISTRY_FILE: zero3ProjectStore.registryFile()
       },
       enabled: true,
       required: true,
       startup_timeout_sec: 15,
       tool_timeout_sec: 30,
       default_tools_approval_mode: 'approve',
-      enabled_tools: ['project_get_context', 'handoff_get']
+      enabled_tools: ['project_get_active', 'project_get_context', 'handoff_get']
     }
   }
 }
 
-function zero3WithProjectContextMcp(method: string, params: unknown): unknown {
+async function zero3WithProjectContextMcp(method: string, params: unknown): Promise<unknown> {
   if (method !== 'thread/start') return params
   const input = params && typeof params === 'object' && !Array.isArray(params) ? (params as Record<string, unknown>) : {}
   const existing = input.config && typeof input.config === 'object' && !Array.isArray(input.config)
     ? (input.config as Record<string, unknown>)
     : {}
+  const activeProject = await zero3ProjectStore.getActive()
+  const explicitCwd = typeof input.cwd === 'string' && input.cwd.trim() ? input.cwd.trim() : null
+  const projectCwd = activeProject?.repositoryPath?.trim() || null
   return {
     ...input,
+    ...(explicitCwd || !projectCwd ? {} : { cwd: projectCwd }),
     config: {
       ...existing,
       ...zero3ProjectContextMcpConfig()
@@ -95,7 +93,7 @@ export function applyZero3ProjectContextMcp() {
       to: helper + '\nconst zero3CodexAppServer = createZero3CodexAppServer()'
     },
     {
-      label: 'central Codex thread/start MCP injection',
+      label: 'central Codex thread/start MCP and active-project injection',
       from:
         "  async request(method: string, params: unknown, timeoutMs = ZERO3_CODEX_REQUEST_TIMEOUT_MS) {\n" +
         "    await this.ensureStarted()\n" +
@@ -104,7 +102,7 @@ export function applyZero3ProjectContextMcp() {
       to:
         "  async request(method: string, params: unknown, timeoutMs = ZERO3_CODEX_REQUEST_TIMEOUT_MS) {\n" +
         "    await this.ensureStarted()\n" +
-        "    return this.requestStarted(method, zero3WithProjectContextMcp(method, params), timeoutMs)\n" +
+        "    return this.requestStarted(method, await zero3WithProjectContextMcp(method, params), timeoutMs)\n" +
         "  }"
     }
   ])
