@@ -52,6 +52,8 @@ reject(app, [
 requireAll(apply, [
   "write(path.join(hermesDesktopDir, 'src', 'main.tsx'), entry)",
   "import { App } from './zero3-ui/App'",
+  "tsconfig.zero3-renderer.json",
+  "packageJson.scripts.typecheck = 'tsc -p tsconfig.zero3-renderer.json --noEmit && tsc -p tsconfig.electron.json --noEmit'",
   "current.productRenderer = 'zero3-owned-three-column-v1'",
   "current.hermesRenderer = 'disabled'",
   "current.codexUi = 'disabled-app-server-only'"
@@ -61,4 +63,4 @@ requireAll(prepare, ["import { applyZero3OwnedUi }", 'applyZero3OwnedUi()'], 'ba
 requireAll(geminiPrepare, ["import { applyZero3OwnedUi }", 'applyZero3OwnedUi()'], 'Gemini integration prepare')
 requireAll(constitution, ['Zero3-owned three-column renderer', 'Hermes React application/router', 'Codex stock UI/TUI'], 'architecture constitution')
 
-console.log('Zero3 owned-renderer guard passed: one three-column product UI, real typed bridges, no stock Hermes/Codex renderer entrypoint.')
+console.log('Zero3 owned-renderer guard passed: one three-column product UI, real typed bridges, and the retired Hermes/Codex renderers are outside the product entrypoint and renderer typecheck surface.')
