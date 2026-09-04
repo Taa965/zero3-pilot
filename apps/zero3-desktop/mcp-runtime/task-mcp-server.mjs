@@ -56,7 +56,7 @@ async function taskSnapshot(id) {
 }
 async function projectContext(id) {
   assertProject(id)
-  return (await readJson(path.join(contextRoot(), 'projects', `${id}.json`))) ?? { projectId: id, version: 0, payload: null }
+  return (await readJson(path.join(contextRoot(), 'projects', `${storageName(id)}.json`))) ?? { projectId: id, version: 0, payload: null }
 }
 async function artifactList(id) {
   assertTask(id)
