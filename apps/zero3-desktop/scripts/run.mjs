@@ -210,8 +210,14 @@ function runHermesDesktop(script, env) {
   })
 }
 
-runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs')])
-runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])
+const externallyPrepared = ['1', 'true', 'yes', 'on'].includes(
+  (process.env.ZERO3_DESKTOP_ALREADY_PREPARED ?? '').trim().toLowerCase()
+)
+if (!externallyPrepared) {
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs')])
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-gemini-integration.mjs')])
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])
+}
 
 const hermesHome = resolveHermesHome()
 const codexHome = resolveCodexHome()
