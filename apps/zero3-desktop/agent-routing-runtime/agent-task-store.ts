@@ -14,12 +14,29 @@ export type Zero3AgentTaskState =
   | 'OUTCOME_UNKNOWN'
   | 'FAILED'
 
+export type Zero3GptWebReviewAutomationStatus =
+  | 'IDLE'
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+
+export type Zero3GptWebReviewAutomation = {
+  status: Zero3GptWebReviewAutomationStatus
+  reviewerSessionId: string | null
+  cycle: number | null
+  attempts: number
+  lastError: string | null
+  updatedAt: string
+}
+
 export type Zero3AgentTaskRecord = {
   task: Zero3TaskSpecV2
   resolvedTarget: 'CODEX' | 'GEMINI'
   state: Zero3AgentTaskState
   binding: Zero3CrossAgentBinding | null
   result: Zero3ExecutionResultV2 | null
+  reviewAutomation?: Zero3GptWebReviewAutomation | null
   remoteTaskId: string | null
   remoteExecutionId: string | null
   createdAt: string
@@ -32,9 +49,18 @@ export type Zero3AgentTaskListInput = {
   limit?: number | null
 }
 
+export type Zero3ReviewAutomationUpdate = {
+  status: Zero3GptWebReviewAutomationStatus
+  reviewerSessionId?: string | null
+  cycle?: number | null
+  attempts?: number
+  lastError?: string | null
+}
+
 const MAX_FILE_BYTES = 8 * 1024 * 1024
 const MAX_LIST_FILES = 5_000
 const MAX_LIST_LIMIT = 1_000
+const MAX_REVIEW_ERROR = 8_000
 
 function validId(value: unknown, label: string): string {
   const text = typeof value === 'string' ? value.trim() : ''
@@ -57,6 +83,31 @@ function listLimit(value: unknown): number {
     throw new Error(`task list limit must be between 1 and ${MAX_LIST_LIMIT}`)
   }
   return limit
+}
+
+function reviewAttempts(value: unknown, fallback: number): number {
+  if (value == null) return fallback
+  const attempts = Number(value)
+  if (!Number.isSafeInteger(attempts) || attempts < 0 || attempts > 10_000) {
+    throw new Error('review automation attempts must be an integer between 0 and 10000')
+  }
+  return attempts
+}
+
+function reviewCycle(value: unknown, fallback: number | null): number | null {
+  if (value == null) return fallback
+  const cycle = Number(value)
+  if (!Number.isSafeInteger(cycle) || cycle < 1 || cycle > 10_000) {
+    throw new Error('review automation cycle must be a positive integer')
+  }
+  return cycle
+}
+
+function reviewError(value: unknown, fallback: string | null): string | null {
+  if (value === undefined) return fallback
+  if (value == null || value === '') return null
+  if (typeof value !== 'string') throw new Error('review automation lastError must be a string or null')
+  return value.slice(0, MAX_REVIEW_ERROR)
 }
 
 export class Zero3AgentTaskStore {
@@ -130,6 +181,7 @@ export class Zero3AgentTaskStore {
         state: 'DRAFT',
         binding: null,
         result: null,
+        reviewAutomation: null,
         remoteTaskId: null,
         remoteExecutionId: null,
         createdAt: timestamp,
@@ -172,6 +224,26 @@ export class Zero3AgentTaskStore {
         throw new Error('execution result identity mismatch')
       }
       return { ...current, result: clone(result), state }
+    })
+  }
+
+  setReviewAutomation(taskId: string, update: Zero3ReviewAutomationUpdate): Promise<Zero3AgentTaskRecord> {
+    return this.update(taskId, current => {
+      const previous = current.reviewAutomation ?? null
+      const reviewerSessionId = update.reviewerSessionId === undefined
+        ? previous?.reviewerSessionId ?? null
+        : update.reviewerSessionId == null || update.reviewerSessionId === ''
+          ? null
+          : validId(update.reviewerSessionId, 'reviewerSessionId')
+      const next: Zero3GptWebReviewAutomation = {
+        status: update.status,
+        reviewerSessionId,
+        cycle: reviewCycle(update.cycle, previous?.cycle ?? null),
+        attempts: reviewAttempts(update.attempts, previous?.attempts ?? 0),
+        lastError: reviewError(update.lastError, previous?.lastError ?? null),
+        updatedAt: new Date().toISOString()
+      }
+      return { ...current, reviewAutomation: next }
     })
   }
 

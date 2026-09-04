@@ -3,6 +3,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { ZERO3_ACTIVE_PROJECT_CHANGED } from './ProjectDock'
 
 type Project = { id: string; name: string }
+type ReviewAutomation = {
+  status: 'IDLE' | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  reviewerSessionId: string | null
+  cycle: number | null
+  attempts: number
+  lastError: string | null
+  updatedAt: string
+}
 type TaskRecord = {
   task: {
     taskId: string
@@ -17,6 +25,7 @@ type TaskRecord = {
   state: string
   binding: Record<string, unknown> | null
   result: Record<string, unknown> | null
+  reviewAutomation: ReviewAutomation | null
   createdAt: string
   updatedAt: string
 }
@@ -47,6 +56,7 @@ type ReviewRecord = {
 type TaskBridge = {
   list(request?: { projectId?: string | null; states?: string[] | null; limit?: number | null }): Promise<unknown>
   reviewGet(request: { taskId: string }): Promise<unknown>
+  reviewGptWeb(request: { taskId: string }): Promise<unknown>
   reviewDecision(request: { taskId: string; contextVersion: number; decision: Record<string, unknown> }): Promise<unknown>
 }
 
@@ -64,6 +74,22 @@ function record(value: unknown): Record<string, unknown> {
 
 function text(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback
+}
+
+function reviewAutomation(value: unknown): ReviewAutomation | null {
+  const raw = record(value)
+  const status = text(raw.status)
+  if (!['IDLE', 'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED'].includes(status)) return null
+  const attempts = typeof raw.attempts === 'number' && Number.isSafeInteger(raw.attempts) && raw.attempts >= 0 ? raw.attempts : 0
+  const cycle = typeof raw.cycle === 'number' && Number.isSafeInteger(raw.cycle) && raw.cycle >= 1 ? raw.cycle : null
+  return {
+    status: status as ReviewAutomation['status'],
+    reviewerSessionId: typeof raw.reviewerSessionId === 'string' ? raw.reviewerSessionId : null,
+    cycle,
+    attempts,
+    lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+    updatedAt: text(raw.updatedAt)
+  }
 }
 
 function taskRecord(value: unknown): TaskRecord | null {
@@ -89,6 +115,7 @@ function taskRecord(value: unknown): TaskRecord | null {
     state: text(raw.state, 'UNKNOWN'),
     binding: raw.binding && typeof raw.binding === 'object' ? record(raw.binding) : null,
     result: raw.result && typeof raw.result === 'object' ? record(raw.result) : null,
+    reviewAutomation: reviewAutomation(raw.reviewAutomation),
     createdAt: text(raw.createdAt),
     updatedAt: text(raw.updatedAt)
   }
@@ -107,6 +134,15 @@ function stateLabel(state: string) {
     OUTCOME_UNKNOWN: '结果未知', FAILED: '失败'
   }
   return labels[state] ?? state
+}
+
+function automationLabel(status: ReviewAutomation['status'] | null) {
+  if (status === 'QUEUED') return '等待同一 GPT 会话的前序审核'
+  if (status === 'RUNNING') return 'GPT Web 正在自动审核'
+  if (status === 'SUCCEEDED') return '上一轮 GPT Web 审核成功'
+  if (status === 'FAILED') return 'GPT Web 自动审核失败'
+  if (status === 'IDLE') return '等待自动审核'
+  return '尚未启动自动审核'
 }
 
 function stateClass(state: string) {
@@ -218,6 +254,22 @@ export function TaskDock() {
     }
   }
 
+  const retryGptWebReview = async () => {
+    if (!bridges.tasks || !selected || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await bridges.tasks.reviewGptWeb({ taskId: selected.task.taskId })
+      await refresh()
+      await loadReview(selected.task.taskId)
+    } catch (reason) {
+      setError(`GPT Web 自动审核失败：${errorMessage(reason)}`)
+      await refresh().catch(() => undefined)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const copyReviewPacket = async () => {
     const current = review?.cycles.at(-1)
     if (!current) return
@@ -232,6 +284,9 @@ export function TaskDock() {
 
   const latestCycle = review?.cycles.at(-1) ?? null
   const resultSummary = selected ? text(selected.result?.summary) : ''
+  const automation = selected?.reviewAutomation ?? null
+  const reviewerBusy = automation?.status === 'QUEUED' || automation?.status === 'RUNNING'
+  const gptReviewTask = selected?.task.reviewPolicy?.reviewer === 'GPT_WEB'
 
   return (
     <>
@@ -269,10 +324,19 @@ export function TaskDock() {
                         <div className="task-section-heading"><h4>审核 Cycle {latestCycle.cycle}</h4><button onClick={() => void copyReviewPacket()} type="button">复制 Review Packet</button></div>
                         <p>{latestCycle.packet.resultSummary}</p>
                         {latestCycle.packet.changedFiles?.length ? <div className="task-files"><strong>Changed files</strong>{latestCycle.packet.changedFiles.map(file => <code key={file}>{file}</code>)}</div> : null}
+                        {gptReviewTask ? (
+                          <div className="task-human-fallback">
+                            <strong>GPT Web 自动审核 · {automationLabel(automation?.status ?? null)}</strong>
+                            <p>自动审核使用绑定的真实 ChatGPT 会话，并串行处理同一会话的多个任务。发给 GPT 的审核包会尽量附带由 Codex read-only command/exec 采集的真实 Git diff。</p>
+                            {automation ? <p>尝试次数：{automation.attempts}{automation.cycle ? ` · 最近 Cycle ${automation.cycle}` : ''}{automation.reviewerSessionId ? ` · Reviewer ${automation.reviewerSessionId}` : ''}</p> : null}
+                            {automation?.lastError ? <div className="task-error">{automation.lastError}</div> : null}
+                            {selected.state === 'REVIEW_PENDING' ? <div><button className="task-primary" disabled={busy || reviewerBusy} onClick={() => void retryGptWebReview()} type="button">{reviewerBusy ? '自动审核进行中…' : '重试 GPT Web 自动审核'}</button></div> : null}
+                          </div>
+                        ) : null}
                         {selected.state === 'REVIEW_PENDING' ? (
                           <div className="task-human-fallback">
                             <strong>人工兜底 ReviewDecision</strong>
-                            <p>GPT Web 的全自动审核通道尚未使用 DOM 自动化伪造；这里可人工批准，或提交必改项。CHANGES_REQUESTED 会进入现有同 Provider 自动返工链路。</p>
+                            <p>GPT Web 自动审核采用 Chromium Accessibility/Input，不调用私有 ChatGPT API，也不覆盖已有草稿。若自动通道失败或证据不足，可在这里人工批准或提交必改项；CHANGES_REQUESTED 仍进入同 Provider 自动返工链路。</p>
                             <textarea onChange={event => setFixes(event.target.value)} placeholder={'每行一条必改项\n例如：补充异常处理\n补充对应测试'} value={fixes} />
                             <div><button className="task-secondary" disabled={busy} onClick={() => void submitDecision('CHANGES_REQUESTED')} type="button">要求返工</button><button className="task-primary" disabled={busy} onClick={() => void submitDecision('APPROVED')} type="button">人工批准</button></div>
                           </div>
