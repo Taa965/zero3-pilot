@@ -55,21 +55,25 @@ try {
     $indexPath = Join-Path $HermesDesktop 'index.html'
     $entryPath = Join-Path $HermesDesktop 'src\zero3-shell-entry.tsx'
     $shellPath = Join-Path $HermesDesktop 'src\zero3-shell\zero3-shell.tsx'
+    $agentDockPath = Join-Path $HermesDesktop 'src\zero3-shell\agent-task-dock.tsx'
     $manifestPath = Join-Path $HermesDesktop 'public\zero3-renderer.json'
 
     Assert-True (Test-Path $indexPath) 'prepared index.html missing'
     Assert-True (Test-Path $entryPath) 'Zero3 renderer entry missing'
     Assert-True (Test-Path $shellPath) 'Zero3 three-column shell missing'
+    Assert-True (Test-Path $agentDockPath) 'Zero3 Agent Task dock missing'
     Assert-True (Test-Path $manifestPath) 'zero3-renderer.json missing'
 
     $index = Get-Content -Raw $indexPath
     $entry = Get-Content -Raw $entryPath
     $shell = Get-Content -Raw $shellPath
+    $agentDock = Get-Content -Raw $agentDockPath
     $manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
 
     Assert-Contains $index '/src/zero3-shell-entry.tsx' 'index.html does not point at the Zero3-owned renderer entry'
     Assert-NotContains $index '/src/main.tsx' 'Hermes main.tsx is still mounted as the product renderer'
     Assert-Contains $entry 'Zero3Shell' 'Zero3 renderer entry does not mount Zero3Shell'
+    Assert-Contains $entry 'AgentTaskDock' 'Zero3 renderer entry does not mount AgentTaskDock'
     Assert-True ($manifest.renderer -eq 'zero3-three-column-v1') 'renderer manifest identity mismatch'
     Assert-True ($manifest.codexUi -eq 'retired-not-mounted') 'Codex OSS UI retirement marker missing'
     Assert-True ($manifest.hermesUi -eq 'retired-not-mounted') 'Hermes UI retirement marker missing'
@@ -89,8 +93,18 @@ try {
       Assert-Contains $shell $_ "real runtime path missing from renderer: $_"
     }
 
+    @(
+      'runtime.zero3AgentTask',
+      'runtime.zero3GeminiWeb.create',
+      "protocol: 'zero3.pilot.task-spec.v2'",
+      "completionGate: ['result.summary', 'git.clean', 'verification.no-failures', 'artifact.hashes']"
+    ) | ForEach-Object {
+      Assert-Contains $agentDock $_ "real Agent Task path missing from renderer: $_"
+    }
+
     @('grep_search', 'replace_file_content') | ForEach-Object {
       Assert-NotContains $shell $_ "retired demo marker leaked back into renderer: $_"
+      Assert-NotContains $agentDock $_ "retired demo marker leaked into Agent Task dock: $_"
     }
   }
 
@@ -98,7 +112,7 @@ try {
     $preload = Get-Content -Raw (Join-Path $HermesDesktop 'electron\preload.ts')
     $main = Get-Content -Raw (Join-Path $HermesDesktop 'electron\main.ts')
 
-    @('zero3Codex', 'zero3Workspace', 'zero3GptWeb', 'zero3GeminiWeb') | ForEach-Object {
+    @('zero3Codex', 'zero3Workspace', 'zero3GptWeb', 'zero3GeminiWeb', 'zero3AgentTask') | ForEach-Object {
       Assert-Contains $preload "exposeInMainWorld('$_'" "preload bridge missing: $_"
     }
 
@@ -111,7 +125,9 @@ try {
       'zero3:gpt-web:show',
       'zero3:gpt-web:set-bounds',
       'zero3:gemini-web:show',
-      'zero3:gemini-web:set-bounds'
+      'zero3:gemini-web:set-bounds',
+      'zero3:agent-task:dispatch',
+      'zero3:agent-task:get'
     ) | ForEach-Object {
       Assert-Contains $main $_ "Electron main handler missing: $_"
     }
@@ -125,7 +141,7 @@ try {
   }
 
   Write-Host "`n静态/类型验收通过。下一步需要在窗口中做真实性操作验收。" -ForegroundColor Green
-  Write-Host '重点：真实 Codex Thread/Turn/Item、Stop、审批/输入、GPT/Gemini 登录与 WebContentsView resize。'
+  Write-Host '重点：真实 Codex Thread/Turn/Item、Stop、审批/输入、GPT/Gemini 登录与 WebContentsView resize、任务派发与状态回读。'
 
   if ($Launch) {
     Invoke-Step '启动 Zero3 Pilot 进行人工真实性验收' {
