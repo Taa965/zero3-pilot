@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
 import { applyZero3GptWebUi } from './apply-gpt-web-ui.mjs'
+import { applyZero3ProjectContextMcp } from './apply-project-context-mcp.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'gpt-web-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'gpt-web')
@@ -192,4 +193,5 @@ export function applyZero3GptWebProvider() {
   ])
 
   applyZero3GptWebUi()
+  applyZero3ProjectContextMcp()
 }
