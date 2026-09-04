@@ -33,7 +33,19 @@ if ($Head -ne $CandidateSha.ToLowerInvariant()) {
 
 Assert-CleanRepository
 
-$EvidenceRoot = Join-Path $RepoRoot 'artifacts/development-group-acceptance'
+# Acceptance evidence must not dirty the exact candidate being proven. Keep the
+# transcript outside the repository rather than hiding it behind .gitignore.
+$EvidenceRoot = if ($env:ZERO3_DG_ACCEPTANCE_DIR) {
+  [System.IO.Path]::GetFullPath($env:ZERO3_DG_ACCEPTANCE_DIR)
+} else {
+  Join-Path ([System.IO.Path]::GetTempPath()) 'zero3-pilot-development-group-acceptance'
+}
+$EvidenceRoot = [System.IO.Path]::GetFullPath($EvidenceRoot)
+$RepoRootFull = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+if ($EvidenceRoot.Equals($RepoRootFull, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $EvidenceRoot.StartsWith($RepoRootFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw 'ZERO3_DG_ACCEPTANCE_DIR must be outside the repository so evidence cannot dirty the candidate'
+}
 New-Item -ItemType Directory -Force -Path $EvidenceRoot | Out-Null
 $Transcript = Join-Path $EvidenceRoot "windows-$CandidateSha.log"
 Start-Transcript -Path $Transcript -Force | Out-Null
