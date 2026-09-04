@@ -105,10 +105,6 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-function numberValue(value: unknown, fallback = 0): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
-}
-
 function dateValue(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value > 10_000_000_000 ? value : value * 1000
   if (typeof value === 'string') {
@@ -136,14 +132,8 @@ function contentText(value: unknown): string {
 }
 
 function itemText(item: JsonRecord): string {
-  return (
-    text(item.text) ??
-    contentText(item.content) ??
-    text(item.summary) ??
-    text(item.message) ??
-    text(item.command) ??
-    ''
-  )
+  const content = contentText(item.content)
+  return text(item.text) ?? (content || null) ?? text(item.summary) ?? text(item.message) ?? text(item.command) ?? ''
 }
 
 function providerFromEntry(entry: WorkspaceEntry): Provider {
@@ -387,7 +377,6 @@ function PromptOverlay({ prompt, onClose }: { prompt: PendingPrompt; onClose: ()
 }
 
 export function App() {
-  const bridges = zero3Window()
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [activeProvider, setActiveProvider] = useState<Provider>('codex')
@@ -429,7 +418,7 @@ export function App() {
       try {
         await codex.thread.resume({ threadId, approvalPolicy: APPROVAL_POLICY, sandbox: SANDBOX_POLICY })
       } catch {
-        // thread/read is still authoritative for presentation when resume is not required.
+        // thread/read remains authoritative for presentation when resume is unnecessary.
       }
       const response = await codex.thread.read({ threadId, includeTurns: true })
       const thread = threadFrom(response)
