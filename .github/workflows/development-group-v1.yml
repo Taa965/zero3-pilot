@@ -32,16 +32,19 @@ jobs:
 
       - name: Diff hygiene
         shell: bash
-        run: git diff --check
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          else
+            git diff --check HEAD^...HEAD
+          fi
 
       - name: Development Group architecture guard
         run: node scripts/check-development-group-v1.mjs
 
       - name: Existing repository architecture guard
         run: node scripts/check-architecture.mjs
-
-      - name: Exact TypeScript tools
-        run: npm install --no-save --package-lock=false --ignore-scripts typescript@5.9.2 @types/node@24.10.1
 
       - name: Development Group core behavior tests
         run: >-
