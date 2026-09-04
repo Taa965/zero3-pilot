@@ -6,6 +6,7 @@ on:
       - integration/development-group-v1
       - main
     paths:
+      - '.zero3/verification-policy.json'
       - 'apps/zero3-desktop/group-runtime/**'
       - 'apps/zero3-desktop/executor-runtime/handoff/**'
       - 'plugins/zero3-development-group/**'
