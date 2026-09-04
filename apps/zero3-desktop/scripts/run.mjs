@@ -52,12 +52,28 @@ function runSync(file, args, options = {}) {
   }
 }
 
+function hermesNodePackageExists(...segments) {
+  return (
+    isFile(path.join(hermesDesktopDir, 'node_modules', ...segments, 'package.json')) ||
+    isFile(path.join(hermesRoot, 'node_modules', ...segments, 'package.json'))
+  )
+}
+
 function ensureHermesDependencies(env) {
-  if (isDirectory(path.join(hermesRoot, 'node_modules'))) return
+  const nodeModulesPresent = isDirectory(path.join(hermesRoot, 'node_modules'))
+  const zero3McpDependenciesPresent =
+    hermesNodePackageExists('@modelcontextprotocol', 'server') && hermesNodePackageExists('zod')
+  if (nodeModulesPresent && zero3McpDependenciesPresent) return
   runSync(commandName('npm'), ['install', '--workspace', 'apps/desktop'], {
     cwd: hermesRoot,
     env
   })
+  if (
+    !hermesNodePackageExists('@modelcontextprotocol', 'server') ||
+    !hermesNodePackageExists('zod')
+  ) {
+    throw new Error('Zero3 project-context MCP dependencies were not installed into the Hermes desktop workspace.')
+  }
 }
 
 function ensurePinnedCodexBinary(env, profile = 'debug') {
