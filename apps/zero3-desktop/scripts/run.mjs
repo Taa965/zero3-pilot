@@ -91,7 +91,11 @@ function ensurePinnedCodexBinary(env, profile = 'debug') {
     'codex'
   ]
   if (profile === 'release') args.push('--release')
-  runSync('cargo', args, { cwd: codexRoot, env })
+  // rustup resolves rust-toolchain.toml by walking up from the working
+  // directory, not from --manifest-path. The pinned Codex toolchain file lives
+  // in codex-rs/, so running from codexRoot silently falls back to whatever the
+  // machine's default toolchain is instead of the pinned compiler.
+  runSync('cargo', args, { cwd: path.join(codexRoot, 'codex-rs'), env })
 
   if (!isFile(binary)) {
     throw new Error(`Pinned Codex binary was not produced at ${binary}`)
