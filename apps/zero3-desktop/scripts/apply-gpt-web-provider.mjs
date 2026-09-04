@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { applyZero3GptWebUi } from './apply-gpt-web-ui.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'gpt-web-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'gpt-web')
@@ -188,4 +189,6 @@ export function applyZero3GptWebProvider() {
       to: globalWindowSurface
     }
   ])
+
+  applyZero3GptWebUi()
 }
