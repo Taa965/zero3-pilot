@@ -14,6 +14,10 @@ function requireText(source, needle, label) {
   if (!source.includes(needle)) throw new Error(`Unified release guard: missing ${label}`)
 }
 
+function forbid(source, pattern, label) {
+  if (pattern.test(source)) throw new Error(`Unified release guard: forbidden ${label}`)
+}
+
 function requireOrder(source, values, label) {
   let cursor = -1
   for (const value of values) {
@@ -58,6 +62,7 @@ requireOrder(codexPrepare, ['applyDevelopmentGroupBridge()', 'prepareCodexOverla
 
 const dgBridge = read('apps/zero3-desktop/scripts/apply-development-group-bridge.mjs')
 requireText(dgBridge, "from: '    hermesDesktop: {'", 'provider-compatible Window type anchor')
+forbid(dgBridge, /from:\s*`\s*interface Window \{\s*hermesDesktop:/u, 'legacy first-Window-property assumption')
 requireText(dgBridge, 'copyProductionTree(executorSource', 'Executor authority staging')
 requireText(dgBridge, 'copyProductionTree(groupSource', 'Development Group authority staging')
 requireText(dgBridge, "from: 'const zero3CodexAppServer = createZero3CodexAppServer()\\n'", 'shared Codex singleton composition anchor')
@@ -79,6 +84,20 @@ requireText(remoteNode, 'Zero3RemoteTaskRunner', 'Remote Host authoritative task
 requireText(agentFinalizer, 'completionGate', 'TaskSpec completion gate finalizer')
 requireText(dgFacade, 'mandatoryCommandIds:', 'Development Group mandatory verification binding')
 requireText(dgFacade, 'outcomeUnknownCount', 'Development Group OutcomeUnknown gate')
+
+const unifiedWindows = read('scripts/acceptance/unified-release-windows.ps1')
+requireText(unifiedWindows, 'check-unified-release-candidate.mjs', 'unified release guard in Windows runner')
+requireText(unifiedWindows, 'check-development-group-v1.mjs', 'Development Group guard in Windows runner')
+requireText(unifiedWindows, 'check-gemini-antigravity-architecture.mjs', 'Gemini/Antigravity guard in Windows runner')
+requireText(unifiedWindows, 'check-prepared-gemini-integration.mjs', 'prepared provider/agent composition guard')
+requireText(unifiedWindows, 'ZERO3_DESKTOP_ALREADY_PREPARED', 'single-prepare typecheck/package reuse')
+requireText(unifiedWindows, 'Reset generated upstream overlays once', 'single final reset')
+requireText(unifiedWindows, 'group-runtime\\desktop\\desktop-runtime.ts', 'prepared Development Group runtime presence')
+
+const acceptanceContract = read('docs/ReleaseCandidates/UNIFIED_V1_WINDOWS_ACCEPTANCE.md')
+requireText(acceptanceContract, 'STATIC_RELEASE_CANDIDATE / REAL_RUNTIME_NOT_RUN', 'truthful release-candidate status')
+requireText(acceptanceContract, 'unified-release-windows.ps1', 'single acceptance entry documentation')
+requireText(acceptanceContract, 'Never carry PASS evidence from an older candidate SHA forward', 'exact-SHA evidence non-transfer rule')
 
 for (const file of [
   'scripts/acceptance/development-group-windows.ps1',
