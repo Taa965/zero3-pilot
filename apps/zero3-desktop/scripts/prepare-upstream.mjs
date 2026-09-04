@@ -22,6 +22,7 @@ import { applyZero3CodexStructuredInput } from './apply-codex-structured-input.m
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3RemoteHostRuntime } from './apply-remote-host-runtime.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
+import { applyZero3WorkspaceEntryRuntime } from './apply-workspace-entry-runtime.mjs'
 
 const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
 const brandedLocaleFiles = ['ar.ts', 'en.ts', 'ja.ts', 'zh-hant.ts', 'zh.ts']
@@ -260,6 +261,7 @@ applyBrandOverlay()
 applyZero3ShellPolicy()
 applyZero3ChineseUi()
 applyZero3CodexTransport()
+applyZero3WorkspaceEntryRuntime()
 applyZero3CodexPrimaryChat()
 applyZero3CodexPrompts()
 applyZero3CodexPromptQueueHardening()
