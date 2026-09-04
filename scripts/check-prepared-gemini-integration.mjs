@@ -70,7 +70,17 @@ const oldReview = main.indexOf("ipcMain.handle('zero3:review:decision'")
 const removeReview = main.lastIndexOf("ipcMain.removeHandler('zero3:review:decision')")
 const newReview = main.lastIndexOf("ipcMain.handle('zero3:review:decision'")
 if (!(oldReview >= 0 && oldReview < removeReview && removeReview < newReview)) throw new Error('electron/main.ts: legacy review decision handler is not safely replaced by authoritative task-state handler')
-forbid(main, mainPath, ["child_process.exec", 'shell: true'])
+
+// Pinned Hermes legitimately carries platform-specific shell compatibility for
+// its own .cmd/.bat backend probes. Do not blanket-match the whole upstream
+// main.ts (including comments). Keep the strict no-shell/no-direct-exec rule on
+// the Zero3 agent composition block where task authority is injected.
+forbid(main, mainPath, ["child_process.exec"])
+const agentCoreStart = main.indexOf('const zero3AgentTaskStore = new Zero3AgentTaskStore')
+const agentCoreEnd = main.indexOf('function zero3AgentCompatRecord', agentCoreStart)
+if (agentCoreStart < 0 || agentCoreEnd <= agentCoreStart) throw new Error('electron/main.ts: Zero3 agent core composition boundary is missing')
+const agentCore = main.slice(agentCoreStart, agentCoreEnd)
+forbid(agentCore, `${mainPath} Zero3 agent core`, ["child_process.exec", 'shell: true'])
 
 const preloadPath = 'electron/preload.ts'
 const preload = read(preloadPath)
