@@ -19,9 +19,40 @@ function write(file, content) {
   fs.writeFileSync(file, content)
 }
 
+function assertFunctionalRenderer(source) {
+  const required = [
+    'runtime.zero3Codex.thread.list',
+    'runtime.zero3Codex.thread.start',
+    'runtime.zero3Codex.thread.read',
+    'runtime.zero3Codex.turn.start',
+    'runtime.zero3Codex.turn.interrupt',
+    'runtime.zero3Codex.respondToServerRequest',
+    'runtime.zero3Workspace.list',
+    'runtime.zero3GptWeb',
+    'runtime.zero3GeminiWeb',
+    'ResizeObserver'
+  ]
+  for (const marker of required) {
+    if (!source.includes(marker)) {
+      throw new Error(`Zero3 three-column renderer lost required real-runtime path: ${marker}`)
+    }
+  }
+
+  // The screenshot prototype used these literal fake tool rows. They must never
+  // return to the product renderer: tool cards must be projected from Codex Item
+  // events/history instead.
+  for (const fakeMarker of ['grep_search', 'replace_file_content']) {
+    if (source.includes(fakeMarker)) {
+      throw new Error(`Zero3 three-column renderer contains retired demo marker: ${fakeMarker}`)
+    }
+  }
+}
+
 export function applyZero3ThreeColumnUi() {
   const shellSource = requiredFile(path.join(sourceDir, 'zero3-shell.tsx'))
   const cssSource = requiredFile(path.join(sourceDir, 'zero3-shell.css'))
+  const shellText = fs.readFileSync(shellSource, 'utf8')
+  assertFunctionalRenderer(shellText)
 
   fs.rmSync(targetDir, { recursive: true, force: true })
   fs.mkdirSync(targetDir, { recursive: true })
