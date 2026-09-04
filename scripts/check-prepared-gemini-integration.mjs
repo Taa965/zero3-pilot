@@ -31,8 +31,10 @@ const staged = [
   'electron/zero3/mcp/task-mcp-server.mjs',
   'electron/zero3/mcp/project-context-server.mjs',
   'electron/zero3/remote-host/remote-task-runner.ts',
-  'src/app/chat/sidebar/gpt-web-handoff-actions.tsx',
-  'src/app/chat/sidebar/gemini-session-section.tsx'
+  'src/zero3-shell/zero3-shell.tsx',
+  'src/zero3-shell/agent-task-dock.tsx',
+  'src/zero3-shell-entry.tsx',
+  'public/zero3-renderer.json'
 ]
 for (const relative of staged) requireFile(relative)
 
@@ -84,21 +86,67 @@ forbid(agentCore, `${mainPath} Zero3 agent core`, ["child_process.exec", 'shell:
 
 const preloadPath = 'electron/preload.ts'
 const preload = read(preloadPath)
-requireAll(preload, preloadPath, ["contextBridge.exposeInMainWorld('zero3AgentTask'", "contextBridge.exposeInMainWorld('zero3AgentTasks'", "ipcRenderer.invoke('zero3:agent-task:dispatch'", "ipcRenderer.invoke('zero3:agent-task:review-decision'", "ipcRenderer.invoke('zero3:agent-task:recovery-inspect'", "ipcRenderer.invoke('zero3:agent-task:recovery-resolve'", "ipcRenderer.invoke('zero3:agent-tasks:dispatch'"])
+requireAll(preload, preloadPath, [
+  "contextBridge.exposeInMainWorld('zero3AgentTask'",
+  "contextBridge.exposeInMainWorld('zero3AgentTasks'",
+  "ipcRenderer.invoke('zero3:agent-task:get'",
+  "ipcRenderer.invoke('zero3:agent-task:dispatch'",
+  "ipcRenderer.invoke('zero3:agent-task:review-decision'",
+  "ipcRenderer.invoke('zero3:agent-task:recovery-inspect'",
+  "ipcRenderer.invoke('zero3:agent-task:recovery-resolve'",
+  "ipcRenderer.invoke('zero3:agent-tasks:dispatch'"
+])
 
 const globalPath = 'src/global.d.ts'
 const global = read(globalPath)
-requireAll(global, globalPath, ["type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'AUTO'",'zero3AgentTask: {','zero3AgentTasks: {','recoveryInspect:','recoveryResolve:'])
+requireAll(global, globalPath, [
+  "type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'AUTO'",
+  'zero3AgentTask: {',
+  'zero3AgentTasks: {',
+  'recoveryInspect:',
+  'recoveryResolve:'
+])
 
-const handoffPath = 'src/app/chat/sidebar/gpt-web-handoff-actions.tsx'
-const handoff = read(handoffPath)
-requireAll(handoff, handoffPath, ["completionGate: ['result.summary','git.clean','verification.no-failures','artifact.hashes']",'Commit intended changes and leave the isolated task worktree clean before reporting completion.','taskId: dispatched.taskId'])
-forbid(handoff, handoffPath, ["completionGate: target === 'CODEX' ?", "['result.json.valid','scope.valid','review.packet.generated']"])
+const indexPath = 'index.html'
+const index = read(indexPath)
+requireAll(index, indexPath, ['/src/zero3-shell-entry.tsx', '<title>Zero3 Pilot</title>'])
+forbid(index, indexPath, ['/src/main.tsx'])
 
-const geminiUiPath = 'src/app/chat/sidebar/gemini-session-section.tsx'
-const geminiUi = read(geminiUiPath)
-requireAll(geminiUi, geminiUiPath, ['CustomEvent<{ entryId: string; taskId?: string }>','if (detail?.taskId) setTaskId(detail.taskId)','诊断：直接启动 Antigravity'])
-forbid(geminiUi, geminiUiPath, ['executeJavaScript(', 'sendInputEvent('])
+const rendererEntryPath = 'src/zero3-shell-entry.tsx'
+const rendererEntry = read(rendererEntryPath)
+requireAll(rendererEntry, rendererEntryPath, ['Zero3Shell', 'AgentTaskDock', './zero3-shell/agent-task-dock.css'])
+forbid(rendererEntry, rendererEntryPath, ["from './main'", "from './app'"])
+
+const rendererPath = 'src/zero3-shell/zero3-shell.tsx'
+const renderer = read(rendererPath)
+requireAll(renderer, rendererPath, [
+  'runtime.zero3Codex.thread.list',
+  'runtime.zero3Codex.turn.start',
+  'runtime.zero3Codex.respondToServerRequest',
+  'runtime.zero3Workspace.list',
+  'runtime.zero3GptWeb',
+  'runtime.zero3GeminiWeb',
+  'ResizeObserver'
+])
+forbid(renderer, rendererPath, ['grep_search', 'replace_file_content'])
+
+const taskDockPath = 'src/zero3-shell/agent-task-dock.tsx'
+const taskDock = read(taskDockPath)
+requireAll(taskDock, taskDockPath, [
+  'runtime.zero3AgentTask',
+  'runtime.zero3GeminiWeb.create',
+  "protocol: 'zero3.pilot.task-spec.v2'",
+  "completionGate: ['result.summary', 'git.clean', 'verification.no-failures', 'artifact.hashes']",
+  "reviewer: reviewSessionId ? 'GPT_WEB' : 'HUMAN'",
+  'targetLogicalSessionId'
+])
+forbid(taskDock, taskDockPath, ['executeJavaScript(', 'sendInputEvent(', 'document.querySelector'])
+
+const manifest = JSON.parse(read('public/zero3-renderer.json'))
+if (manifest.renderer !== 'zero3-three-column-v1') throw new Error('public/zero3-renderer.json: renderer identity mismatch')
+if (manifest.hermesUi !== 'retired-not-mounted') throw new Error('public/zero3-renderer.json: Hermes UI must remain retired')
+if (manifest.codexUi !== 'retired-not-mounted') throw new Error('public/zero3-renderer.json: Codex UI must remain retired')
+if (!Array.isArray(manifest.runtimeBridges) || !manifest.runtimeBridges.includes('window.zero3AgentTask')) throw new Error('public/zero3-renderer.json: Agent Task bridge missing')
 
 const packagedBridge = read('electron/zero3/agent-desktop-bridge/bridge.ts')
 requireAll(packagedBridge, 'electron/zero3/agent-desktop-bridge/bridge.ts', ["../agent-routing/agent-contracts"])
@@ -116,5 +164,5 @@ requireAll(packagedTaskMcp, 'electron/zero3/mcp/task-mcp-server.mjs', ["import {
 const packagedProjectMcp = read('electron/zero3/mcp/project-context-server.mjs')
 requireAll(packagedProjectMcp, 'electron/zero3/mcp/project-context-server.mjs', ["createHash('sha256')",'storageName(id)','invalid persisted project context','invalid persisted handoff'])
 
-console.log('Prepared Gemini/Antigravity desktop composition gate passed.')
-console.log(`Verified ${staged.length} staged runtime/UI files plus Electron main/preload/global/MCP composition.`)
+console.log('Prepared Gemini/Antigravity + Zero3 renderer composition gate passed.')
+console.log(`Verified ${staged.length} staged runtime/renderer files plus Electron main/preload/global/MCP composition.`)
