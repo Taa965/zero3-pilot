@@ -7,7 +7,11 @@ import {
 } from 'electron'
 
 import type { Zero3WorkspaceEntryStore } from '../workspace/workspace-entry-store'
-import type { Zero3GptWebWorkspaceEntry } from '../workspace/workspace-entry-types'
+import {
+  ZERO3_GPT_WEB_HOME,
+  ZERO3_GPT_WEB_PROFILE_ID,
+  type Zero3GptWebWorkspaceEntry
+} from '../workspace/workspace-entry-types'
 import {
   ZERO3_GPT_WEB_MAX_LIVE_VIEWS,
   ZERO3_GPT_WEB_PARTITION,
@@ -55,6 +59,20 @@ function chatGptNavigationUrl(value: unknown): string {
     throw new Error('direct GPT Web navigation is limited to chatgpt.com')
   }
   return parsed.toString()
+}
+
+function resumeChatGptUrl(entry: Zero3GptWebWorkspaceEntry): string {
+  for (const candidate of [entry.conversationUrl, entry.currentUrl]) {
+    if (!candidate) continue
+    try {
+      return chatGptNavigationUrl(candidate)
+    } catch {
+      // Login/OAuth or an external page can temporarily become currentUrl.
+      // Resume only a canonical ChatGPT URL; auth state itself lives in the
+      // persistent Electron partition and is never copied into Zero3 metadata.
+    }
+  }
+  return ZERO3_GPT_WEB_HOME
 }
 
 function observedHttpsUrl(value: string): string | null {
@@ -218,6 +236,7 @@ export class Zero3GptWebProvider {
   private async requireEntry(id: string): Promise<Zero3GptWebWorkspaceEntry> {
     const entry = await this.entries.get(id)
     if (!entry || entry.kind !== 'gpt_web') throw new Error('GPT Web workspace entry was not found')
+    if (entry.browserProfileId !== ZERO3_GPT_WEB_PROFILE_ID) throw new Error('unsupported GPT Web browser profile')
     return entry
   }
 
@@ -253,11 +272,9 @@ export class Zero3GptWebProvider {
     this.bump(entry.id)
     this.evictIfNeeded(entry.id)
 
-    const target = chatGptNavigationUrl(entry.conversationUrl ?? entry.currentUrl)
+    const target = resumeChatGptUrl(entry)
     this.emitEvent({ kind: 'state', entryId: entry.id, state: 'loading' })
-    try {
-      await view.webContents.loadURL(target)
-    } catch (error) {
+    void view.webContents.loadURL(target).catch(error => {
       if (!view.webContents.isDestroyed()) {
         this.emitEvent({
           kind: 'state',
@@ -266,15 +283,14 @@ export class Zero3GptWebProvider {
           detail: error instanceof Error ? error.message : String(error)
         })
       }
-      throw error
-    }
+    })
     return live
   }
 
   private installViewGuards(live: LiveGptWebView): void {
     const contents = live.view.webContents
-    contents.on('will-navigate', (event, url) => {
-      if (observedHttpsUrl(url)) return
+    contents.on('will-navigate', event => {
+      if (observedHttpsUrl(event.url)) return
       event.preventDefault()
       this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'error', detail: 'Blocked non-HTTPS navigation' })
     })
@@ -337,6 +353,7 @@ export class Zero3GptWebProvider {
       })
       this.detachFromParent(live)
       this.live.delete(live.entryId)
+      if (!contents.isDestroyed()) contents.close({ waitForBeforeUnload: false })
     })
     contents.on('destroyed', () => {
       const current = this.live.get(live.entryId)
@@ -353,7 +370,7 @@ export class Zero3GptWebProvider {
           id: entryId,
           currentUrl,
           ...(conversationUrl ? { conversationUrl } : {}),
-          pageTitle
+          ...(pageTitle ? { pageTitle } : {})
         })
         this.emitEvent({
           kind: 'navigation',
