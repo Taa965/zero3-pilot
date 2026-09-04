@@ -102,7 +102,7 @@ function applyCompletionGate() {
         "          agentSummary: lastAgentSummary(turn),\n" +
         "          gitPreflight,\n" +
         "          gitPostflight,\n" +
-        "          evidenceMethods: evidence.snapshot().events.map(event => event.method)\n" +
+        "          executionResultReady: true\n" +
         "        })\n" +
         "        const gateEvidence = evidence.push('remote.completion.gate', completionGate)\n" +
         "        if (onEvidence) await onEvidence(gateEvidence.sequence, gateEvidence.method, gateEvidence.params)\n" +
