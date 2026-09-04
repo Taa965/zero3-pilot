@@ -6,6 +6,9 @@ export type Zero3CodexCommandExecutor = {
 
 export type Zero3GitEvidence = {
   repositoryRoot: string
+  gitDir: string
+  commonGitDir: string
+  linkedWorktree: boolean
   headSha: string
   baseSha: string | null
   branch: string | null
@@ -65,6 +68,10 @@ function unique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b))
 }
 
+function resolveGitPath(workspace: string, value: string): string {
+  return path.resolve(path.isAbsolute(value) ? value : path.join(workspace, value))
+}
+
 export async function zero3GitEvidence(
   executor: Zero3CodexCommandExecutor,
   workspaceValue: string,
@@ -73,6 +80,10 @@ export async function zero3GitEvidence(
   const workspace = path.resolve(workspaceValue)
   const repositoryRoot = path.resolve(firstLine(await git(executor, workspace, ['rev-parse', '--show-toplevel'], 'Git repository-root check'), 'repository root'))
   if (!inside(repositoryRoot, workspace)) throw new Error('task workspace is outside the Git repository reported by Codex')
+
+  const gitDir = resolveGitPath(workspace, firstLine(await git(executor, workspace, ['rev-parse', '--git-dir'], 'Git directory check'), 'Git directory'))
+  const commonGitDir = resolveGitPath(workspace, firstLine(await git(executor, workspace, ['rev-parse', '--git-common-dir'], 'Git common-directory check'), 'Git common directory'))
+  const linkedWorktree = path.normalize(gitDir).toLowerCase() !== path.normalize(commonGitDir).toLowerCase()
 
   const headSha = firstLine(await git(executor, workspace, ['rev-parse', '--verify', 'HEAD'], 'Git HEAD check'), 'HEAD')
   let baseSha: string | null = null
@@ -109,6 +120,9 @@ export async function zero3GitEvidence(
   const changedFiles = unique([...committedChangedFiles, ...workingTreeChangedFiles])
   return {
     repositoryRoot,
+    gitDir,
+    commonGitDir,
+    linkedWorktree,
     headSha,
     baseSha,
     branch,
@@ -119,7 +133,14 @@ export async function zero3GitEvidence(
   }
 }
 
-export function assertZero3GitPreflight(evidence: Zero3GitEvidence, requestedBaseSha?: string | null): void {
+export function assertZero3GitPreflight(
+  evidence: Zero3GitEvidence,
+  requestedBaseSha?: string | null,
+  requireLinkedWorktree = false
+): void {
+  if (requireLinkedWorktree && !evidence.linkedWorktree) {
+    throw new Error('writable agent tasks require an isolated linked Git worktree; the primary working tree is not accepted')
+  }
   if (requestedBaseSha?.trim() && evidence.baseSha && evidence.headSha.toLowerCase() !== evidence.baseSha.toLowerCase()) {
     throw new Error(`task workspace HEAD ${evidence.headSha} does not match requested base ${evidence.baseSha}`)
   }
