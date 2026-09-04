@@ -4,7 +4,9 @@ on:
   push:
     branches:
       - 'feature/gpt-web-gemini-antigravity-v1'
+      - 'feat/zero3-real-three-column-ui'
     paths:
+      - 'apps/zero3-desktop/renderer-v2/**'
       - 'apps/zero3-desktop/gemini-web-runtime/**'
       - 'apps/zero3-desktop/antigravity-runtime/**'
       - 'apps/zero3-desktop/agent-routing-runtime/**'
@@ -22,6 +24,7 @@ on:
       - '.github/workflows/gemini-antigravity-static-gate.yml'
   pull_request:
     paths:
+      - 'apps/zero3-desktop/renderer-v2/**'
       - 'apps/zero3-desktop/gemini-web-runtime/**'
       - 'apps/zero3-desktop/antigravity-runtime/**'
       - 'apps/zero3-desktop/agent-routing-runtime/**'
@@ -56,7 +59,7 @@ jobs:
       - name: Check source architecture invariants
         run: node scripts/check-gemini-antigravity-architecture.mjs
 
-      - name: Apply all pinned desktop overlays and inspect final composition
+      - name: Apply all pinned desktop runtime overlays and inspect the authoritative renderer
         shell: bash
         run: |
           set -euo pipefail
