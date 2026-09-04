@@ -1,41 +1,50 @@
-# Zero3 Desktop — Hermes UI shell over Codex core
+# Zero3 Desktop — 唯一三栏 UI + Codex Agent Kernel
 
-This directory owns the target Zero3 desktop architecture.
+`apps/zero3-desktop` 现在只有一个产品 Renderer：Zero3 Pilot 自己维护的三栏式工作台。
 
-## Role hierarchy
-
-- `upstream/codex` — **core runtime / Agent Kernel**.
-- `upstream/hermes-agent` — **Electron + React UI/UX shell**.
-- `upstream/deepseek-harness` — **capability donor/reference**.
-- installed Codex/Claude/Hermes apps — **External Agent Collaboration targets**, never Zero3's core.
-
-The architecture constitution is [`../../docs/ARCHITECTURE_CONSTITUTION.md`](../../docs/ARCHITECTURE_CONSTITUTION.md).
-
-## Target transport
+## 最终产品边界
 
 ```text
-Hermes-derived React UI
+Zero3 三栏式 UI（唯一）
         |
-Zero3 Codex adapters
+        +--------------------+---------------------+
+        |                    |                     |
+window.zero3Codex     window.zero3GptWeb    window.zero3GeminiWeb
+        |                    |                     |
+typed preload IPC     WebContentsView       WebContentsView
+        |                    |                     |
+Codex app-server      chatgpt.com session   Gemini session / Antigravity
         |
-window.zero3Codex
-        |
-typed Electron preload IPC
-        |
-Electron main Codex client
-        |
-codex app-server --stdio
-        |
-open-source Codex
+open-source Codex runtime
 ```
 
-Codex Thread / Turn / Item and app-server notifications/server requests are authoritative for the migrated primary chat path.
+### UI 所有权
 
-## R1A — implemented transport boundary
+- `apps/zero3-desktop/renderer-v2/` — **唯一需要继续维护的产品 UI**。
+- Codex 开源项目自带 UI — **废弃，不打包、不挂载**；只保留 Codex app-server / CLI Runtime。
+- Hermes React UI — **废弃，不导入、不挂载**。
+- Hermes 当前只作为过渡期的 Electron/Vite 构建宿主与部分已审查 main/preload 基础设施；这不是产品 UI，也不再承接新 UI 功能。
+- `apps/desktop` 旧 Rust/Tao/Wry 桌面 — 历史/回滚用途，不是目标桌面。
 
-`apply-codex-transport.mjs` adds the Zero3-owned Codex transport directly to the Hermes-derived Electron shell.
+`apply-zero3-three-column-ui.mjs` 在所有 Runtime overlay 完成后最后执行，并把上游 `index.html` 直接指向 `/src/zero3-shell-entry.tsx`。因此 Hermes 的 `src/main.tsx` 不进入实际产品 Renderer 模块图。
 
-The Renderer receives only purpose-specific operations:
+## 三栏 UI 的真实功能
+
+### 1. 左侧：统一工作台 / 会话列表
+
+会话数据不再是演示数据：
+
+- Codex：`thread/list`
+- GPT Web：`zero3Workspace.list()` 中的 `gpt_web` 条目
+- Gemini Web：`zero3Workspace.list()` 中的 `gemini_web` 条目
+
+支持按 `全部 / Codex / GPT / Gemini` 筛选、搜索、创建真实会话，并持久化最近选择的工作区。
+
+### 2. 中间：真实主工作区
+
+#### Codex
+
+直接使用 `window.zero3Codex`：
 
 ```text
 status / start
@@ -49,139 +58,84 @@ respondToServerRequest
 onEvent
 ```
 
-There is deliberately **no** `call(method, params)`, arbitrary JSON-RPC proxy, localhost proxy, or Zero3 Node bridge exposed to Renderer code.
+主工作区从 Codex Thread / Turn / Item 生成内容，不再展示写死的“执行计划 / grep_search / replace_file_content”演示卡片。
 
-Electron main owns `codex app-server --stdio` lifecycle, `initialize -> initialized`, JSONL parsing, request correlation/timeouts, bounded frame/stderr handling, notification forwarding, server-originated request forwarding, and shutdown.
+当前 Renderer 已处理：
 
-During `npm run dev`, `run.mjs` resolves the Codex core to the binary built from the exact pinned `upstream/codex` checkout. Host-installed Codex/Claude/Hermes applications do not satisfy the core path; those belong to External Agent Collaboration.
+- userMessage / agentMessage
+- reasoning
+- commandExecution
+- fileChange
+- mcpToolCall / dynamicToolCall
+- plan
+- webSearch
+- Turn 运行/完成/中断
+- agent message / reasoning / command delta
+- command/file approval
+- `item/tool/requestUserInput`
 
-Zero3 also gives its core a separate `CODEX_HOME`, defaulting on Windows to `%LOCALAPPDATA%\Zero3Pilot\codex` unless `ZERO3_CODEX_HOME` is explicitly set.
+Composer 直接 `turn/start`；停止按钮直接 `turn/interrupt`。
 
-## R2A — implemented primary chat cut
+#### GPT Web
 
-`apply-codex-primary-chat.mjs` keeps the mature Hermes-derived visual chat shell but replaces the **main chat callbacks** with Codex-native semantics whenever `window.zero3Codex` is present:
+通过 `window.zero3GptWeb` 创建/显示/隐藏/调整 `WebContentsView`，真实 ChatGPT 会话直接嵌入当前三栏工作区，左侧会话和中心 WebContentsView 使用同一个 workspace entry。
 
-```text
-new chat       -> thread/start
-sidebar list   -> thread/list
-resume/history -> thread/resume + thread/read(includeTurns=true)
-send text      -> turn/start
-stream text    -> item/started + item/agentMessage/delta + item/completed
-turn settle    -> turn/completed
-Stop / Esc     -> turn/interrupt
-```
+#### Gemini Web
 
-Codex Threads and Items are projected into the existing `SessionInfo` / `ChatMessage` stores only as presentation adapters. Hermes session/job semantics are no longer authoritative for this main path.
+通过 `window.zero3GeminiWeb` 创建/显示/隐藏/调整 `WebContentsView`，真实 Gemini 会话直接嵌入当前三栏工作区。既有 Gemini/Antigravity/MCP Runtime 保持在 Electron main/preload 侧，不再为它维护第二套 Renderer。
 
-R2A was the initial primary-chat cut. Later merged R3B-R3F work added additional Item families, structured attachments/input, native Thread actions, exact Turn mapping and authoritative paginated history. Any still-unported shell surface must continue to fail closed or remain explicitly compatibility-only rather than silently falling back into Hermes Runtime for migrated core behavior. See [`../../docs/CODEX_PRIMARY_CHAT_R2.md`](../../docs/CODEX_PRIMARY_CHAT_R2.md).
+### 3. 右侧：属性面板
 
-## R2B — Codex native approval and user-input bridge
+右侧属性面板显示并控制当前真实会话：
 
-`apply-codex-prompts.mjs` connects selected app-server **server requests** directly to Zero3-owned prompt UI mounted inside the existing Hermes-derived presentation shell.
+- provider / workspace ID / 状态
+- Codex cwd
+- sandbox
+- approval policy
+- model provider / model
+- Ollama 本机模型发现
+- Codex Core running / initialized / PID / stderr tail
+- GPT/Gemini reload / open external / suspend
 
-Supported in R2B:
+WebContentsView 的 bounds 由中间工作区 DOM 实时计算，并通过 `ResizeObserver` 跟随窗口尺寸和属性面板开合变化。
 
-```text
-item/commandExecution/requestApproval -> Zero3 approval dialog
-item/fileChange/requestApproval       -> Zero3 approval dialog
-item/tool/requestUserInput             -> Zero3 multi-question input dialog
-```
+## Runtime 权威性
 
-Approval responses map only to the reviewed Codex decisions:
+### Codex
 
-```text
-accept
-acceptForSession
-decline
-```
+Codex Thread / Turn / Item 和 app-server notification/server request 是本地 Agent Kernel 的唯一权威来源。
 
-Zero3 deliberately does **not** expose persistent exec-policy or network-policy amendments yet. User-input answers are returned in Codex's native `{ answers: { questionId: { answers: [...] } } }` shape; secret values stay in component-local state rather than a global store.
+Renderer 不暴露 generic JSON-RPC proxy，不启动第二套 agent loop，也不回退到 Hermes Runtime 执行 Codex 主聊天。
 
-The main Codex chat now uses:
+### GPT / Gemini
 
-```text
-approvalPolicy = on-request
-sandbox = read-only
-```
+GPT/Gemini Web 会话通过各自持久 Electron partition 与 workspace registry 管理。认证状态留在 Electron Session 中；UI 不读取登录凭证。
 
-`read-only` is the default sandbox, not a claim that an explicitly approved escalation can never write. A command or file action can gain the permission represented by its Codex server request only after the user explicitly approves it; R2B still does **not** switch the default thread sandbox to `workspace-write`. Unsupported app-server request classes — including permission-profile escalation, MCP elicitation, dynamic tool callbacks, auth refresh/attestation and legacy approval RPCs — are rejected fail-closed rather than auto-approved.
+## 过渡宿主说明
 
-Prompt requests are queued per Codex Thread instead of stored in a single slot. Blocking Codex prompts are also wired into the shell's existing `awaiting-input` state so the composer, Stop/Esc behavior and session UI do not treat a user decision as ordinary background execution. Stop, terminal turn settlement and runtime errors clear/reject unresolved request IDs so Electron main does not retain orphaned app-server callbacks.
+本次改造首先完成 **Renderer 断开**：用户看到和维护的 UI 已经完全归 Zero3 所有。
 
-## R3A — Codex native Item presentation
+当前构建仍借用 pinned Hermes Desktop 的 Electron/Vite package，原因是现有以下 Runtime 已经通过经过审查的 overlay 集成在它的 main/preload 中：
 
-`apply-codex-item-rendering.mjs` preserves Codex as the authoritative Item source and projects selected native Items into the mature Hermes-derived reasoning/tool presentation components. The mapping is presentation-only; it does not call Hermes Runtime or Zero3 Node.
+- Codex app-server transport
+- workspace registry
+- GPT Web provider
+- Gemini Web provider
+- Control Plane / Remote Host / Agent Routing / Artifact / Development Group 等已合并 Runtime
 
-Implemented Item mappings include:
-
-```text
-Codex reasoning        -> Hermes reasoning timeline part
-Codex commandExecution -> Hermes terminal tool card
-Codex fileChange       -> Hermes patch/file-change card
-Codex mcpToolCall      -> Hermes generic MCP tool card
-```
-
-History comes from the same `thread/read(includeTurns=true)` Turn Item arrays, so restored conversations and live conversations share one projection model. Live updates use the pinned app-server notifications.
-
-R3A does not change the R2B security boundary: `approvalPolicy=on-request`, default `sandbox=read-only`, and unsupported server-request classes remain fail-closed.
-
-## R3B-R3F — merged Codex-native parity
-
-The phases previously listed as “next implementation” are now merged:
-
-- **R3B:** additional Codex-native Item presentation, including dynamic-tool, plan and web-search families;
-- **R3C:** validated structured `UserInput[]`, including supported local-image input;
-- **R3D:** native archive/unarchive/delete/rename/fork and active-Turn steer;
-- **R3E:** authoritative message-to-Turn mapping for history-sensitive operations;
-- **R3F:** authoritative paginated history with fail-closed destructive/history-sensitive flows.
-
-See the corresponding documents under `docs/CODEX_*_R3*.md` for detailed boundaries and test evidence.
-
-## Durable AppServer conversation source — #49 merged
-
-Zero3 explicitly launches pinned Codex with `--session-source app-server` and lists `sourceKinds: ['appServer']`. The release-blocking persistence smoke creates two non-ephemeral Threads, starts a first Turn on each, restarts app-server with the same `CODEX_HOME`, then requires both original IDs to remain listable/readable in the AppServer source namespace.
-
-Development sessions created before explicit source tagging may have been persisted under Codex's `vscode` source; the first public alpha does not promise automatic migration of those pre-release rows.
-
-## Codex-native Windows package — #51 merged
-
-`npm run dist:win` builds the exact reviewed Codex pin in release mode, stages it as `resources/zero3-codex/codex.exe`, stages required Zero3/Codex/Hermes legal notices, configures packaged mode to use only the bundled reviewed Codex binary, and invokes the NSIS build with automatic publishing disabled.
-
-The Windows Alpha Artifact workflow verifies the packaged Codex with `--version` and a real app-server smoke, verifies required legal resources, and records an installer SHA-256. The #51 pull-request merge candidate already included merged #49 and passed this integrated package gate; final public-release evidence must still come from the exact post-closeout release SHA.
-
-## Retired Zero3 Node desktop direction
-
-Earlier Phase B work routed the Hermes-derived UI through `zero3-pilot-node` for chat, memory, schedules and browser control. That direction is retired.
-
-The old overlay files may remain temporarily for migration archaeology, but `prepare-upstream.mjs` must not apply them:
-
-- `apply-native-bridge.mjs`
-- `apply-native-chat.mjs`
-- `apply-native-chat-hardening.mjs`
-- `apply-memory-bridge.mjs`
-- `apply-schedule-bridge.mjs`
-- `apply-schedule-lifecycle.mjs`
-- `apply-browser-bridge.mjs`
-
-They must not receive new feature work.
-
-## Temporary Hermes compatibility backend
-
-The pinned Hermes Desktop still expects its own backend for unported shell surfaces. `npm run dev` may therefore prepare Hermes' backend **only as compatibility scaffolding**.
-
-That backend is not allowed to own primary conversation semantics, Codex approvals/input, native Codex Item execution, or new Zero3 product state. The compatibility backend can be removed only after the remaining shell dependencies are ported.
+后续可以把这些 Zero3-owned main/preload Runtime 抽到 `apps/zero3-desktop` 自己的 Electron host，然后彻底删除 Hermes package 依赖。这个迁移不再要求重写产品 UI。
 
 ## Pinned upstreams
 
-Exact SHAs live in the reviewed repository configuration/manifest; preparation fails closed on pin mismatch.
+准确 SHA 由 `scripts/config.mjs` / manifest 校验：
 
 ```text
 Codex            94311d447587411789533c47601fd8bc9d81eb48
-Hermes Agent     f7c79efbac19ae18e8dee7c79a4e4c0935299b5f
+Hermes Agent     f7c79efbac19ae18e8dee7c79a4e4c0935299b5f  # temporary host only
 DeepSeek-Harness cd5ef8148158c3a752a658978873241fdf8e2bbc
 ```
 
-## Commands
+## 命令
 
 ```powershell
 npm run prepare
@@ -190,28 +144,39 @@ npm run dev
 npm run dist:win
 ```
 
-`npm run prepare` applies the reviewed Zero3 desktop overlays for the current Codex-native path. `npm run dev` additionally builds/resolves the exact pinned open-source Codex binary when missing and launches the temporary UI compatibility environment. It does not launch Zero3 Node as native runtime authority.
+`prepare-codex-upstream.mjs` 会在 Runtime overlays 完成后最后调用 `applyZero3ThreeColumnUi()`，因此 `npm run prepare`、`npm run dev`、`npm run typecheck`、`npm run dist:win` 走的是同一个 Renderer cutover。
 
-`npm run dist:win` prepares the same reviewed target, builds the pinned Codex release binary, stages the bundled runtime/legal resources and produces the Windows NSIS candidate with publishing disabled.
+## Windows 真实性验收
 
-Before changes:
+网页侧只做静态审查。Windows 本地统一真实性验收建议至少覆盖：
 
 ```powershell
-node ../../scripts/check-architecture.mjs
+cd <zero3-pilot>\apps\zero3-desktop
+npm run reset
+npm run prepare
+npm run typecheck
+npm run dev
 ```
 
-## Current follow-up boundary
+启动后验证：
 
-R3B-R3F are no longer future work. Remaining desktop follow-up includes still-unported shell surfaces, permission/MCP elicitation UX where separately reviewed, eventual removal of the Hermes compatibility-backend boot dependency, and post-alpha executor/collaboration/productization work.
+1. 左侧出现真实 Codex/GPT/Gemini 会话，而不是固定演示条目；
+2. Codex 新建会话得到真实 Thread ID；
+3. Composer 发送后出现真实 Turn / Item / 工具输出；
+4. Stop 能中断 active Turn；
+5. GPT tab 创建并嵌入真实 ChatGPT WebContentsView；
+6. Gemini tab 创建并嵌入真实 Gemini WebContentsView；
+7. 属性面板开合时 WebContentsView bounds 正常跟随；
+8. 重启桌面后 workspace entries 和 Web 登录 Session 保留；
+9. 页面中不再出现 Hermes 产品 UI，也不存在 Codex OSS UI 入口。
 
-None of those follow-ups permits a second Zero3/Hermes Agent Kernel, generic Renderer Codex proxy, hidden fallback agent loop, tool loop, MCP runtime or approval engine.
+## 不再接受的新增工作
 
-## Upstream modification policy
+以下方向从本次切换起停止：
 
-Hermes source is an upstream UI source tree, not the Zero3 core. All overlays remain deterministic and fail closed when the pinned source changes. Do not implement business/runtime logic inside Hermes Agent's Python runtime.
+- 给 Hermes React UI 新增 Zero3 页面/按钮；
+- 给 Codex OSS UI 做 Zero3 定制；
+- 同一个功能分别维护 Zero3 UI / Hermes UI / Codex UI；
+- 为演示截图写死假会话、假工具调用、假执行状态。
 
-Codex source changes are allowed as deliberate Zero3 secondary-development patches with review, tests and clear ownership. Keeping Codex authoritative is the priority.
-
-## Legacy desktop
-
-`apps/desktop` is the older Rust/Tao/Wry shell. It remains for rollback/history only and is not the target product UI.
+所有新 UI 功能只进入 `apps/zero3-desktop/renderer-v2/`。
