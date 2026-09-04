@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -32,6 +32,10 @@ function validId(value: unknown, label: string): string {
   const text = typeof value === 'string' ? value.trim() : ''
   if (!text || text.length > 256 || !/^[A-Za-z0-9._:-]+$/.test(text)) throw new Error(`${label} is invalid`)
   return text
+}
+
+function storageName(logicalId: string): string {
+  return createHash('sha256').update(logicalId, 'utf8').digest('hex')
 }
 
 function clone<T>(value: T): T {
@@ -127,7 +131,7 @@ export class Zero3AgentTaskStore {
   }
 
   private file(taskId: string) {
-    return path.join(this.root, `${taskId}.json`)
+    return path.join(this.root, `${storageName(taskId)}.json`)
   }
 
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
@@ -137,10 +141,11 @@ export class Zero3AgentTaskStore {
   }
 
   private async write(record: Zero3AgentTaskRecord): Promise<void> {
+    const taskId = validId(record.task.taskId, 'taskId')
     const serialized = `${JSON.stringify(record, null, 2)}\n`
     if (Buffer.byteLength(serialized, 'utf8') > MAX_FILE_BYTES) throw new Error('agent task record exceeds size limit')
     await fs.mkdir(this.root, { recursive: true })
-    const target = this.file(record.task.taskId)
+    const target = this.file(taskId)
     const temporary = `${target}.tmp-${process.pid}-${randomUUID()}`
     await fs.writeFile(temporary, serialized, { encoding: 'utf8', mode: 0o600 })
     await fs.rename(temporary, target)
