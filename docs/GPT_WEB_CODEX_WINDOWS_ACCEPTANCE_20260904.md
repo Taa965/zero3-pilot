@@ -2,31 +2,51 @@
 
 > 目标 PR：#77  
 > 分支：`feature/gpt-web-codex-unified-workspace-v1`  
-> 当前状态：仅静态实现完成；本文用于本地 Windows Codex / Hermes Agent 执行真实性验证。  
-> 原则：一次性完成编译、运行、功能、Git/Handoff 与并行隔离验收；不要把单项成功扩张成整个功能 PASS。
+> 静态状态：`STATIC_CLOSEOUT_READY_FOR_WINDOWS_ACCEPTANCE`  
+> 当前真实性状态：**NOT_RUN**  
+> 原则：只做一次完整真实性验收；任何静态实现、CI 或局部成功都不得扩张成 Windows/product PASS。
 
-## 1. 拉取基线
+## 0. Truth boundary
+
+当前静态代码已经封口：
+
+- GPT Web `WebContentsView` + persistent profile；
+- Workspace Entry；
+- GPT/Codex Provider Picker；
+- GPT Web → Codex structured handoff fallback；
+- H5 versioned task-extension sidecar；
+- packaged project-context MCP；
+- Codex-authoritative Git pre/postflight；
+- `zero3.pilot.execution-result.v1`；
+- named `required_evidence` Completion Gate。
+
+以下只有 Windows 真机证据才能变成 PASS：登录态、Electron native view、Codex process、MCP packaged lifecycle、H5 round trip、真实 Git、完整 GPT→Codex→Result、并行隔离和 Windows package。
+
+---
+
+## 1. 固定候选 SHA
 
 ```powershell
 git fetch origin
 git checkout feature/gpt-web-codex-unified-workspace-v1
 git pull --ff-only origin feature/gpt-web-codex-unified-workspace-v1
 git status --short
-git rev-parse HEAD
+$TESTED_HEAD = git rev-parse HEAD
+$TESTED_HEAD
 ```
 
-必须记录：
+要求：
 
 ```text
-TESTED_HEAD=<sha>
-WORKTREE_CLEAN=true/false
+WORKTREE_CLEAN=true
+TESTED_HEAD=<exact 40-char SHA>
 ```
 
-如果工作树不是预期 clean 状态，停止并报告，不要覆盖本地未提交内容。
+工作树不 clean 时停止；不要覆盖本地改动。
 
 ---
 
-## 2. Desktop overlay 静态生成 / TypeScript 验证
+## 2. Desktop shared prepare pipeline
 
 ```powershell
 cd apps/zero3-desktop
@@ -36,252 +56,277 @@ npm run typecheck
 npm run codex:verify
 ```
 
-验收：
+必须确认 shared prepare 实际执行并生成：
 
-- `prepare-upstream.mjs` overlay 无 drift；
-- `workspace-entry-runtime` 可复制/注入；
-- `gpt-web-provider` 可复制/注入；
-- `gpt-web-ui` patch anchor 全部匹配；
-- Remote Host 能通过 `zero3CodexAppServer.request('command/exec', ...)` 接线；
-- Hermes renderer / Electron main / preload TypeScript 无错误；
-- Codex overlay pin verification 无回归。
+```text
+Workspace Entry Runtime
+GPT Web Provider
+GPT Web UI
+Control Runtime
+Project Context MCP
+Remote Host Runtime
+Codex primary chat overlays
+```
 
-任何一步失败：保留完整 stdout/stderr，标记 `BLOCKED`，不要继续声明 UI 可用。
+检查生成树至少存在：
+
+```powershell
+Test-Path ..\..\upstream\hermes-agent\apps\desktop\electron\zero3\gpt-web\gpt-web-provider.ts
+Test-Path ..\..\upstream\hermes-agent\apps\desktop\electron\zero3\control\control-client.ts
+Test-Path ..\..\upstream\hermes-agent\apps\desktop\electron\zero3\mcp\project-context-server.mjs
+Test-Path ..\..\upstream\hermes-agent\apps\desktop\src\app\chat\sidebar\zero3-gpt-web-section.tsx
+Test-Path ..\..\upstream\hermes-agent\apps\desktop\src\app\chat\sidebar\gpt-web-handoff-actions.tsx
+```
+
+全部必须为 `True`。
+
+再执行一次：
+
+```powershell
+npm run reset
+npm run prepare
+npm run typecheck
+```
+
+第二次也必须成功，用来验证 reset/prepare 幂等和生成文件清理。
 
 ---
 
-## 3. Project Context MCP 验证
+## 3. Packaged Project Context MCP
+
+先验证独立实现：
 
 ```powershell
 cd ..\..\mcp\zero3-project-context
 npm install
 npm run typecheck
-$env:ZERO3_PROJECT_CONTEXT_DIR = "$env:LOCALAPPDATA\Zero3Pilot\project-context-test"
-npm start
-```
-
-在另一个终端用支持 MCP stdio 的本地客户端验证工具可枚举：
-
-```text
-project_get_context
-project_put_context
-handoff_get
-handoff_publish
 ```
 
 必须覆盖：
 
-1. `project_get_context` 不存在时返回 version 0；
+1. `project_get_context` 不存在时 version 0；
 2. `project_put_context(expectedVersion=0)` -> version 1；
-3. stale `expectedVersion=0` 再写一次必须失败；
+3. stale `expectedVersion=0` 再写 -> reject；
 4. 正确 `expectedVersion=1` -> version 2；
-5. `handoff_publish` 的 `result.protocol` 不是 `zero3.pilot.execution-result.v1` 时必须拒绝；
-6. `handoff_publish(taskId=A)` 但 `result.task_id=B` 时必须拒绝；
-7. 正确 handoff 可通过 `handoff_get` 读取；
-8. state 文件只位于 `ZERO3_PROJECT_CONTEXT_DIR`，没有认证 token/cookie/chat transcript。
+5. `handoff_publish` 错误 result protocol -> reject；
+6. `handoff_publish(taskId=A)` + `result.task_id=B` -> reject；
+7. 正确 handoff 可 `handoff_get`；
+8. state 不包含 Cookie/token/chat transcript。
 
-当前 MCP 还未默认打包进 Desktop；本步骤验证 server implementation，不得因此宣称“packaged Codex MCP wiring PASS”。
-
----
-
-## 4. 启动 Zero3 Desktop
+然后验证 Desktop packaged seam：
 
 ```powershell
 cd ..\..\apps\zero3-desktop
+npm run reset
+npm run prepare
+```
+
+检查：
+
+- generated MCP server 位于 Hermes desktop Electron tree；
+- generated Desktop package dependencies 含 MCP server package + zod；
+- Codex `thread/start` 注入 `zero3_project_context`；
+- command 使用 packaged Electron `process.execPath` + `ELECTRON_RUN_AS_NODE=1`；
+- 默认启用工具只有 `project_get_context` / `handoff_get`；
+- 不依赖用户全局 `node` / `tsx` / `npm` 启动 packaged MCP。
+
+---
+
+## 4. H5 task-extension sidecar
+
+配置测试用 H5 Control Plane 后，真实 HTTP 覆盖：
+
+```text
+POST /api/control/v1/tasks/<task>/extensions
+GET  /api/control/v1/tasks/<task>/extensions
+GET  /api/host/v1/tasks/<task>/extensions
+```
+
+必须验证：
+
+1. Control token 可写；
+2. Host token 只按 Host 路径读取；
+3. 未认证/错误 token 拒绝；
+4. `expected_version=0` 首写成功；
+5. stale version 写入 409；
+6. 同 task_id 改绑另一个 execution_id -> 409；
+7. project_context/handoff/provider/review 被持久化；
+8. Remote Host lease 后能拿到与 task/execution 匹配的 extension；
+9. extension 冲突时 fail closed；
+10. legacy core `zero3.pilot.remote-task.v1` 在没有 sidecar 时仍兼容。
+
+---
+
+## 5. 启动 Zero3 Desktop
+
+```powershell
+cd apps/zero3-desktop
 npm run dev
 ```
 
-记录启动日志：
+记录：
 
 ```text
 Codex app-server started = yes/no
 Remote Host started = yes/no
 Renderer booted = yes/no
-GPT Web provider IPC available = yes/no
+GPT Web provider IPC = yes/no
+Workspace Entry IPC = yes/no
+Control Plane bridge = yes/no
+Packaged MCP process = yes/no
 ```
 
 ---
 
-## 5. 新建会话 Provider Picker
+## 6. Provider Picker 与 GPT/Codex 切换
 
-点击左侧原“新建会话”。
-
-期望出现：
+点击原“新建会话”。必须出现：
 
 ```text
-新建会话
-
-🌐 GPT Web
-真实 ChatGPT 网页，会话与网页端同步
-
+GPT Web
 Codex Local
-本地代码开发、命令、测试与真实性执行
 ```
 
-分别验证：
+验证 Codex Local：
 
-### Codex Local
+- 进入既有 Codex Thread；
+- 没有第二套 Agent runtime；
+- history/turn 原路径正常。
 
-- 选择后进入现有 Codex 新 Thread 流程；
-- 不出现第二个 Agent runtime；
-- 原 Codex sidebar/history/turn 逻辑不回归。
+验证 GPT Web：
 
-### GPT Web
-
-- 选择后中心主聊天区域被真实 ChatGPT WebContentsView 覆盖；
-- Zero3 左侧栏仍可见；
-- 不打开 iframe；
-- 页面真实来源是 `https://chatgpt.com/`。
-
----
-
-## 6. ChatGPT 登录与 Browser Profile 持久化
-
-首次登录 ChatGPT。
-
-必须验证：
-
-1. 登录流程可完成；
-2. OAuth/登录提供商页面可正常跳转；
-3. 登录期间 Zero3 的 `workspace-entries-v1.json` **不得**保存 OAuth provider URL、authorization code、access token；
-4. 登录成功后返回 `chatgpt.com`；
-5. 关闭 Zero3；
-6. 重新启动；
-7. 再次打开 GPT Web 时登录态仍存在；
-8. 不要求复用系统 Chrome Cookie；
-9. 浏览器 profile 与系统 Chrome/Edge 独立。
-
-如果某种 OAuth provider 拒绝 embedded user-agent：记录 provider / 错误页面，使用 `openExternal` fallback 验证，不要绕过认证安全策略。
+- 中心区域是真实 `https://chatgpt.com/` WebContentsView；
+- Zero3 左栏仍可见；
+- 不是 iframe；
+- GPT ↔ Codex 至少切换 20 次，无 native view 残留/双层遮挡；
+- resize/maximize/sidebar resize 后 bounds 正常。
 
 ---
 
-## 7. GPT Web 会话 URL / Title / 左栏绑定
+## 7. ChatGPT 登录/Profile 持久化与安全
 
-在 GPT Web 中新建真实 ChatGPT 会话并发送消息。
+首次登录 ChatGPT 后验证：
 
-期望：
+1. OAuth/login 可以完成或按 provider 规则使用安全 external fallback；
+2. Zero3 workspace metadata 不保存 OAuth provider URL/authorization code/access token；
+3. 登录后返回 `chatgpt.com`；
+4. 关闭/重启 Zero3；
+5. GPT Web 登录态仍存在；
+6. profile 与系统 Chrome/Edge 隔离；
+7. Zero3 不读取/输出 Cookie/access token；
+8. `nodeIntegration` 不开放给 GPT Web；
+9. `contextIsolation=true`；
+10. 非 HTTPS 主导航、危险 popup/permission 默认 fail closed。
+
+---
+
+## 8. Conversation binding / sidebar
+
+建立多个真实 ChatGPT conversation，验证：
+
+- `/c/<id>` 自动绑定；
+- title 稳定同步；
+- generic `ChatGPT` / `New chat` 不覆盖有效标题；
+- A→B 网页内导航时 A entry 保留，B entry 独立；
+- GPT 条目蓝色 globe icon；
+- 重启后 entry 恢复；
+- live GPT view <= 3；
+- suspended entry 能从持久化 URL 恢复；
+- store 无 OAuth/token/chat transcript。
+
+当前 GPT rows 与 Codex recents 尚不是统一 chronological virtualized array；这属于 presentation polish，不作为 V1 authority/function blocker。
+
+---
+
+## 9. GPT Web → Codex 一键 Handoff
+
+打开一个 GPT Web entry，点击：
 
 ```text
-chatgpt.com/
-→ chatgpt.com/c/<conversation-id>
+交给 Codex
 ```
 
-验证：
-
-1. `/c/<id>` 被自动记录为 `conversationUrl`；
-2. 页面标题稳定后同步到 Zero3 左侧栏；
-3. GPT Web 条目前显示蓝色 globe/internet 图标；
-4. generic title `ChatGPT` / `New chat` 不覆盖已有有效标题；
-5. 点击 GPT Web 条目可恢复同一 conversation；
-6. 点击 Codex 会话后 GPT native view 被隐藏；
-7. 再点 GPT Web 会话可重新显示；
-8. resize / maximize / sidebar resize 时 native view bounds 不漂移；
-9. GPT Web 内容不覆盖 Zero3 左侧栏；
-10. 至少切换 GPT ↔ Codex 20 次，不出现 native view 残留/双层遮挡。
-
----
-
-## 8. Browser 安全边界
-
-验证：
-
-- Zero3 metadata 只持久化 `chatgpt.com` URL；
-- OAuth URL 不进入 workspace entry file；
-- 非 HTTPS 主导航被阻止；
-- popup/nested popup 不获得 Node integration；
-- renderer 无 `nodeIntegration`；
-- `contextIsolation=true`；
-- browser permission 默认 fail-closed；
-- Zero3 没有读取/输出 ChatGPT Cookie / access token；
-- 没有依赖 ChatGPT DOM selector 或私有 backend API。
-
-同时测试普通 ChatGPT 文本输入、复制、附件入口等基础操作是否受默认 permission gate 影响；若功能受损，记录实际 permission 类型后再做最小 allow-list，不得直接改成 allow-all。
-
----
-
-## 9. Workspace Entry 持久化
-
-创建至少：
+填写：
 
 ```text
-GPT Web A
-GPT Web B
-GPT Web C
-GPT Web D
-Codex Thread A
-Codex Thread B
+Task ID
+Objective
+Local Workspace
+Base Ref/SHA (optional)
+```
+
+要求真实链路为：
+
+```text
+GPT Web UI
+-> purpose-specific zero3Control IPC
+-> Electron-main Control Plane client
+-> H5 task-extension sidecar
+-> H5 core remote task
+-> Remote Host lease + extension hydration
+-> pinned Codex Thread/Turn
 ```
 
 验证：
 
-- GPT Web 共享一个登录 profile；
-- conversation URL/title 各自独立；
-- 重启后 entry 可恢复；
-- 同时 live GPT Web view 不超过 3 个；
-- 被 suspend 的 entry 再打开时从持久化 URL 恢复；
-- entry store 并发更新没有丢数据；
-- store 文件格式有效、无临时文件残留。
+- Renderer 看不到 Control token；
+- sidecar 在 core task enqueue 前成功写入；
+- `return_entry_id` 等于来源 GPT entry；
+- `project_context.source_kind=gpt_web`；
+- 默认 handoff required evidence 包含 turn/Git/result；
+- 不读取 ChatGPT DOM 来传递任务；
+- 不调用 ChatGPT private API；
+- Codex 任务最终 ExecutionResult 可关联原 task/execution/return entry。
 
 ---
 
-## 10. Codex-authoritative Git Preflight
+## 10. Codex-authoritative Git preflight/postflight
 
-准备测试 Git 仓库/分支。
+至少覆盖：
 
-通过 Remote Task 触发：
-
-### Case A — 正确 base
+### A — 正确 base + clean
 
 ```text
-base_ref == workspace HEAD
+base_ref == HEAD
 require_clean_worktree=true
 ```
 
-期望：
+应产生真实：
 
 ```text
-remote.git.preflight
-repository_root = real repo root
-head_commit = real HEAD
-base_commit = requested base
-clean_worktree = true
+repository_root
+head_commit
+base_commit
+clean_worktree=true
 ```
 
-### Case B — base mismatch
+### B — base mismatch
 
-期望任务 `BLOCKED`，不得启动重复 Codex Turn。
+必须 `BLOCKED`，不得启动重复 side-effect Turn。
 
-### Case C — dirty worktree
-
-制造一个未提交文件：
-
-```powershell
-'dirty' | Out-File zero3-dirty-test.txt
-```
+### C — dirty worktree
 
 `require_clean_worktree=true` 时必须 `BLOCKED`。
 
-清理测试文件后继续。
+### D — non-Git workspace
 
-### Case D — 非 Git workspace
+必须 fail closed。
 
-应 fail-closed，不得假装验证成功。
+### E — postflight clean gate
 
-确认所有 Git 查询由：
+`require_clean_worktree_on_success=true` + dirty tree -> 不得 `succeeded`。
 
-```text
-pinned Codex App Server command/exec
-```
+### F — upstream gate
 
-完成，而不是 Node `child_process` 建立第二套 shell authority。
+`require_remote_sync_on_success=true` + `HEAD != @{upstream}` -> 不得 `succeeded`。
+
+确认 Git authority 全部经过 pinned Codex App Server `command/exec`，不是新建 Node child-process shell authority。
 
 ---
 
-## 11. ExecutionResult / Git Postflight
+## 11. ExecutionResult + named required evidence
 
-运行一个允许完成的 Remote Task。
-
-必须得到：
+成功候选必须生成：
 
 ```text
 protocol = zero3.pilot.execution-result.v1
@@ -295,64 +340,52 @@ git_postflight
 evidence_methods
 ```
 
-当开启：
+依次测试：
+
+### Case 1 — 全部证据存在
+
+请求：
 
 ```text
-require_clean_worktree_on_success=true
+codex.turn.completed
+git.preflight
+git.postflight
+execution.result
 ```
 
-Codex 完成但留下 dirty tree 时，Completion Gate 必须阻止 `succeeded`。
+只有全部满足才允许 `succeeded`。
 
-当开启：
+### Case 2 — 请求 git.clean 但 postflight dirty
+
+必须 `blocked`。
+
+### Case 3 — 请求 git.remote_synced 但未同步
+
+必须 `blocked`。
+
+### Case 4 — 请求 agent.summary 但无 summary
+
+必须 `blocked`。
+
+### Case 5 — 未知 evidence name
+
+例如：
 
 ```text
-require_remote_sync_on_success=true
+made.up.evidence
 ```
 
-必须验证：
+必须 fail closed / `blocked`，不得忽略。
 
-```text
-HEAD == @{upstream}
-```
+### Case 6 — terminal 前最终二次门禁
 
-否则任务不得标记 `succeeded`。
-
-注意：当前 `handoff.required_evidence` 的 named-evidence enforcement 尚未封口，不得将本步骤扩大成“全量 Completion Gate PASS”。
+确认成功结果在 durable terminal `succeeded` 写入前仍经过 Completion Gate；不能只有 runner 内部第一次检查。
 
 ---
 
-## 12. H5 Control Plane 兼容性
+## 12. 6-way isolation
 
-当前 Host 端已支持可选：
-
-```text
-project_context
-handoff
-```
-
-但 `apps/web` H5 typed `RemoteTask` schema 尚未演进。
-
-因此当前必须验证：
-
-- legacy `zero3.pilot.remote-task.v1` 核心字段仍正常；
-- 不依赖新增可选字段穿透 H5；
-- 若发送新增字段，确认当前 H5 是否丢弃，并把结果记录为已知 `BLOCKER`；
-- 在 H5 schema-preservation 修复前，不能宣称 GPT Web → structured context/handoff 完整闭环 PASS。
-
----
-
-## 13. 六路并行隔离
-
-最后一次集成验收使用 6 个独立 Git worktree / Codex Thread：
-
-```text
-P12
-P13
-P14
-P15
-P16
-P17
-```
+使用 6 个独立 worktree / Codex Thread 执行相互独立任务。
 
 每路记录：
 
@@ -370,42 +403,38 @@ terminal_state
 
 必须验证：
 
-- workspace 不串；
-- branch 不串；
-- Codex Thread 不串；
-- Turn/event 不串；
-- evidence 不串；
-- task mapping 不串；
-- base SHA gate 独立；
-- dirty worktree gate 独立；
-- 一个任务失败不把其他 5 路误标失败/成功。
+- workspace/branch/thread/turn/evidence/mapping 不串；
+- 一个任务失败不污染其他 5 路；
+- stale lease/fencing 不可发布旧 terminal；
+- sidecar task/execution 不可串绑；
+- 每路 Git base/dirty gate 独立。
 
 ---
 
-## 14. Windows 打包验证
+## 13. Windows package
 
-在 dev 验证通过后执行：
+前面全部通过后：
 
 ```powershell
 cd apps/zero3-desktop
 npm run dist:win
 ```
 
-验证安装包：
+安装包验证：
 
-- 能启动；
+- 启动正常；
 - pinned Codex 可找到；
-- GPT Web Provider 可创建；
-- Browser Profile 重启后持久化；
-- overlay runtime 源文件包含在最终应用；
-- 不依赖用户全局安装 Codex；
-- 当前 MCP server 未正式 bundle 时，应明确显示/记录为未接线能力，而不是静默假装存在。
+- GPT Web WebContentsView 可用；
+- ChatGPT profile 重启持久；
+- Workspace/Control/GPT/MCP/Remote Host generated runtime 都包含在最终应用；
+- packaged project-context MCP 能由 Electron-as-Node 启动；
+- 不依赖用户全局 Codex/node/tsx/npm；
+- one-click GPT→Codex handoff 可在安装包环境完成；
+- named evidence gate 在 packaged 环境仍 fail closed。
 
 ---
 
-# 最终回传格式
-
-请将结果写成：
+## 14. 回传格式
 
 ```text
 TESTED_HEAD:
@@ -414,34 +443,34 @@ NODE_VERSION:
 ELECTRON_VERSION:
 CODEX_PIN:
 
-A. prepare/typecheck/codex overlay
+A. reset/prepare/typecheck/codex overlay
 PASS/FAIL + evidence
 
-B. GPT Web login/profile
+B. GPT Web login/profile/security
 PASS/FAIL + evidence
 
-C. URL/title/sidebar
+C. URL/title/sidebar/native-view switching
 PASS/FAIL + evidence
 
-D. GPT/Codex switch
+D. packaged Project Context MCP
 PASS/FAIL + evidence
 
-E. Git preflight/postflight
+E. H5 task-extension sidecar
 PASS/FAIL + evidence
 
-F. ExecutionResult
+F. GPT Web -> Codex one-click handoff
 PASS/FAIL + evidence
 
-G. MCP server implementation
+G. Git preflight/postflight
 PASS/FAIL + evidence
 
-H. H5 optional-field preservation
-PASS/FAIL/BLOCKED + evidence
+H. ExecutionResult + named evidence gate
+PASS/FAIL + evidence
 
 I. 6-way isolation
-PASS/FAIL/BLOCKED + evidence
+PASS/FAIL + evidence
 
-J. dist:win
+J. dist:win installed behavior
 PASS/FAIL + evidence
 
 BLOCKERS:
@@ -451,4 +480,4 @@ FINAL:
 PASS / FAIL / BLOCKED
 ```
 
-只有所有必需项具有真实证据后，PR #77 才能从 Draft 转 Ready / 合并。
+只有全部必需项具有真实 Windows 证据后，PR #77 才能从 Draft 转 Ready/merge；在此之前所有运行项保持 `NOT_RUN`。
