@@ -20,6 +20,7 @@ import { applyZero3CodexPrompts } from './apply-codex-prompts.mjs'
 import { applyZero3CodexSessionListGuard } from './apply-codex-session-list-guard.mjs'
 import { applyZero3CodexStructuredInput } from './apply-codex-structured-input.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
+import { applyZero3GptWebProvider } from './apply-gpt-web-provider.mjs'
 import { applyZero3RemoteHostRuntime } from './apply-remote-host-runtime.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 import { applyZero3WorkspaceEntryRuntime } from './apply-workspace-entry-runtime.mjs'
@@ -262,6 +263,7 @@ applyZero3ShellPolicy()
 applyZero3ChineseUi()
 applyZero3CodexTransport()
 applyZero3WorkspaceEntryRuntime()
+applyZero3GptWebProvider()
 applyZero3CodexPrimaryChat()
 applyZero3CodexPrompts()
 applyZero3CodexPromptQueueHardening()
