@@ -25,7 +25,13 @@ export type Zero3CompletionGateInput = {
     upstreamCommit: string | null
     remoteSynced: boolean | null
   } | null
-  evidenceMethods: string[]
+  /**
+   * Set only when the caller is on the code path that will durably construct
+   * and emit a structured Zero3 execution result immediately after this gate.
+   * This avoids the circular mistake of requiring the result event to already
+   * exist before the gate is allowed to create that same result.
+   */
+  executionResultReady: boolean
 }
 
 export type Zero3CompletionGateResult = {
@@ -41,10 +47,6 @@ const SUPPORTED = new Set(Object.values(ZERO3_COMPLETION_EVIDENCE))
 function normalizeRequired(task: Zero3RemoteTask): string[] {
   const values = task.handoff?.required_evidence ?? []
   return [...new Set(values.map(value => value.trim()).filter(Boolean))]
-}
-
-function hasExecutionResultEvidence(methods: string[]): boolean {
-  return methods.includes('remote.execution.result')
 }
 
 export function evaluateZero3CompletionGate(input: Zero3CompletionGateInput): Zero3CompletionGateResult {
@@ -76,7 +78,7 @@ export function evaluateZero3CompletionGate(input: Zero3CompletionGateInput): Ze
         ok = Boolean(input.agentSummary?.trim())
         break
       case ZERO3_COMPLETION_EVIDENCE.executionResult:
-        ok = hasExecutionResultEvidence(input.evidenceMethods)
+        ok = input.executionResultReady
         break
     }
     if (ok) satisfied.push(requirement)
