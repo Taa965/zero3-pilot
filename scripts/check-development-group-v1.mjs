@@ -32,6 +32,10 @@ requireText(facade, 'resolveSessionWorktree', 'repository-bound runtime worktree
 forbid(facade, /spawn\s*\(|exec\s*\(|execFile\s*\(/u, 'second process/shell authority in Runtime Facade')
 forbid(facade, /codex\s+app-server|@openai\/codex/iu, 'second Codex kernel in Runtime Facade')
 
+const promptBuilder = read('apps/zero3-desktop/group-runtime/session/prompt-builder.ts')
+requireText(promptBuilder, 'commit every intended Session change', 'clean committed Delivery instruction')
+requireText(promptBuilder, 'Do not merge, rebase, checkout, reset', 'Session branch/integration isolation instruction')
+
 const worktreeResolver = read('apps/zero3-desktop/group-runtime/workspace/session-worktree.ts')
 requireText(worktreeResolver, 'resolve(group.repository)', 'Group repository root binding')
 requireText(worktreeResolver, 'resolve(repositoryRoot, session.worktree)', 'relative Session worktree resolution')
@@ -88,6 +92,10 @@ requireText(desktopIpc, 'outcomeResolution(resolution)', 'OutcomeUnknown resolut
 requireText(desktopRuntime, 'new NativeCodexAppServerDriver({ transport: codexTransport })', 'reuse of existing pinned Codex transport')
 requireText(desktopRuntime, 'new DevelopmentGroupRuntimeFacade({', 'Electron-owned Runtime Facade composition')
 requireText(desktopRuntime, 'new IntegrationGitAdapter(repositoryRoot)', 'repository-bound Integration Git adapter')
+requireText(desktopRuntime, 'GitSessionWorkspaceProvisioner', 'Session Git worktree provisioning')
+requireText(desktopRuntime, 'createSessionWorktree(worktree, session.branch, session.baselineSha)', 'fresh Session worktree creation from frozen baseline')
+requireText(desktopRuntime, 'refusing to adopt pre-existing fresh Session branch', 'fresh Session branch collision fail-closed gate')
+requireText(desktopRuntime, 'refusing to recreate from baseline', 'retry worktree evidence-preserving fail-closed gate')
 requireText(desktopRuntime, 'shell: false', 'shellless verification execution')
 requireText(desktopRuntime, 'JSON.parse(command)', 'argv-only verification command parsing')
 forbid(desktopRuntime, /spawn\s*\(|createZero3CodexAppServer|codex\s+app-server/iu, 'second Codex process/kernel in Desktop runtime composition')
