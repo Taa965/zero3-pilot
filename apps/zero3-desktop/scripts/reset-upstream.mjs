@@ -30,6 +30,7 @@ if (!isDirectory(hermesRoot)) {
 }
 
 exec('git', ['-C', hermesRoot, 'reset', '--hard', pins.hermes])
+
 const generatedFiles = [
   path.join(hermesDesktopDir, 'public', 'zero3-upstream.json'),
   path.join(hermesDesktopDir, 'public', 'zero3-pilot.png'),
@@ -37,15 +38,23 @@ const generatedFiles = [
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'primary-chat.ts'),
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'prompt-store.ts'),
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'prompt-overlay.tsx'),
-  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'item-projection.ts')
+  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'item-projection.ts'),
+  path.join(hermesDesktopDir, 'src', 'app', 'chat', 'sidebar', 'zero3-gpt-web-section.tsx'),
+  path.join(hermesDesktopDir, 'src', 'app', 'chat', 'sidebar', 'gpt-web-handoff-actions.tsx'),
+  path.join(hermesDesktopDir, 'src', 'app', 'chat', 'sidebar', 'gemini-session-section.tsx')
 ]
 for (const file of generatedFiles) {
   if (fs.existsSync(file)) fs.rmSync(file, { force: true })
 }
 
-const generatedDir = path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex')
-if (fs.existsSync(generatedDir) && fs.readdirSync(generatedDir).length === 0) {
-  fs.rmdirSync(generatedDir)
-}
+// Every Zero3 Electron-main provider/agent runtime is generated from reviewed
+// templates during prepare. Removing the whole generated root makes reset
+// deterministic across GPT/Gemini/Antigravity/Development-Group overlays and
+// prevents a stale untracked module from making the next prepare look healthy.
+const zero3ElectronRoot = path.join(hermesDesktopDir, 'electron', 'zero3')
+if (fs.existsSync(zero3ElectronRoot)) fs.rmSync(zero3ElectronRoot, { recursive: true, force: true })
+
+const zero3CodexDir = path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex')
+if (fs.existsSync(zero3CodexDir)) fs.rmSync(zero3CodexDir, { recursive: true, force: true })
 
 console.log(`Hermes upstream reset to ${pins.hermes}.`)
