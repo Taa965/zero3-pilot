@@ -33,7 +33,8 @@ const staged = [
   'electron/zero3/mcp/project-context-server.mjs',
   'electron/zero3/remote-host/remote-task-runner.ts',
   'src/app/chat/sidebar/gpt-web-handoff-actions.tsx',
-  'src/app/chat/sidebar/gemini-session-section.tsx'
+  'src/app/chat/sidebar/gemini-session-section.tsx',
+  'src/zero3-ui/TaskDock.tsx'
 ]
 for (const relative of staged) requireFile(relative)
 
@@ -66,6 +67,17 @@ requireAll(main, mainPath, [
   'assertZero3GitPreflight(preflight, record.task.baseSha ?? null, true)',
   'assertZero3GitPreflight(preflight, task.baseSha ?? null, true)',
   'const zero3GptWebReviewLoops = new Map<string, Promise<unknown>>()',
+  'const zero3GptWebReviewSessionTails = new Map<string, Promise<void>>()',
+  'zero3WithGptWebReviewSessionLock',
+  'zero3BuildGptWebReviewPacket',
+  "command: ['git', 'diff', '--no-ext-diff', '--no-renames', '--unified=24'",
+  "sandboxPolicy: { type: 'readOnly', networkAccess: false }",
+  "source: 'codex-command-exec'",
+  'zero3AgentTaskStore.setReviewAutomation(taskId',
+  "status: 'QUEUED'",
+  "status: 'RUNNING'",
+  "status: 'SUCCEEDED'",
+  "status: 'FAILED'",
   'zero3RunGptWebReviewerLoop',
   'zero3GptWeb.review(reviewSessionId',
   'zero3AgentDesktopHandlers.reviewDecision({',
@@ -78,10 +90,6 @@ const removeReview = main.lastIndexOf("ipcMain.removeHandler('zero3:review:decis
 const newReview = main.lastIndexOf("ipcMain.handle('zero3:review:decision'")
 if (!(oldReview >= 0 && oldReview < removeReview && removeReview < newReview)) throw new Error('electron/main.ts: legacy review decision handler is not safely replaced by authoritative task-state handler')
 
-// Pinned Hermes legitimately carries platform-specific shell compatibility for
-// its own .cmd/.bat backend probes. Do not blanket-match the whole upstream
-// main.ts (including comments). Keep the strict no-shell/no-direct-exec rule on
-// the Zero3 agent composition block where task authority is injected.
 forbid(main, mainPath, ["child_process.exec"])
 const agentCoreStart = main.indexOf('const zero3AgentTaskStore = new Zero3AgentTaskStore')
 const agentCoreEnd = main.indexOf('function zero3AgentCompatRecord', agentCoreStart)
@@ -149,6 +157,22 @@ requireAll(packagedGptProvider, 'electron/zero3/gpt-web/gpt-web-provider.ts', [
   'return await runZero3GptWebReview(contents'
 ])
 
+const packagedTaskStore = read('electron/zero3/agent-routing/agent-task-store.ts')
+requireAll(packagedTaskStore, 'electron/zero3/agent-routing/agent-task-store.ts', [
+  'Zero3GptWebReviewAutomationStatus',
+  'reviewAutomation?: Zero3GptWebReviewAutomation | null',
+  'setReviewAutomation(taskId: string, update: Zero3ReviewAutomationUpdate)'
+])
+
+const preparedTaskDock = read('src/zero3-ui/TaskDock.tsx')
+requireAll(preparedTaskDock, 'src/zero3-ui/TaskDock.tsx', [
+  'reviewGptWeb(request: { taskId: string })',
+  'reviewAutomation: ReviewAutomation | null',
+  'retryGptWebReview',
+  '重试 GPT Web 自动审核',
+  '由 Codex read-only command/exec 采集的真实 Git diff'
+])
+
 const packagedBridge = read('electron/zero3/agent-desktop-bridge/bridge.ts')
 requireAll(packagedBridge, 'electron/zero3/agent-desktop-bridge/bridge.ts', ["../agent-routing/agent-contracts"])
 forbid(packagedBridge, 'electron/zero3/agent-desktop-bridge/bridge.ts', ['../agent-routing-runtime/agent-contracts'])
@@ -165,5 +189,5 @@ requireAll(packagedTaskMcp, 'electron/zero3/mcp/task-mcp-server.mjs', ["import {
 const packagedProjectMcp = read('electron/zero3/mcp/project-context-server.mjs')
 requireAll(packagedProjectMcp, 'electron/zero3/mcp/project-context-server.mjs', ["createHash('sha256')",'storageName(id)','invalid persisted project context','invalid persisted handoff'])
 
-console.log('Prepared Gemini/Antigravity/GPT-Web-reviewer desktop composition gate passed.')
-console.log(`Verified ${staged.length} staged runtime/UI files plus Electron main/preload/global/MCP/reviewer composition.`)
+console.log('Prepared Gemini/Antigravity/GPT-Web-reviewer hardened desktop composition gate passed.')
+console.log(`Verified ${staged.length} staged runtime/UI files plus Electron main/preload/global/MCP/reviewer automation composition.`)
