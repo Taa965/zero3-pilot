@@ -70,7 +70,8 @@ export function applyZero3RemoteHostRuntime() {
         "const zero3RemoteNode = new Zero3RemoteNode({\n" +
         "  startThread: params => zero3CodexAppServer.request('thread/start', params),\n" +
         "  startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs),\n" +
-        "  readThread: params => zero3CodexAppServer.request('thread/read', params)\n" +
+        "  readThread: params => zero3CodexAppServer.request('thread/read', params),\n" +
+        "  execCommand: (params, timeoutMs) => zero3CodexAppServer.request('command/exec', params, timeoutMs)\n" +
         "})\n" +
         "app.on('before-quit', () => zero3RemoteNode.stop())\n\n" +
         "app.whenReady().then(() => {\n" +
