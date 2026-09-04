@@ -3,6 +3,7 @@ import {
   Zero3RemoteClient,
   zero3RemoteControlPlaneRejectedStaleEnvelope
 } from './remote-client'
+import { evaluateZero3CompletionGate } from './remote-completion-gate'
 import { drainZero3RemoteOutboxInOrder, type Zero3RemotePublishEnvelopeResult } from './remote-outbox-drain'
 import { Zero3RemoteOutbox } from './remote-outbox'
 import {
@@ -228,6 +229,36 @@ export class Zero3RemoteNode {
             const result = await this.runner.run(lease, async (_sequence, method, payload) => {
               await this.durableEvent(lease, `codex.${method}`, payload, false)
             })
+
+            if (result.state === 'succeeded') {
+              const executionResult = result.executionResult
+              const gate = evaluateZero3CompletionGate({
+                task: result.task,
+                turnStatus: result.terminal.status,
+                agentSummary: executionResult.agent_summary,
+                gitPreflight: {
+                  headCommit: executionResult.git_preflight.head_commit,
+                  baseCommit: executionResult.git_preflight.base_commit,
+                  cleanWorktree: executionResult.git_preflight.clean_worktree
+                },
+                gitPostflight: executionResult.git_postflight
+                  ? {
+                      headCommit: executionResult.git_postflight.head_commit,
+                      cleanWorktree: executionResult.git_postflight.clean_worktree,
+                      upstreamCommit: executionResult.git_postflight.upstream_commit ?? null,
+                      remoteSynced: executionResult.git_postflight.remote_synced ?? null
+                    }
+                  : null,
+                executionResultReady: executionResult.protocol === 'zero3.pilot.execution-result.v1'
+              })
+              if (!gate.ok) {
+                const missing = gate.missing.length ? `missing=${gate.missing.join(',')}` : ''
+                const unsupported = gate.unsupported.length ? `unsupported=${gate.unsupported.join(',')}` : ''
+                throw new Zero3RemoteTaskBlockedError(
+                  `required handoff evidence gate rejected completion: ${[missing, unsupported].filter(Boolean).join('; ')}`
+                )
+              }
+            }
 
             const terminalEnvelope = await this.outbox.enqueueTerminal(lease, result.state, result)
             terminalDurable = true
