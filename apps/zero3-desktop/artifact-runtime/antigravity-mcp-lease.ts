@@ -41,7 +41,7 @@ export class Zero3AntigravityMcpLease {
   private taskSnapshotPath: string | null = null
 
   async install(input: Zero3TaskMcpLeaseInput): Promise<void> {
-    if (this.backup) throw new Error('Antigravity MCP lease is already installed')
+    if (this.backup || this.configPath || this.taskSnapshotPath) throw new Error('Antigravity MCP lease is already installed or pending cleanup')
     const workspace = path.resolve(required(input.workspace, 'workspace'))
     const taskId = scopedId(input.taskId, 'taskId')
     const projectId = scopedId(input.projectId, 'projectId')
@@ -49,6 +49,7 @@ export class Zero3AntigravityMcpLease {
     const taskSnapshotPath = path.join(path.resolve(input.stateDir), 'tasks', `${storageName(taskId)}.json`)
     await fs.mkdir(path.dirname(taskSnapshotPath), { recursive: true })
     await atomicJson(taskSnapshotPath, input.taskSnapshot)
+    this.taskSnapshotPath = taskSnapshotPath
 
     let existingRaw: string | null = null
     try { existingRaw = await fs.readFile(configPath, 'utf8') } catch (error) {
@@ -56,7 +57,6 @@ export class Zero3AntigravityMcpLease {
     }
     this.backup = { existed: existingRaw != null, content: existingRaw }
     this.configPath = configPath
-    this.taskSnapshotPath = taskSnapshotPath
 
     let config: Record<string, unknown> = {}
     if (existingRaw?.trim()) {
