@@ -9,11 +9,12 @@ import { applyZero3AgentReviewLoop } from './apply-agent-review-loop.mjs'
 import { applyZero3AgentWorktreeGuard } from './apply-agent-worktree-guard.mjs'
 import { applyZero3AgentMcpLifecycle } from './apply-agent-mcp-lifecycle.mjs'
 import { applyZero3OwnedUi } from './apply-zero3-owned-ui.mjs'
+import { applyZero3GptWebReviewerBridge } from './apply-gpt-web-reviewer-bridge.mjs'
 
 // Ordering is intentional. P01-P06 land their narrow runtime/provider overlays first.
 // Legacy Hermes renderer patches may still be applied while those seams are being split,
-// but they are unreachable product code: the final pass always restores the Zero3-owned
-// three-column renderer as the only desktop entrypoint.
+// but they are unreachable product code: the final UI pass restores the Zero3-owned
+// three-column renderer, then P2C attaches the reviewer transport to that final composition.
 applyZero3GeminiWebProvider()
 applyZero3AntigravityRuntime()
 applyZero3AgentRoutingRuntime()
@@ -25,7 +26,8 @@ applyZero3AgentReviewLoop()
 applyZero3AgentWorktreeGuard()
 applyZero3AgentMcpLifecycle()
 applyZero3OwnedUi()
+applyZero3GptWebReviewerBridge()
 
 console.log('Zero3 Gemini/Antigravity integration overlays staged into the pinned desktop host.')
-console.log('Zero3 three-column renderer restored as the sole product UI after provider staging.')
-console.log('Static staging only: no Gemini login, Antigravity execution, Windows build, or acceptance PASS is implied.')
+console.log('Zero3 three-column renderer is the sole product UI; GPT Web reviewer bridge is attached to the final runtime composition.')
+console.log('Static staging only: no ChatGPT login, GPT Web review execution, Gemini execution, Windows build, or acceptance PASS is implied.')

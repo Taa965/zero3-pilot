@@ -142,6 +142,15 @@ Zero3 Electron main / provider adapters
 
 GPT Web and Gemini Web are isolated provider surfaces attached beside the Codex workspace through reviewed WebContentsView bridges. They do not replace Codex runtime authority.
 
+For the **GPT Web reviewer compatibility bridge only**, Zero3 may submit a ReviewPacket to the already-bound authenticated ChatGPT WebContentsView and read a structured ReviewDecision through Chromium DevTools **Accessibility + Input** domains. This compatibility path must:
+
+- operate on the real bound GPT Web conversation rather than synthesize a parallel fake session;
+- use no `executeJavaScript`, DOM selectors, page-script evaluation or private ChatGPT backend APIs;
+- refuse to overwrite a non-empty user draft;
+- require a unique structured decision marker and validate the decision before it enters task authority;
+- fail closed, leaving the task in `REVIEW_PENDING`, when authentication, accessibility focus, submission proof or structured output cannot be established;
+- remain a reviewer/provider adapter only. Task execution, Git truth, completion gates and the general agent loop remain outside the web page and under Zero3/Codex authority.
+
 The pinned Hermes Electron host may remain below the renderer as temporary build/native-window infrastructure, but **Hermes UI is not in the product path**.
 
 The following must not become target primary paths:
@@ -171,7 +180,8 @@ A PR is an architecture regression if it does any of the following without an ex
 - adds new user-visible product behavior only to the retired Hermes renderer instead of `apps/zero3-desktop/zero3-ui/`;
 - makes DeepSeek-Harness a parallel default runtime;
 - treats official Codex/Claude/Hermes applications as Zero3's own core execution engine rather than external collaborators;
-- allows Renderer code to self-approve, invent verification/completion evidence or bypass purpose-specific bridge boundaries.
+- allows Renderer code to self-approve, invent verification/completion evidence or bypass purpose-specific bridge boundaries;
+- turns the GPT Web reviewer into generic ChatGPT DOM/private-API automation, overwrites user drafts, or treats web-page output as authoritative without structured validation.
 
 CI/static guards should catch the obvious regressions mechanically. Human review remains authoritative for semantic violations.
 

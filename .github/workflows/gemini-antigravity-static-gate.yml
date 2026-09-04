@@ -5,6 +5,7 @@ on:
     branches:
       - 'feature/gpt-web-gemini-antigravity-v1'
     paths:
+      - 'apps/zero3-desktop/gpt-web-runtime/**'
       - 'apps/zero3-desktop/gemini-web-runtime/**'
       - 'apps/zero3-desktop/antigravity-runtime/**'
       - 'apps/zero3-desktop/agent-routing-runtime/**'
@@ -21,11 +22,13 @@ on:
       - 'scripts/check-gemini-antigravity-architecture.mjs'
       - 'scripts/check-prepared-gemini-integration.mjs'
       - 'scripts/check-zero3-owned-ui.mjs'
+      - 'scripts/check-gpt-web-reviewer.mjs'
       - 'scripts/acceptance/gemini-antigravity-windows.ps1'
       - '.github/workflows/windows-alpha-artifact.yml'
       - '.github/workflows/gemini-antigravity-static-gate.yml'
   pull_request:
     paths:
+      - 'apps/zero3-desktop/gpt-web-runtime/**'
       - 'apps/zero3-desktop/gemini-web-runtime/**'
       - 'apps/zero3-desktop/antigravity-runtime/**'
       - 'apps/zero3-desktop/agent-routing-runtime/**'
@@ -42,6 +45,7 @@ on:
       - 'scripts/check-gemini-antigravity-architecture.mjs'
       - 'scripts/check-prepared-gemini-integration.mjs'
       - 'scripts/check-zero3-owned-ui.mjs'
+      - 'scripts/check-gpt-web-reviewer.mjs'
       - 'scripts/acceptance/gemini-antigravity-windows.ps1'
       - '.github/workflows/windows-alpha-artifact.yml'
       - '.github/workflows/gemini-antigravity-static-gate.yml'
@@ -69,6 +73,7 @@ jobs:
         run: |
           node scripts/check-gemini-antigravity-architecture.mjs
           node scripts/check-zero3-owned-ui.mjs
+          node scripts/check-gpt-web-reviewer.mjs
 
       - name: Apply all pinned desktop overlays, inspect final composition and typecheck owned surfaces
         shell: bash
@@ -89,11 +94,15 @@ jobs:
           test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/ProjectDock.tsx
           test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/TaskDock.tsx
           test -f upstream/hermes-agent/apps/desktop/electron/zero3/projects/project-store.ts
+          test -f upstream/hermes-agent/apps/desktop/electron/zero3/gpt-web/gpt-web-reviewer.ts
           test -f upstream/hermes-agent/apps/desktop/tsconfig.zero3-renderer.json
           grep -F "import { ProductApp } from './zero3-ui/ProductApp'" upstream/hermes-agent/apps/desktop/src/main.tsx
           grep -F "contextBridge.exposeInMainWorld('zero3Projects'" upstream/hermes-agent/apps/desktop/electron/preload.ts
           grep -F "zero3:agent-task:list" upstream/hermes-agent/apps/desktop/electron/preload.ts
           grep -F "zero3:agent-task:review-get" upstream/hermes-agent/apps/desktop/electron/preload.ts
+          grep -F "zero3:agent-task:review-gpt-web" upstream/hermes-agent/apps/desktop/electron/preload.ts
+          grep -F "Accessibility.getFullAXTree" upstream/hermes-agent/apps/desktop/electron/zero3/gpt-web/gpt-web-reviewer.ts
+          ! grep -E "executeJavaScript|querySelector|document\\.|/backend-api/|/api/conversation" upstream/hermes-agent/apps/desktop/electron/zero3/gpt-web/gpt-web-reviewer.ts
           ! grep -E "RouterProvider|from ['\"]\\./app|Hermes" upstream/hermes-agent/apps/desktop/src/main.tsx
 
       - name: Reject whitespace errors in committed closeout diff
