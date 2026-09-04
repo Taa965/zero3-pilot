@@ -79,6 +79,18 @@
 .handoff-grid select:focus,
 .handoff-grid textarea:focus { border-color: #6b9cff; box-shadow: 0 0 0 2px rgba(23, 105, 255, .1); }
 .handoff-row { display: grid; grid-template-columns: 1fr 190px; gap: 10px; }
+.handoff-project-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.handoff-project-row > button {
+  height: 38px;
+  padding: 0 13px;
+  border: 1px solid #b8bec7;
+  border-radius: 4px;
+  background: #fff;
+  color: #384252;
+  cursor: pointer;
+}
+.handoff-project-row > button:hover { background: #f5f7fa; }
+.handoff-project-row > button:disabled { opacity: .5; cursor: default; }
 
 .handoff-error,
 .handoff-result { margin-top: 13px; padding: 9px 11px; border-radius: 5px; font-size: 12px; line-height: 1.5; }
@@ -97,5 +109,6 @@
 
 @media (max-width: 860px) {
   .handoff-rail-button { top: 240px; left: 4px; width: 52px; }
-  .handoff-row { grid-template-columns: 1fr; }
+  .handoff-row,
+  .handoff-project-row { grid-template-columns: 1fr; }
 }
