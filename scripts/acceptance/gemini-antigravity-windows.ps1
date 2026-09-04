@@ -93,8 +93,10 @@ try {
     'electron\zero3\agent-routing\authoritative-result-finalizer.ts',
     'electron\zero3\agent-routing\verification-collector.ts',
     'electron\zero3\agent-routing\task-prompt.ts',
+    'electron\zero3\agent-routing\task-mcp-candidate-store.ts',
     'electron\zero3\agent-desktop-bridge\bridge.ts',
     'electron\zero3\artifacts\artifact-store.ts',
+    'electron\zero3\artifacts\antigravity-mcp-lease.ts',
     'electron\zero3\mcp\task-mcp-server.mjs',
     'electron\zero3\mcp\project-context-server.mjs',
     'electron\zero3\remote-host\remote-task-runner.ts',
@@ -130,6 +132,7 @@ try {
   Write-Host '- CHANGES_REQUESTED executes every requiredFix in the same logical session/worktree/provider and creates a new immutable review cycle.'
   Write-Host '- Explicit CODEX/GEMINI target behavior, tri-state authentication handling, and observable AUTO fallback.'
   Write-Host '- Dedicated linked worktree preflight, Codex-authoritative Git evidence, committed changed-file capture, and artifact hash tamper failure.'
+  Write-Host '- Task-scoped MCP result candidates are current-turn only; terminal/MCP disagreement blocks instead of silently choosing one.'
   Write-Host '- Kill/restart before terminal result => durable OutcomeUnknown; no auto-retry; explicit recovery with state/result consistency.'
   Write-Host '- Task-scoped MCP isolation, candidate-only writes, lease cleanup and no credential leakage.'
   Write-Host 'All items above remain NOT_RUN until separately executed and recorded for this exact SHA.'
