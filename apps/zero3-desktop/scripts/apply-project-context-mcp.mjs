@@ -19,7 +19,14 @@ function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let content = read(file)
   for (const replacement of replacements) {
-    if (content.includes(replacement.to)) continue
+    // The default "already applied" test is the replacement text itself, but that
+    // only holds while the inserted block stays adjacent to its anchor. This
+    // overlay runs twice (applyZero3GptWebProvider during prepare-upstream, then
+    // prepare-gemini-integration), and the overlays in between insert their own
+    // code at the same "const zero3CodexAppServer = ..." anchor, which pushes the
+    // helper away from it. Replacements that can drift apart from their anchor
+    // therefore declare a stable marker instead.
+    if (content.includes(replacement.appliedMarker ?? replacement.to)) continue
     if (!content.includes(replacement.from)) {
       throw new Error(`Zero3 project-context MCP overlay drift in ${relativePath}: missing ${replacement.label}`)
     }
@@ -83,6 +90,7 @@ export function applyZero3ProjectContextMcp() {
   patchFile('electron/main.ts', [
     {
       label: 'project-context MCP helper before Codex singleton',
+      appliedMarker: 'function zero3ProjectContextMcpConfig(): Record<string, unknown> {',
       from: 'const zero3CodexAppServer = createZero3CodexAppServer()',
       to: helper + '\nconst zero3CodexAppServer = createZero3CodexAppServer()'
     },

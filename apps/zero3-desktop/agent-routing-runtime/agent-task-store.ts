@@ -89,7 +89,7 @@ export class Zero3AgentTaskStore {
 
   update(
     taskIdValue: unknown,
-    updater: (current: Zero3AgentTaskRecord) => Zero3AgentTaskRecord | void
+    updater: (current: Zero3AgentTaskRecord) => Zero3AgentTaskRecord
   ): Promise<Zero3AgentTaskRecord> {
     return this.mutate(async () => {
       const taskId = validId(taskIdValue, 'taskId')

@@ -14,7 +14,39 @@ type ControlBridge = {
 type AgentTaskBridge = {
   dispatch(request: { taskSpec: Record<string, unknown>; originEntryId: string }): Promise<{ taskId: string; executionId: string; target: 'CODEX' | 'GEMINI'; logicalSessionId?: string | null; webEntryId?: string | null }>
 }
-type HandoffActionsProps = { entry: Zero3WorkspaceEntry }
+// The workspace entry shapes are declared in the desktop shell's src/global.d.ts.
+// That file carries a top-level `export {}`, so it is a module, and the Zero3
+// overlay types are inserted before its `declare global` block - which makes
+// them module-local and invisible from here. The sibling Gemini section
+// declares its own entry shape for the same reason.
+export type Zero3GptWebSessionEntry = {
+  id: string
+  kind: 'gpt_web'
+  projectId: string | null
+  browserProfileId: string
+  conversationUrl: string | null
+  currentUrl: string
+  pageTitle: string | null
+  localDisplayTitle: string | null
+  createdAt: string
+  lastActiveAt: string
+}
+export type Zero3GeminiWebSessionEntry = {
+  id: string
+  kind: 'gemini_web'
+  logicalSessionId: string
+  projectId: string | null
+  browserProfileId: string
+  conversationUrl: string | null
+  currentUrl: string
+  pageTitle: string | null
+  localDisplayTitle: string | null
+  createdAt: string
+  lastActiveAt: string
+}
+export type Zero3WebSessionEntry = Zero3GptWebSessionEntry | Zero3GeminiWebSessionEntry
+
+type HandoffActionsProps = { entry: Zero3WebSessionEntry }
 type Target = 'CODEX' | 'GEMINI'
 
 function bridges() {

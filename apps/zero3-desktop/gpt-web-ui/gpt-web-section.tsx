@@ -16,6 +16,7 @@ import { $activeProjectId } from '@/store/projects'
 import { $focusedStoredSessionId } from '@/store/session-states'
 import { ZERO3_GEMINI_OPEN_ENTRY_EVENT, ZERO3_WEB_PROVIDER_ACTIVATED_EVENT } from './gemini-session-section'
 import { Zero3GptWebHandoffActions } from './gpt-web-handoff-actions'
+import type { Zero3WebSessionEntry } from './gpt-web-handoff-actions'
 
 export const ZERO3_NEW_SESSION_PROVIDER_EVENT = 'zero3:new-session-provider-picker'
 
@@ -25,10 +26,12 @@ type GeminiCreateBridge = { create(request?: { projectId?: string | null }): Pro
 function geminiBridge(): GeminiCreateBridge | null {
   return (window as unknown as { zero3GeminiWeb?: GeminiCreateBridge }).zero3GeminiWeb ?? null
 }
-function entryTitle(entry: Zero3WorkspaceEntry) {
+type Zero3GptWebSurfaceBounds = { x: number; y: number; width: number; height: number }
+
+function entryTitle(entry: Zero3WebSessionEntry) {
   return entry.localDisplayTitle || entry.pageTitle || (entry.conversationUrl ? 'GPT 网页会话' : '新 GPT 网页会话')
 }
-function chatSurfaceBounds(): Zero3GptWebBounds | null {
+function chatSurfaceBounds(): Zero3GptWebSurfaceBounds | null {
   const host = document.querySelector<HTMLElement>('[data-zero3-gpt-web-host]')
   if (!host) return null
   const rect = host.getBoundingClientRect()
@@ -39,7 +42,7 @@ function chatSurfaceBounds(): Zero3GptWebBounds | null {
 export function Zero3GptWebSection({ onNewCodexSession }: Zero3GptWebSectionProps) {
   const activeProjectId = useStore($activeProjectId)
   const focusedCodexSessionId = useStore($focusedStoredSessionId)
-  const [entries, setEntries] = useState<Zero3WorkspaceEntry[]>([])
+  const [entries, setEntries] = useState<Zero3WebSessionEntry[]>([])
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
