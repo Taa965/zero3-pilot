@@ -10,7 +10,7 @@ function patchFile(relativePath, replacements) {
   let source = read(file)
   for (const replacement of replacements) {
     if (source.includes(replacement.to)) continue
-    if (!source.includes(replacement.from)) throw new Error(`Zero3 review-loop overlay drift in ${relativePath}: missing ${replacement.label}`)
+    if (!source.includes(replacement.from)) throw new Error(`Zero3 review-loop runtime drift in ${relativePath}: missing ${replacement.label}`)
     source = source.replace(replacement.from, replacement.to)
   }
   write(file, source)
@@ -95,39 +95,7 @@ export function applyZero3AgentReviewLoop() {
     }
   ])
 
-  patchFile('src/app/chat/sidebar/gpt-web-handoff-actions.tsx', [
-    {
-      label: 'TaskSpecV2 completion gate semantics',
-      from: "        completionGate: target === 'CODEX' ? ['codex.turn.completed','git.preflight','git.postflight','execution.result'] : ['result.json.valid','scope.valid','review.packet.generated'],",
-      to: "        completionGate: ['result.summary','git.clean','verification.no-failures','artifact.hashes'],"
-    },
-    {
-      label: 'Gemini handoff task identity event',
-      from: "          window.dispatchEvent(new CustomEvent('zero3:gemini-open-entry', { detail: { entryId: dispatched.webEntryId } }))",
-      to: "          window.dispatchEvent(new CustomEvent('zero3:gemini-open-entry', { detail: { entryId: dispatched.webEntryId, taskId: dispatched.taskId } }))"
-    },
-    {
-      label: 'clean-worktree execution constraint',
-      from: "          'Preserve provider/runtime authority boundaries and publish structured evidence.'",
-      to: "          'Preserve provider/runtime authority boundaries and publish structured evidence.',\n          'Commit intended changes and leave the isolated task worktree clean before reporting completion.'"
-    }
-  ])
-
-  patchFile('src/app/chat/sidebar/gemini-session-section.tsx', [
-    {
-      label: 'Gemini task identity handoff listener',
-      from:
-        "      const detail = (event as CustomEvent<{ entryId: string }>).detail\n" +
-        "      if (detail?.entryId) void activate(detail.entryId).catch(reason => setError(String(reason)))",
-      to:
-        "      const detail = (event as CustomEvent<{ entryId: string; taskId?: string }>).detail\n" +
-        "      if (detail?.taskId) setTaskId(detail.taskId)\n" +
-        "      if (detail?.entryId) void activate(detail.entryId).catch(reason => setError(String(reason)))"
-    },
-    {
-      label: 'diagnostic direct-runtime label',
-      from: '>启动 Antigravity</Button>',
-      to: '>诊断：直接启动 Antigravity</Button>'
-    }
-  ])
+  // No Renderer patching belongs here. TaskSpec creation/handoff presentation is
+  // owned by renderer-v2/agent-task-dock.tsx; this overlay is runtime-only.
+  console.log('Zero3 review-loop runtime staged without Hermes React UI patches.')
 }
