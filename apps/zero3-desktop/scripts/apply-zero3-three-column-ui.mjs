@@ -25,7 +25,7 @@ function requireMarkers(source, markers, label) {
   }
 }
 
-function assertFunctionalRenderer(shellSource, agentDockSource) {
+function assertFunctionalRenderer(shellSource, agentDockSource, requestGuardSource) {
   requireMarkers(shellSource, [
     'runtime.zero3Codex.thread.list',
     'runtime.zero3Codex.thread.start',
@@ -47,11 +47,17 @@ function assertFunctionalRenderer(shellSource, agentDockSource) {
     "reviewer: reviewSessionId ? 'GPT_WEB' : 'HUMAN'"
   ], 'Zero3 agent task dock')
 
+  requireMarkers(requestGuardSource, [
+    'bridge.respondToServerRequest',
+    "code: -32004",
+    'threadId === activeId'
+  ], 'Zero3 background Codex request guard')
+
   // The screenshot prototype used these literal fake tool rows. They must never
   // return to the product renderer: tool cards must be projected from Codex Item
   // events/history instead.
   for (const fakeMarker of ['grep_search', 'replace_file_content']) {
-    if (shellSource.includes(fakeMarker) || agentDockSource.includes(fakeMarker)) {
+    if (shellSource.includes(fakeMarker) || agentDockSource.includes(fakeMarker) || requestGuardSource.includes(fakeMarker)) {
       throw new Error(`Zero3 renderer contains retired demo marker: ${fakeMarker}`)
     }
   }
@@ -62,13 +68,15 @@ export function applyZero3ThreeColumnUi() {
     'zero3-shell.tsx',
     'zero3-shell.css',
     'agent-task-dock.tsx',
-    'agent-task-dock.css'
+    'agent-task-dock.css',
+    'codex-background-request-guard.tsx'
   ]
   for (const file of rendererFiles) requiredFile(path.join(sourceDir, file))
 
   const shellText = fs.readFileSync(path.join(sourceDir, 'zero3-shell.tsx'), 'utf8')
   const agentDockText = fs.readFileSync(path.join(sourceDir, 'agent-task-dock.tsx'), 'utf8')
-  assertFunctionalRenderer(shellText, agentDockText)
+  const requestGuardText = fs.readFileSync(path.join(sourceDir, 'codex-background-request-guard.tsx'), 'utf8')
+  assertFunctionalRenderer(shellText, agentDockText, requestGuardText)
 
   fs.rmSync(targetDir, { recursive: true, force: true })
   fs.mkdirSync(targetDir, { recursive: true })
@@ -78,9 +86,9 @@ export function applyZero3ThreeColumnUi() {
 
   // This is the renderer cutover. Keep the pinned upstream Electron/Vite host
   // temporarily, but bypass upstream/Hermes main.tsx completely. The only
-  // mounted product renderer is the Zero3-owned three-column shell and its
-  // Zero3-owned task-dispatch dock.
-  const entrySource = `import { createRoot } from 'react-dom/client'\n\nimport { AgentTaskDock } from './zero3-shell/agent-task-dock'\nimport { Zero3Shell } from './zero3-shell/zero3-shell'\nimport './zero3-shell/zero3-shell.css'\nimport './zero3-shell/agent-task-dock.css'\n\ndocument.documentElement.lang = 'zh-CN'\n\nconst root = document.getElementById('root')\nif (!root) throw new Error('Zero3 renderer root is missing')\n\ncreateRoot(root).render(<>\n  <Zero3Shell />\n  <AgentTaskDock />\n</>)\n`
+  // mounted product renderer is the Zero3-owned three-column shell plus
+  // Zero3-owned runtime controls/guards.
+  const entrySource = `import { createRoot } from 'react-dom/client'\n\nimport { AgentTaskDock } from './zero3-shell/agent-task-dock'\nimport { CodexBackgroundRequestGuard } from './zero3-shell/codex-background-request-guard'\nimport { Zero3Shell } from './zero3-shell/zero3-shell'\nimport './zero3-shell/zero3-shell.css'\nimport './zero3-shell/agent-task-dock.css'\n\ndocument.documentElement.lang = 'zh-CN'\n\nconst root = document.getElementById('root')\nif (!root) throw new Error('Zero3 renderer root is missing')\n\ncreateRoot(root).render(<>\n  <Zero3Shell />\n  <AgentTaskDock />\n  <CodexBackgroundRequestGuard />\n</>)\n`
   write(entryPath, entrySource)
 
   // index.html is already an approved Zero3 branding-overlay target. Point it
@@ -108,7 +116,7 @@ export function applyZero3ThreeColumnUi() {
   write(path.join(hermesDesktopDir, 'public', 'zero3-renderer.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 
   console.log('[Zero3 UI] Authoritative three-column renderer staged.')
-  console.log('[Zero3 UI] Agent Task dispatch is mounted inside the same Zero3 renderer.')
+  console.log('[Zero3 UI] Agent Task dispatch and background-request fail-closed guard are mounted in the same Zero3 renderer.')
   console.log('[Zero3 UI] Hermes React UI: retired / not imported / not mounted.')
   console.log('[Zero3 UI] Codex OSS UI: retired / not bundled; Codex app-server remains the Agent Kernel.')
 }
