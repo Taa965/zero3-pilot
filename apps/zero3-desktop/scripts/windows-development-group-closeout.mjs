@@ -70,7 +70,7 @@ function runStep(id, fn) {
     writeReport()
     return detail
   } catch (error) {
-    report.steps.push({ id, status: 'failed', startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now().toISOString?.() ?? new Date().toISOString(), durationMs: Date.now() - started, error: error instanceof Error ? error.stack ?? error.message : String(error) })
+    report.steps.push({ id, status: 'failed', startedAt, finishedAt: new Date().toISOString(), durationMs: Date.now() - started, error: error instanceof Error ? error.stack ?? error.message : String(error) })
     report.status = 'failed'
     report.finishedAt = new Date().toISOString()
     writeReport()
