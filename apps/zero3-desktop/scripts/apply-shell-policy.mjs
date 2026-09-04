@@ -49,6 +49,22 @@ export function applyZero3ShellPolicy() {
   // uploads, or upstream self-update controls in the Zero3 desktop product.
   patchFile('src/components/brand-mark.tsx', [
     {
+      label: 'Zero3 brand badge description',
+      from:
+        '// Brand badge: nous-girl mark on a white tile, identical in light/dark.\n' +
+        '// Fills the tile (softly rounded); size via className (default size-14).',
+      to:
+        '// Zero3 Pilot brand mark with transparent rounded corners.\n' +
+        '// Fills the tile; size is controlled by className (default size-14).'
+    },
+    {
+      label: 'transparent Zero3 brand badge background',
+      from:
+        "'inline-flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white',",
+      to:
+        "'inline-flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-md bg-transparent',"
+    },
+    {
       label: 'Nous brand image',
       from: "src={assetPath('nous-girl.jpg')}",
       to: "src={assetPath('zero3-pilot.png')}"

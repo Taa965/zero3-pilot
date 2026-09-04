@@ -8,6 +8,7 @@ function patchFile(relativePath, replacements) {
   let source = fs.readFileSync(file, 'utf8')
 
   for (const replacement of replacements) {
+    if (replacement.appliedMarkers?.every(marker => source.includes(marker))) continue
     if (source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) {
       throw new Error(
@@ -47,6 +48,8 @@ const ZERO3_CODEX_TURN_TIMEOUT_MS = 10 * 60_000
 const ZERO3_CODEX_MAX_LINE_BYTES = 8 * 1024 * 1024
 const ZERO3_CODEX_MAX_REPLY_BYTES = 256 * 1024
 const ZERO3_CODEX_MAX_SERVER_REQUESTS = 128
+const ZERO3_OLLAMA_TAGS_URL = 'http://127.0.0.1:11434/api/tags'
+const ZERO3_OLLAMA_LIST_TIMEOUT_MS = 5_000
 
 function zero3CodexRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
@@ -108,6 +111,339 @@ function zero3CodexErrorMessage(value: unknown): string {
   const code = typeof error.code === 'number' || typeof error.code === 'string' ? String(error.code) : ''
   return message ? (code ? '[' + code + '] ' + message : message) : 'Codex app-server returned an unknown error'
 }
+
+type Zero3OllamaModel = {
+  aliasCount: number
+  name: string
+  sizeBytes: number | null
+  modifiedAt: string | null
+}
+
+function zero3OllamaModels(value: unknown): Zero3OllamaModel[] {
+  const input = zero3CodexRecord(value)
+  const rawModels = Array.isArray(input.models) ? input.models : []
+  const byDigest = new Map<string, Zero3OllamaModel>()
+
+  for (const rawModel of rawModels) {
+    const model = zero3CodexRecord(rawModel)
+    const name = typeof model.name === 'string' ? model.name.trim() : ''
+    const digest = typeof model.digest === 'string' ? model.digest.trim() : ''
+    const remoteModel = typeof model.remote_model === 'string' ? model.remote_model.trim() : ''
+    const capabilities = Array.isArray(model.capabilities) ? model.capabilities : []
+    const supportsCompletion = capabilities.some(capability => capability === 'completion')
+    // The local tags endpoint includes cloud entries, embedding-only entries and aliases that
+    // share a digest. The desktop model picker must offer only a distinct local
+    // chat-capable model, not every manifest label in the local store.
+    if (!name || name.length > 256 || !digest || digest.length > 128 || remoteModel || !supportsCompletion) continue
+    const sizeBytes = typeof model.size === 'number' && Number.isFinite(model.size) && model.size >= 0 ? model.size : null
+    const modifiedAt = typeof model.modified_at === 'string' && model.modified_at.length <= 128 ? model.modified_at : null
+    const current = byDigest.get(digest)
+    if (!current) {
+      byDigest.set(digest, { aliasCount: 1, name, sizeBytes, modifiedAt })
+      continue
+    }
+
+    current.aliasCount += 1
+    const currentIsBackup = current.name.includes('.bak.')
+    const candidateIsBackup = name.includes('.bak.')
+    const currentIsNamespaceAlias = current.name.includes('/')
+    const candidateIsNamespaceAlias = name.includes('/')
+    if ((currentIsBackup && !candidateIsBackup) || (currentIsNamespaceAlias && !candidateIsNamespaceAlias)) {
+      current.name = name
+      current.sizeBytes = sizeBytes
+      current.modifiedAt = modifiedAt
+    }
+  }
+
+  return [...byDigest.values()]
+}
+
+async function zero3ListOllamaModels(): Promise<{ models: Zero3OllamaModel[]; provider: 'ollama' }> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), ZERO3_OLLAMA_LIST_TIMEOUT_MS)
+  try {
+    const response = await fetch(ZERO3_OLLAMA_TAGS_URL, {
+      headers: { accept: 'application/json' },
+      signal: controller.signal
+    })
+    if (!response.ok) throw new Error('Ollama 本机模型服务返回 HTTP ' + String(response.status))
+    return { models: zero3OllamaModels(await response.json()), provider: 'ollama' }
+  } catch (error) {
+    const message = error instanceof Error && error.message.trim() ? error.message.trim() : '未知错误'
+    throw new Error('无法读取 Ollama 本机模型列表：' + message)
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+const ZERO3_GLM_ADAPTER_HOST = '127.0.0.1'
+const ZERO3_GLM_ADAPTER_PORT = 8788
+const ZERO3_GLM_CHAT_COMPLETIONS_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+const ZERO3_GLM_MAX_BODY_BYTES = 8 * 1024 * 1024
+const ZERO3_GLM_REQUEST_TIMEOUT_MS = 10 * 60_000
+
+function zero3GlmText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return ''
+  return value
+    .map(part => {
+      const item = zero3CodexRecord(part)
+      return typeof item.text === 'string' ? item.text : typeof item.content === 'string' ? item.content : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function zero3GlmToolOutput(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return zero3GlmText(value)
+  if (value == null) return ''
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function zero3GlmMessageContent(value: unknown): Array<Record<string, unknown>> {
+  const content = Array.isArray(value) ? value : typeof value === 'string' ? [{ type: 'input_text', text: value }] : []
+  const converted: Array<Record<string, unknown>> = []
+  for (const rawPart of content) {
+    const part = zero3CodexRecord(rawPart)
+    const type = typeof part.type === 'string' ? part.type : ''
+    if ((type === 'input_text' || type === 'output_text' || type === 'text') && typeof part.text === 'string') {
+      converted.push({ type: 'text', text: part.text })
+      continue
+    }
+    if ((type === 'input_image' || type === 'image_url') && typeof part.image_url === 'string') {
+      converted.push({ type: 'image_url', image_url: { url: part.image_url } })
+    }
+  }
+  return converted
+}
+
+function zero3GlmRole(value: unknown): 'assistant' | 'system' | 'tool' | 'user' {
+  // GLM Chat Completions accepts only these four roles. Codex emits developer
+  // messages for its instruction layer, which have the same precedence intent as
+  // GLM system role and must never be forwarded verbatim.
+  if (value === 'system' || value === 'user' || value === 'assistant' || value === 'tool') return value
+  return value === 'developer' ? 'system' : 'user'
+}
+
+function zero3GlmMessages(input: unknown, instructions: unknown): Array<Record<string, unknown>> {
+  const messages: Array<Record<string, unknown>> = []
+  if (typeof instructions === 'string' && instructions.trim()) messages.push({ role: 'system', content: instructions })
+  const items = Array.isArray(input) ? input : typeof input === 'string' ? [{ type: 'message', role: 'user', content: input }] : []
+  for (const rawItem of items) {
+    const item = zero3CodexRecord(rawItem)
+    const type = typeof item.type === 'string' ? item.type : 'message'
+    if (type === 'message') {
+      const content = zero3GlmMessageContent(item.content)
+      if (content.length) messages.push({ role: zero3GlmRole(item.role), content })
+      continue
+    }
+    if (type === 'function_call' || type === 'custom_tool_call') {
+      const name = typeof item.name === 'string' ? item.name : ''
+      const callId = typeof item.call_id === 'string' ? item.call_id : ''
+      const argumentsText = typeof item.arguments === 'string' ? item.arguments : typeof item.input === 'string' ? item.input : '{}'
+      if (name && callId) {
+        messages.push({
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: callId, type: 'function', function: { name, arguments: argumentsText } }]
+        })
+      }
+      continue
+    }
+    if (type === 'function_call_output' || type === 'custom_tool_call_output' || type === 'mcp_tool_call_output') {
+      const callId = typeof item.call_id === 'string' ? item.call_id : ''
+      if (callId) messages.push({ role: 'tool', tool_call_id: callId, content: zero3GlmToolOutput(item.output) })
+    }
+  }
+  return messages
+}
+
+function zero3GlmTools(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  const tools: Array<Record<string, unknown>> = []
+  for (const rawTool of value) {
+    const tool = zero3CodexRecord(rawTool)
+    if (tool.type !== 'function') continue
+    const name = typeof tool.name === 'string' ? tool.name : ''
+    if (!name) continue
+    const description = typeof tool.description === 'string' ? tool.description : ''
+    const parameters = tool.parameters && typeof tool.parameters === 'object' ? tool.parameters : { type: 'object', properties: {} }
+    tools.push({ type: 'function', function: { name, description, parameters } })
+  }
+  return tools
+}
+
+function zero3GlmResponseUsage(value: unknown) {
+  const usage = zero3CodexRecord(value)
+  const inputTokens = typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0
+  const outputTokens = typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0
+  const totalTokens = typeof usage.total_tokens === 'number' ? usage.total_tokens : inputTokens + outputTokens
+  return {
+    input_tokens: inputTokens,
+    input_tokens_details: null,
+    output_tokens: outputTokens,
+    output_tokens_details: null,
+    total_tokens: totalTokens
+  }
+}
+
+function zero3GlmResponseItems(value: unknown): Array<Record<string, unknown>> {
+  const payload = zero3CodexRecord(value)
+  const choice = Array.isArray(payload.choices) ? zero3CodexRecord(payload.choices[0]) : {}
+  const message = zero3CodexRecord(choice.message)
+  const items: Array<Record<string, unknown>> = []
+  const text = zero3GlmText(message.content)
+  if (text) items.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] })
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []
+  for (const rawToolCall of toolCalls) {
+    const toolCall = zero3CodexRecord(rawToolCall)
+    const functionValue = zero3CodexRecord(toolCall.function)
+    const name = typeof functionValue.name === 'string' ? functionValue.name : ''
+    const callId = typeof toolCall.id === 'string' ? toolCall.id : ''
+    const argumentsText = typeof functionValue.arguments === 'string' ? functionValue.arguments : '{}'
+    if (name && callId) items.push({ type: 'function_call', call_id: callId, name, arguments: argumentsText })
+  }
+  return items
+}
+
+function zero3GlmSseEvent(kind: string, payload: Record<string, unknown>): string {
+  return 'event: ' + kind + '\ndata: ' + JSON.stringify({ type: kind, ...payload }) + '\n\n'
+}
+
+async function zero3GlmReadJson(request: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = []
+  let bytes = 0
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    bytes += buffer.length
+    if (bytes > ZERO3_GLM_MAX_BODY_BYTES) throw new Error('GLM 适配请求超过大小限制')
+    chunks.push(buffer)
+  }
+  try {
+    return zero3CodexRecord(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+  } catch {
+    throw new Error('GLM 适配请求不是有效 JSON')
+  }
+}
+
+class Zero3GlmResponsesAdapter {
+  private server: http.Server | null = null
+  private starting: Promise<void> | null = null
+  private sequence = 0
+
+  async ensureStarted() {
+    if (this.server?.listening) return
+    if (this.starting) return this.starting
+    this.starting = new Promise<void>((resolve, reject) => {
+      const server = http.createServer((request, response) => {
+        void this.handle(request, response)
+      })
+      const fail = (error: Error) => {
+        server.close()
+        reject(new Error('无法启动 GLM 本机适配器：' + error.message))
+      }
+      server.once('error', fail)
+      server.listen(ZERO3_GLM_ADAPTER_PORT, ZERO3_GLM_ADAPTER_HOST, () => {
+        server.removeListener('error', fail)
+        this.server = server
+        resolve()
+      })
+    })
+    try {
+      await this.starting
+    } finally {
+      this.starting = null
+    }
+  }
+
+  stop() {
+    const server = this.server
+    this.server = null
+    if (server?.listening) server.close()
+  }
+
+  private async handle(request: http.IncomingMessage, response: http.ServerResponse) {
+    const requestUrl = new URL(request.url ?? '/', 'http://' + ZERO3_GLM_ADAPTER_HOST)
+    if (request.method !== 'POST' || requestUrl.pathname !== '/v1/responses') {
+      response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ error: { message: 'Not found' } }))
+      return
+    }
+    const authorization = typeof request.headers.authorization === 'string' ? request.headers.authorization.trim() : ''
+    if (!authorization.startsWith('Bearer ') || authorization.length <= 7) {
+      response.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ error: { message: 'GLM API key is required' } }))
+      return
+    }
+
+    try {
+      const body = await zero3GlmReadJson(request)
+      const model = typeof body.model === 'string' ? body.model.trim() : ''
+      const messages = zero3GlmMessages(body.input, body.instructions)
+      if (!model || !messages.length) throw new Error('GLM 请求必须包含模型和可转换的消息内容')
+      const tools = zero3GlmTools(body.tools)
+      const upstreamBody: Record<string, unknown> = {
+        model,
+        messages,
+        stream: false,
+        thinking: { type: 'enabled' }
+      }
+      if (tools.length) upstreamBody.tools = tools
+      if (typeof body.temperature === 'number') upstreamBody.temperature = body.temperature
+      if (typeof body.max_output_tokens === 'number') upstreamBody.max_tokens = body.max_output_tokens
+
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), ZERO3_GLM_REQUEST_TIMEOUT_MS)
+      let upstream: Response
+      try {
+        upstream = await fetch(ZERO3_GLM_CHAT_COMPLETIONS_URL, {
+          method: 'POST',
+          headers: { authorization, 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(upstreamBody),
+          signal: controller.signal
+        })
+      } finally {
+        clearTimeout(timeout)
+      }
+      const rawResponse = await upstream.text()
+      if (!upstream.ok) {
+        response.writeHead(upstream.status, { 'content-type': 'application/json; charset=utf-8' })
+        response.end(rawResponse || JSON.stringify({ error: { message: 'GLM 请求失败' } }))
+        return
+      }
+      const upstreamResponse = zero3CodexRecord(JSON.parse(rawResponse))
+      const responseId = typeof upstreamResponse.id === 'string' ? upstreamResponse.id : 'glm-resp-' + String(++this.sequence)
+      const items = zero3GlmResponseItems(upstreamResponse)
+      const completed = { id: responseId, usage: zero3GlmResponseUsage(upstreamResponse.usage) }
+
+      if (body.stream === true) {
+        response.writeHead(200, {
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'content-type': 'text/event-stream; charset=utf-8'
+        })
+        response.write(zero3GlmSseEvent('response.created', { response: { id: responseId } }))
+        for (const item of items) response.write(zero3GlmSseEvent('response.output_item.done', { item }))
+        response.end(zero3GlmSseEvent('response.completed', { response: completed }))
+        return
+      }
+
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ id: responseId, object: 'response', status: 'completed', output: items, usage: completed.usage }))
+    } catch (error) {
+      const message = error instanceof Error && error.message ? error.message : 'GLM 适配器内部错误'
+      response.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ error: { message } }))
+    }
+  }
+}
+
+const zero3GlmResponsesAdapter = new Zero3GlmResponsesAdapter()
 
 function broadcastZero3CodexEvent(event: Zero3CodexEvent) {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -492,9 +828,12 @@ function zero3CodexTurnInterruptParams(value: unknown) {
 
 ipcMain.handle('zero3:codex:status', () => zero3CodexAppServer.status())
 ipcMain.handle('zero3:codex:start', () => zero3CodexAppServer.ensureStarted())
-ipcMain.handle('zero3:codex:thread:start', (_event, request: unknown) =>
-  zero3CodexAppServer.request('thread/start', zero3CodexThreadStartParams(request))
-)
+ipcMain.handle('zero3:ollama:list-models', () => zero3ListOllamaModels())
+ipcMain.handle('zero3:codex:thread:start', async (_event, request: unknown) => {
+  const params = zero3CodexThreadStartParams(request)
+  if (params.modelProvider === 'glm') await zero3GlmResponsesAdapter.ensureStarted()
+  return zero3CodexAppServer.request('thread/start', params)
+})
 ipcMain.handle('zero3:codex:thread:resume', (_event, request: unknown) =>
   zero3CodexAppServer.request('thread/resume', zero3CodexThreadResumeParams(request))
 )
@@ -514,12 +853,18 @@ ipcMain.handle('zero3:codex:server:respond', (_event, request: unknown) =>
   zero3CodexAppServer.respondToServerRequest(request)
 )
 
-app.on('before-quit', () => zero3CodexAppServer.stop())
+app.on('before-quit', () => {
+  zero3CodexAppServer.stop()
+  zero3GlmResponsesAdapter.stop()
+})
 `
 
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Codex', {
   status: () => ipcRenderer.invoke('zero3:codex:status'),
   start: () => ipcRenderer.invoke('zero3:codex:start'),
+  ollama: {
+    listModels: () => ipcRenderer.invoke('zero3:ollama:list-models')
+  },
   thread: {
     start: request => ipcRenderer.invoke('zero3:codex:thread:start', request),
     resume: request => ipcRenderer.invoke('zero3:codex:thread:resume', request),
@@ -544,6 +889,9 @@ const globalTypes = String.raw`interface Window {
     zero3Codex: {
       status: () => Promise<Zero3CodexStatus>
       start: () => Promise<Zero3CodexStatus>
+      ollama: {
+        listModels: () => Promise<Zero3OllamaModelsResponse>
+      }
       thread: {
         start: (request?: Zero3CodexThreadStartRequest) => Promise<unknown>
         resume: (request: Zero3CodexThreadResumeRequest) => Promise<unknown>
@@ -574,6 +922,15 @@ type Zero3CodexStatus = {
 
 type Zero3CodexApprovalPolicy = 'never' | 'on-request' | 'untrusted'
 type Zero3CodexSandbox = 'danger-full-access' | 'read-only' | 'workspace-write'
+
+type Zero3OllamaModel = {
+  aliasCount: number
+  name: string
+  sizeBytes: number | null
+  modifiedAt: string | null
+}
+
+type Zero3OllamaModelsResponse = { models: Zero3OllamaModel[]; provider: 'ollama' }
 
 type Zero3CodexThreadStartRequest = {
   approvalPolicy?: Zero3CodexApprovalPolicy
@@ -636,12 +993,14 @@ export function applyZero3CodexTransport() {
     {
       label: 'Zero3 Codex renderer type definitions',
       from: 'export {}\n\ndeclare global {',
-      to: 'export {}\n' + globalTypeDefinitions + '\ndeclare global {'
+      to: 'export {}\n' + globalTypeDefinitions + '\ndeclare global {',
+      appliedMarkers: ['type Zero3CodexStatus = {', 'type Zero3CodexServerResponse =']
     },
     {
       label: 'Zero3 Codex window surface',
       from: 'interface Window {\n    hermesDesktop:',
-      to: globalTypes
+      to: globalTypes,
+      appliedMarkers: ['    zero3Codex: {', '      onEvent: (callback: (event: Zero3CodexEvent) => void) => () => void']
     }
   ])
 }

@@ -27,8 +27,8 @@ const safeWholeThreadFork = String.raw`function zero3CodexThreadForkParams(value
   const input = zero3CodexRecord(value)
   return {
     threadId: zero3CodexRequiredString(input.threadId, 'threadId', 256),
-    approvalPolicy: 'on-request',
-    sandbox: 'read-only'
+    approvalPolicy: 'never',
+    sandbox: 'danger-full-access'
   }
 }`
 
@@ -87,7 +87,7 @@ export function applyZero3CodexThreadActionsHardening() {
 
   applyZero3CodexTurnMapping()
   applyZero3CodexAuthoritativeHistory()
-  console.log('R3D hardening: whole-thread fork is read-only/on-request, lastTurnId stays private outside the dedicated R3E Turn-boundary action, and Hermes auto-archive is hidden in Codex mode.')
+  console.log('R3D: whole-thread fork inherits the configured full-access/no-prompt policy; lastTurnId stays private outside the dedicated R3E Turn-boundary action, and Hermes auto-archive is hidden in Codex mode.')
   console.log('R3E: authoritative message -> Item -> Turn mapping is applied only after the R3D permission floor.')
   console.log('R3F: authoritative paginated history and historical edit are applied only after the R3E identity boundary.')
 }

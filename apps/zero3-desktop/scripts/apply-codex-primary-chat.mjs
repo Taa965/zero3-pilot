@@ -92,7 +92,40 @@ type CodexPrimaryChatOptions = {
 }
 
 const R2_APPROVAL_POLICY = 'never' as const
-const R2_SANDBOX = 'read-only' as const
+const R2_SANDBOX = 'danger-full-access' as const
+const R2_MODEL_SELECTION_STORAGE_KEY = 'zero3.ollama.selected-model'
+
+type Zero3ModelSelection = { model: string; provider: 'deepseek' | 'glm' | 'ollama' }
+
+export function selectedZero3Model(): Zero3ModelSelection | null {
+  try {
+    const stored = window.localStorage.getItem(R2_MODEL_SELECTION_STORAGE_KEY)?.trim() ?? ''
+    if (!stored || stored.length > 512) return null
+    if (!stored.startsWith('{')) return { model: stored, provider: 'ollama' }
+    const parsed = JSON.parse(stored) as { model?: unknown; provider?: unknown }
+    const model = typeof parsed.model === 'string' ? parsed.model.trim() : ''
+    const provider = parsed.provider === 'deepseek' || parsed.provider === 'glm' || parsed.provider === 'ollama' ? parsed.provider : null
+    return model && model.length <= 256 && provider ? { model, provider } : null
+  } catch {
+    return null
+  }
+}
+
+export function selectedZero3OllamaModel(): string | null {
+  const selection = selectedZero3Model()
+  return selection?.provider === 'ollama' ? selection.model : null
+}
+
+export function selectZero3Model(selection: Zero3ModelSelection | null) {
+  try {
+    if (selection) window.localStorage.setItem(R2_MODEL_SELECTION_STORAGE_KEY, JSON.stringify(selection))
+    else window.localStorage.removeItem(R2_MODEL_SELECTION_STORAGE_KEY)
+  } catch {}
+}
+
+export function selectZero3OllamaModel(model: string | null) {
+  selectZero3Model(model?.trim() ? { model: model.trim().slice(0, 256), provider: 'ollama' } : null)
+}
 
 function record(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : {}
@@ -447,8 +480,10 @@ export function useZero3CodexPrimaryChat({
     async (preview: string): Promise<string> => {
       await window.zero3Codex.start()
       const cwd = $currentCwd.get().trim()
+      const selection = selectedZero3Model()
       const response = await window.zero3Codex.thread.start({
         ...(cwd ? { cwd } : {}),
+        ...(selection ? { model: selection.model, modelProvider: selection.provider } : {}),
         approvalPolicy: R2_APPROVAL_POLICY,
         sandbox: R2_SANDBOX
       })
@@ -782,6 +817,133 @@ export function useZero3CodexPrimaryChat({
 }
 `
 
+const ollamaModelMenuSource = String.raw`import { useCallback, useEffect, useState } from 'react'
+
+import { notify } from '@/store/notifications'
+
+import { selectZero3Model, selectZero3OllamaModel, selectedZero3Model, selectedZero3OllamaModel } from './primary-chat'
+
+const DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp'] as const
+const GLM_MODELS = ['glm-5.3-flash', 'glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-5', 'glm-4.7', 'glm-4.6', 'glm-4.5-air', 'glm-4.5'] as const
+
+function sizeLabel(sizeBytes: number | null): string {
+  if (sizeBytes == null) return ''
+  const gib = sizeBytes / 1024 / 1024 / 1024
+  return gib >= 1 ? gib.toFixed(gib >= 10 ? 0 : 1) + ' GiB' : Math.round(sizeBytes / 1024 / 1024) + ' MiB'
+}
+
+export function Zero3OllamaModelMenu() {
+  const [models, setModels] = useState<Zero3OllamaModel[]>([])
+  const [selectedModel, setSelectedModel] = useState<string>(() => selectedZero3OllamaModel() ?? '')
+  const [selectedDeepSeekModel, setSelectedDeepSeekModel] = useState<string>(
+    () => (selectedZero3Model()?.provider === 'deepseek' ? selectedZero3Model()?.model ?? '' : '')
+  )
+  const [selectedGlmModel, setSelectedGlmModel] = useState<string>(
+    () => (selectedZero3Model()?.provider === 'glm' ? selectedZero3Model()?.model ?? '' : '')
+  )
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await window.zero3Codex.ollama.listModels()
+      setModels(result.models)
+      if (selectedModel && !result.models.some(model => model.name === selectedModel)) {
+        setSelectedModel('')
+        selectZero3OllamaModel(null)
+      }
+    } catch (caught) {
+      setModels([])
+      setError(caught instanceof Error && caught.message.trim() ? caught.message.trim() : '无法读取本机模型列表')
+    } finally {
+      setLoading(false)
+    }
+  }, [selectedModel])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  return (
+    <div className="space-y-3 p-3" data-zero3-ollama-model-menu>
+      <div>
+        <div className="text-sm font-medium">Ollama（本地模型服务）</div>
+        <p className="mt-1 text-xs text-muted-foreground">选择后仅用于新建的 Codex（代码代理）会话；请求固定发送到本机 127.0.0.1。</p>
+      </div>
+      <select
+        aria-label="选择 Ollama 本地模型"
+        className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+        disabled={loading || models.length === 0}
+        onChange={event => {
+          const next = event.target.value
+          setSelectedModel(next)
+          setSelectedDeepSeekModel('')
+          setSelectedGlmModel('')
+          selectZero3OllamaModel(next || null)
+          if (next) notify({ kind: 'success', message: '已选择 Ollama 本地模型：' + next + '。新建会话后生效。' })
+        }}
+        value={selectedModel}
+      >
+        <option value="">不使用 Ollama 本地模型</option>
+        {models.map(model => (
+          <option key={model.name} value={model.name}>
+            {model.name}{model.aliasCount > 1 ? ' · ' + String(model.aliasCount) + ' 个本机别名' : ''}{sizeLabel(model.sizeBytes) ? ' · ' + sizeLabel(model.sizeBytes) : ''}
+          </option>
+        ))}
+      </select>
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{loading ? '正在读取模型…' : error ?? ('已发现 ' + String(models.length) + ' 个本机可聊天模型')}</span>
+        <button className="rounded px-2 py-1 text-foreground hover:bg-muted disabled:opacity-50" disabled={loading} onClick={() => void refresh()} type="button">
+          刷新
+        </button>
+      </div>
+      <div className="border-t border-border/50 pt-3">
+        <div className="text-sm font-medium">DeepSeek（深度求索）云端模型</div>
+        <p className="mt-1 text-xs text-muted-foreground">使用当前设备的本机凭据；选择后仅对新建 Codex（代码代理）会话生效。</p>
+        <select
+          aria-label="选择 DeepSeek 云端模型"
+          className="mt-2 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+          onChange={event => {
+            const next = event.target.value
+            setSelectedDeepSeekModel(next)
+            setSelectedModel('')
+            setSelectedGlmModel('')
+            selectZero3Model(next ? { model: next, provider: 'deepseek' } : null)
+            if (next) notify({ kind: 'success', message: '已选择 DeepSeek 云端模型：' + next + '。新建会话后生效。' })
+          }}
+          value={selectedDeepSeekModel}
+        >
+          <option value="">不使用 DeepSeek 云端模型</option>
+          {DEEPSEEK_MODELS.map(model => <option key={model} value={model}>{model}</option>)}
+        </select>
+      </div>
+      <div className="border-t border-border/50 pt-3">
+        <div className="text-sm font-medium">GLM（智谱）云端模型</div>
+        <p className="mt-1 text-xs text-muted-foreground">通过本机适配器将 Codex（代码代理）的 Responses API（响应接口）转换为 GLM 的 Chat Completions（聊天补全）接口；支持文本、图片和函数工具调用。</p>
+        <select
+          aria-label="选择 GLM 云端模型"
+          className="mt-2 h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+          onChange={event => {
+            const next = event.target.value
+            setSelectedGlmModel(next)
+            setSelectedModel('')
+            setSelectedDeepSeekModel('')
+            selectZero3Model(next ? { model: next, provider: 'glm' } : null)
+            if (next) notify({ kind: 'success', message: '已选择 GLM 云端模型：' + next + '。新建会话后生效。' })
+          }}
+          value={selectedGlmModel}
+        >
+          <option value="">不使用 GLM 云端模型</option>
+          {GLM_MODELS.map(model => <option key={model} value={model}>{model}</option>)}
+        </select>
+      </div>
+    </div>
+  )
+}
+`
+
 export function applyZero3CodexPrimaryChat() {
   // R1A used the renderer-style camelCase spelling here. The pinned Codex
   // generated protocol uses the UserInput field `text_elements` verbatim.
@@ -796,6 +958,77 @@ export function applyZero3CodexPrimaryChat() {
   const generatedDir = path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex')
   fs.mkdirSync(generatedDir, { recursive: true })
   fs.writeFileSync(path.join(generatedDir, 'primary-chat.ts'), primaryChatSource)
+  fs.writeFileSync(path.join(generatedDir, 'ollama-model-menu.tsx'), ollamaModelMenuSource)
+
+  patchFile('src/app/contrib/surfaces.tsx', [
+    {
+      label: 'Zero3 Ollama model-menu import',
+      from: "import { ModelMenuPanel } from '../shell/model-menu-panel'",
+      to:
+        "import { ModelMenuPanel } from '../shell/model-menu-panel'\n" +
+        "import { Zero3OllamaModelMenu } from '../zero3-codex/ollama-model-menu'"
+    },
+    {
+      label: 'Zero3 Ollama model-menu surface',
+      from:
+        "      gatewayState === 'open' ? (\n" +
+        "        <ModelMenuPanel\n" +
+        "          gateway={gateway || undefined}\n" +
+        "          onSelectModel={actions.selectModel}\n" +
+        "          profile={activeGatewayProfile}\n" +
+        "          requestGateway={actions.requestGateway}\n" +
+        "        />\n" +
+        "      ) : null,",
+      to:
+        "      typeof window !== 'undefined' && window.zero3Codex ? (\n" +
+        "        <Zero3OllamaModelMenu />\n" +
+        "      ) : gatewayState === 'open' ? (\n" +
+        "        <ModelMenuPanel\n" +
+        "          gateway={gateway || undefined}\n" +
+        "          onSelectModel={actions.selectModel}\n" +
+        "          profile={activeGatewayProfile}\n" +
+        "          requestGateway={actions.requestGateway}\n" +
+        "        />\n" +
+        "      ) : null,"
+    }
+  ])
+
+  patchFile('src/app/chat/index.tsx', [
+    {
+      label: 'Zero3 Codex primary model-menu availability',
+      from:
+        "  const currentCwd = useStore(view.$cwd)\n" +
+        "  const currentModel = useStore(view.$model)\n" +
+        "  const currentProvider = useStore(view.$provider)",
+      to:
+        "  const currentCwd = useStore(view.$cwd)\n" +
+        "  const currentModel = useStore(view.$model)\n" +
+        "  const currentProvider = useStore(view.$provider)\n" +
+        "  const zero3CodexPrimary = typeof window !== 'undefined' && Boolean(window.zero3Codex)"
+    },
+    {
+      label: 'Zero3 Codex model-menu state',
+      from:
+        "        model: currentModel,\n" +
+        "        provider: currentProvider,\n" +
+        "        canSwitch: gatewayOpen,\n" +
+        "        loading: !gatewayOpen || (!currentModel && !currentProvider),",
+      to:
+        "        model: zero3CodexPrimary ? '模型选择' : currentModel,\n" +
+        "        provider: zero3CodexPrimary ? 'zero3' : currentProvider,\n" +
+        "        canSwitch: zero3CodexPrimary || gatewayOpen,\n" +
+        "        loading: !zero3CodexPrimary && (!gatewayOpen || (!currentModel && !currentProvider)),"
+    },
+    {
+      label: 'Zero3 Codex model-menu memo dependencies',
+      from:
+        "    [contextSuggestions, currentModel, currentProvider, gatewayOpen, modelMenuContent, quickModels]\n" +
+        "  )",
+      to:
+        "    [contextSuggestions, currentModel, currentProvider, gatewayOpen, modelMenuContent, quickModels, zero3CodexPrimary]\n" +
+        "  )"
+    }
+  ])
 
   patchFile('src/app/contrib/wiring.tsx', [
     {

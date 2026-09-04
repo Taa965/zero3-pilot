@@ -503,11 +503,6 @@ export function applyZero3CodexPrompts() {
       to: primaryChatImports
     },
     {
-      label: 'R2B native approval policy',
-      from: "const R2_APPROVAL_POLICY = 'never' as const",
-      to: "const R2_APPROVAL_POLICY = 'on-request' as const"
-    },
-    {
       label: 'R2B native Codex server-request dispatcher',
       from: String.raw`      if (event.kind === 'request') {
         void window.zero3Codex.respondToServerRequest({
