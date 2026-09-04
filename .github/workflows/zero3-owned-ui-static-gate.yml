@@ -1,0 +1,54 @@
+name: Zero3 Owned UI Static Gate
+
+on:
+  pull_request:
+    paths:
+      - 'apps/zero3-desktop/zero3-ui/**'
+      - 'apps/zero3-desktop/workspace-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-workspace-entry-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs'
+      - 'apps/zero3-desktop/scripts/prepare-upstream.mjs'
+      - 'apps/zero3-desktop/scripts/prepare-gemini-integration.mjs'
+      - 'apps/zero3-desktop/package.json'
+      - 'scripts/check-zero3-owned-ui.mjs'
+      - 'docs/ARCHITECTURE_CONSTITUTION.md'
+      - '.github/workflows/zero3-owned-ui-static-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: zero3-owned-ui-source-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  renderer-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Check owned-renderer source invariants
+        run: node scripts/check-zero3-owned-ui.mjs
+
+      - name: Syntax-check owned renderer staging scripts
+        run: |
+          node --check apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs
+          node --check apps/zero3-desktop/scripts/apply-workspace-entry-runtime.mjs
+          node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
+          node --check apps/zero3-desktop/scripts/prepare-gemini-integration.mjs
+
+      - name: Reject whitespace errors
+        run: git diff --check
+
+  # Full pinned submodule preparation, prepared-composition inspection and the
+  # renderer+Electron typecheck run once in Gemini Antigravity Static Gate.
+  # Keeping this gate source-only avoids racing two simultaneous full submodule
+  # clones against GitHub rate limits for the same PR.

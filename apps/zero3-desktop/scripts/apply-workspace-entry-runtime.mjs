@@ -70,6 +70,13 @@ ipcMain.handle('zero3:workspace:rename', (_event, request: unknown) => {
   if (title != null && typeof title !== 'string') throw new Error('title must be a string or null')
   return zero3WorkspaceEntries.rename({ id, title: title as string | null })
 })
+ipcMain.handle('zero3:workspace:set-project', (_event, request: unknown) => {
+  const input = zero3WorkspaceRecord(request)
+  return zero3WorkspaceEntries.setProject({
+    id: zero3WorkspaceRequestId(input),
+    projectId: zero3WorkspaceProjectId(input)
+  })
+})
 ipcMain.handle('zero3:workspace:remove', (_event, request: unknown) => zero3WorkspaceEntries.remove(zero3WorkspaceRequestId(request)))
 `
 
@@ -79,6 +86,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Workspace
   createGptWeb: request => ipcRenderer.invoke('zero3:workspace:gpt-web:create', request),
   createGeminiWeb: request => ipcRenderer.invoke('zero3:workspace:gemini-web:create', request),
   rename: request => ipcRenderer.invoke('zero3:workspace:rename', request),
+  setProject: request => ipcRenderer.invoke('zero3:workspace:set-project', request),
   remove: request => ipcRenderer.invoke('zero3:workspace:remove', request)
 })
 
@@ -119,6 +127,7 @@ const globalWindowSurface = String.raw`    zero3Workspace: {
       createGptWeb: (request?: { projectId?: string | null }) => Promise<Zero3GptWebWorkspaceEntry>
       createGeminiWeb: (request?: { projectId?: string | null; logicalSessionId?: string | null }) => Promise<Zero3GeminiWebWorkspaceEntry>
       rename: (request: { id: string; title: string | null }) => Promise<Zero3WorkspaceEntry>
+      setProject: (request: { id: string; projectId: string | null }) => Promise<Zero3WorkspaceEntry>
       remove: (request: { id: string }) => Promise<{ removed: boolean }>
     }
     zero3Codex: {`

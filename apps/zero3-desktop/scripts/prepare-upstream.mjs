@@ -25,6 +25,7 @@ import { applyZero3GptWebProvider } from './apply-gpt-web-provider.mjs'
 import { applyZero3RemoteHostRuntime } from './apply-remote-host-runtime.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 import { applyZero3WorkspaceEntryRuntime } from './apply-workspace-entry-runtime.mjs'
+import { applyZero3OwnedUi } from './apply-zero3-owned-ui.mjs'
 
 const brandAssetsDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'assets')
 const brandedLocaleFiles = ['ar.ts', 'en.ts', 'ja.ts', 'zh-hant.ts', 'zh.ts']
@@ -73,11 +74,9 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
-  // R3D permits only the reviewed shell transformations plus the typed Codex
-  // app-server boundary, primary-chat adapter, native prompt/item presentation,
-  // structured UserInput mapping and native Thread lifecycle surfaces. Retired
-  // Zero3 Node bridges stay disabled. H0-H3 Remote Host adds only untracked
-  // Zero3-owned Electron-main source templates plus reviewed main.ts wiring.
+  // These tracked paths are still transformed while runtime/protocol seams are
+  // being extracted from the pinned donor. They are not product renderer entrypoints:
+  // applyZero3OwnedUi() replaces src/main.tsx after all compatibility patches.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -109,6 +108,7 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/components/prompt-overlays.tsx',
     'apps/desktop/src/global.d.ts',
     'apps/desktop/src/i18n/languages.ts',
+    'apps/desktop/src/main.tsx',
     'apps/desktop/src/store/onboarding.ts',
     'apps/desktop/src/store/prompts.ts',
     'apps/desktop/src/store/updates.ts',
@@ -141,7 +141,7 @@ function applyBrandOverlay() {
   const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
 
   packageJson.productName = 'Zero3 Pilot'
-  packageJson.description = 'Zero3 Pilot Codex-core desktop shell based on the pinned Hermes Desktop UI architecture.'
+  packageJson.description = 'Zero3 Pilot desktop host for the Zero3-owned three-column renderer and pinned Codex app-server.'
   packageJson.author = 'Zero3 Pilot'
   packageJson.repository = {
     type: 'git',
@@ -224,6 +224,10 @@ function applyBrandOverlay() {
         product: 'Zero3 Pilot',
         coreRuntime: 'openai-codex-app-server',
         desktopShell: 'hermes-electron-react',
+        productRenderer: 'zero3-owned-three-column-v1',
+        hermesRenderer: 'disabled',
+        codexUi: 'disabled-app-server-only',
+        electronHost: 'pinned-hermes-electron-temporary',
         deepseekRole: 'capability-donor',
         migrationPhase: 'R1A-codex-app-server-transport',
         primaryChatPhase: 'R2A-codex-primary-chat',
@@ -274,14 +278,15 @@ applyZero3CodexItemRenderingHardening()
 applyZero3CodexSessionListGuard()
 applyZero3CodexStructuredInput()
 applyZero3RemoteHostRuntime()
+applyZero3OwnedUi()
 
-console.log('Zero3 Desktop R3D + Remote Host H0-H3 shell prepared successfully.')
+console.log('Zero3 Desktop runtime/provider overlays prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)
-console.log(`Hermes UI shell source pin: ${pins.hermes}`)
+console.log(`Hermes Electron host source pin: ${pins.hermes}`)
 console.log(`DeepSeek capability-donor source pin: ${pins.deepseek}`)
-console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel; Hermes is UI shell only.')
-console.log('R3C: Hermes composer images use native Codex localImage; other attachment context is encoded as validated Codex text input.')
-console.log('R3C safety: Renderer may submit only text/localImage structured inputs; default sandbox stays read-only and unsupported server requests stay fail-closed.')
+console.log('Zero3 product renderer: Zero3-owned three-column UI only; Hermes renderer and Codex stock UI are disabled.')
+console.log('Zero3 architecture: Codex app-server is the only target Agent Kernel.')
+console.log('R3C safety: Renderer uses purpose-specific typed bridges; unsupported server requests fail closed.')
 console.log('R3D: archive/unarchive/delete/rename/whole-thread fork/active-turn steer use typed Codex app-server operations.')
 console.log('Remote Host H0-H3: external tasks enter the same pinned Codex Thread/Turn runtime through an outbound HTTPS host node; no second agent loop or direct remote shell is introduced.')
 console.log('GPT Web handoff: renderer dispatch uses a purpose-specific Control Plane bridge; control credentials remain in Electron main.')

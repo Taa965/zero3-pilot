@@ -34,6 +34,7 @@ exec('git', ['-C', hermesRoot, 'reset', '--hard', pins.hermes])
 const generatedFiles = [
   path.join(hermesDesktopDir, 'public', 'zero3-upstream.json'),
   path.join(hermesDesktopDir, 'public', 'zero3-pilot.png'),
+  path.join(hermesDesktopDir, 'tsconfig.zero3-renderer.json'),
   path.join(hermesDesktopDir, 'src', 'app', 'settings', 'zero3-control-settings.tsx'),
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'primary-chat.ts'),
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'prompt-store.ts'),
@@ -56,5 +57,8 @@ if (fs.existsSync(zero3ElectronRoot)) fs.rmSync(zero3ElectronRoot, { recursive: 
 
 const zero3CodexDir = path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex')
 if (fs.existsSync(zero3CodexDir)) fs.rmSync(zero3CodexDir, { recursive: true, force: true })
+
+const zero3UiDir = path.join(hermesDesktopDir, 'src', 'zero3-ui')
+if (fs.existsSync(zero3UiDir)) fs.rmSync(zero3UiDir, { recursive: true, force: true })
 
 console.log(`Hermes upstream reset to ${pins.hermes}.`)

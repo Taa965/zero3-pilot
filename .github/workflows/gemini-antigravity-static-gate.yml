@@ -12,11 +12,14 @@ on:
       - 'apps/zero3-desktop/artifact-runtime/**'
       - 'apps/zero3-desktop/mcp-runtime/**'
       - 'apps/zero3-desktop/gpt-web-ui/**'
+      - 'apps/zero3-desktop/zero3-ui/**'
+      - 'apps/zero3-desktop/workspace-runtime/**'
       - 'apps/zero3-desktop/host-runtime/**'
       - 'apps/zero3-desktop/scripts/**'
       - 'apps/zero3-desktop/package.json'
       - 'scripts/check-gemini-antigravity-architecture.mjs'
       - 'scripts/check-prepared-gemini-integration.mjs'
+      - 'scripts/check-zero3-owned-ui.mjs'
       - 'scripts/acceptance/gemini-antigravity-windows.ps1'
       - '.github/workflows/windows-alpha-artifact.yml'
       - '.github/workflows/gemini-antigravity-static-gate.yml'
@@ -29,11 +32,14 @@ on:
       - 'apps/zero3-desktop/artifact-runtime/**'
       - 'apps/zero3-desktop/mcp-runtime/**'
       - 'apps/zero3-desktop/gpt-web-ui/**'
+      - 'apps/zero3-desktop/zero3-ui/**'
+      - 'apps/zero3-desktop/workspace-runtime/**'
       - 'apps/zero3-desktop/host-runtime/**'
       - 'apps/zero3-desktop/scripts/**'
       - 'apps/zero3-desktop/package.json'
       - 'scripts/check-gemini-antigravity-architecture.mjs'
       - 'scripts/check-prepared-gemini-integration.mjs'
+      - 'scripts/check-zero3-owned-ui.mjs'
       - 'scripts/acceptance/gemini-antigravity-windows.ps1'
       - '.github/workflows/windows-alpha-artifact.yml'
       - '.github/workflows/gemini-antigravity-static-gate.yml'
@@ -49,14 +55,20 @@ permissions:
 jobs:
   architecture:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check source architecture invariants
-        run: node scripts/check-gemini-antigravity-architecture.mjs
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
 
-      - name: Apply all pinned desktop overlays and inspect final composition
+      - name: Check source architecture invariants
+        run: |
+          node scripts/check-gemini-antigravity-architecture.mjs
+          node scripts/check-zero3-owned-ui.mjs
+
+      - name: Apply all pinned desktop overlays, inspect final composition and typecheck owned surfaces
         shell: bash
         run: |
           set -euo pipefail
@@ -66,6 +78,15 @@ jobs:
           trap cleanup EXIT
           npm --prefix apps/zero3-desktop run prepare
           node scripts/check-prepared-gemini-integration.mjs
+          cd upstream/hermes-agent
+          npm install --workspace apps/desktop
+          npm --workspace apps/desktop run typecheck
+          cd ../..
+          test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/App.tsx
+          test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/HandoffDock.tsx
+          test -f upstream/hermes-agent/apps/desktop/tsconfig.zero3-renderer.json
+          grep -F "import { ProductApp } from './zero3-ui/ProductApp'" upstream/hermes-agent/apps/desktop/src/main.tsx
+          ! grep -E "RouterProvider|from ['\"]\\./app|Hermes" upstream/hermes-agent/apps/desktop/src/main.tsx
 
       - name: Reject whitespace errors in committed closeout diff
         run: git diff --check
