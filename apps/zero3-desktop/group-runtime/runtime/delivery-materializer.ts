@@ -29,9 +29,9 @@ export class WorkspaceDeliveryMaterializer implements RuntimeDeliveryMaterialize
     if (!runtime.executorId || !runtime.executorSessionId) throw new Error('Delivery materialization requires the bound Executor identity')
 
     const git = new GitWorkspaceAdapter(session.worktree)
-    const [headSha, changedPaths, status] = await Promise.all([
-      git.resolveHead(),
-      git.changedPaths(session.baselineSha, await git.resolveHead()),
+    const headSha = await git.resolveHead()
+    const [changedPaths, status] = await Promise.all([
+      git.changedPaths(session.baselineSha, headSha),
       git.status()
     ])
     if (session.deliveryPolicy.requireCleanHead && status.length > 0) throw new Error('Delivery materialization requires a clean committed worktree')
