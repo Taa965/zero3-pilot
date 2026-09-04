@@ -54,8 +54,19 @@ function handoffFile(taskId: string): string {
   return path.join(stateRoot(), 'handoffs', `${taskId}.json`)
 }
 
+function serializeJson(value: unknown): string {
+  let serialized: string | undefined
+  try {
+    serialized = JSON.stringify(value)
+  } catch (error) {
+    throw new Error(`state payload must be JSON-serializable: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (serialized === undefined) throw new Error('state payload must be a JSON value')
+  return serialized
+}
+
 function jsonBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), 'utf8')
+  return Buffer.byteLength(serializeJson(value), 'utf8')
 }
 
 async function readJson(file: string): Promise<unknown | null> {
@@ -70,7 +81,7 @@ async function readJson(file: string): Promise<unknown | null> {
 }
 
 async function atomicWrite(file: string, value: unknown): Promise<void> {
-  const serialized = `${JSON.stringify(value, null, 2)}\n`
+  const serialized = `${serializeJson(value)}\n`
   if (Buffer.byteLength(serialized, 'utf8') > MAX_JSON_BYTES) {
     throw new Error(`state payload exceeds ${MAX_JSON_BYTES} bytes`)
   }
@@ -131,13 +142,19 @@ async function getHandoff(taskId: string): Promise<HandoffRecord | null> {
   return HandoffRecordSchema.parse(value)
 }
 
-function assertExecutionResult(value: unknown): void {
+function assertExecutionResult(taskId: string, value: unknown): asserts value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('handoff result must be an object')
   }
-  const protocol = (value as Record<string, unknown>).protocol
-  if (protocol !== EXECUTION_RESULT_PROTOCOL) {
+  const result = value as Record<string, unknown>
+  if (result.protocol !== EXECUTION_RESULT_PROTOCOL) {
     throw new Error(`handoff result.protocol must be ${EXECUTION_RESULT_PROTOCOL}`)
+  }
+  if (result.task_id !== taskId) {
+    throw new Error('handoff taskId must match result.task_id')
+  }
+  if (typeof result.execution_id !== 'string' || !result.execution_id.trim()) {
+    throw new Error('handoff result.execution_id is required')
   }
 }
 
@@ -146,7 +163,7 @@ async function publishHandoff(input: {
   expectedVersion?: number
   result: unknown
 }): Promise<HandoffRecord> {
-  assertExecutionResult(input.result)
+  assertExecutionResult(input.taskId, input.result)
   if (jsonBytes(input.result) > MAX_JSON_BYTES) throw new Error('handoff result is too large')
   return mutations.run(async () => {
     const current = await getHandoff(input.taskId)
@@ -166,7 +183,7 @@ async function publishHandoff(input: {
   })
 }
 
-function toolResult(value: unknown) {
+function toolResult(value: Record<string, unknown>) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(value) }],
     structuredContent: value
@@ -189,7 +206,8 @@ function createServer(): McpServer {
         openWorldHint: false
       }
     },
-    async ({ projectId }) => toolResult((await getProjectContext(projectId)) ?? { projectId, version: 0, payload: null })
+    async ({ projectId }) =>
+      toolResult((await getProjectContext(projectId)) ?? { projectId, version: 0, payload: null })
   )
 
   server.registerTool(
@@ -209,7 +227,8 @@ function createServer(): McpServer {
         openWorldHint: false
       }
     },
-    async ({ projectId, expectedVersion, payload }) => toolResult(await putProjectContext({ projectId, expectedVersion, payload }))
+    async ({ projectId, expectedVersion, payload }) =>
+      toolResult(await putProjectContext({ projectId, expectedVersion, payload }))
   )
 
   server.registerTool(
@@ -245,7 +264,8 @@ function createServer(): McpServer {
         openWorldHint: false
       }
     },
-    async ({ taskId, expectedVersion, result }) => toolResult(await publishHandoff({ taskId, expectedVersion, result }))
+    async ({ taskId, expectedVersion, result }) =>
+      toolResult(await publishHandoff({ taskId, expectedVersion, result }))
   )
 
   return server
