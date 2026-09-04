@@ -77,7 +77,7 @@ const zero3AuthoritativeResultFinalizer = new Zero3AuthoritativeResultFinalizer(
 })
 const zero3LocalCodexRunner = {
   run: async (lease: { lease_id: string; fencing_token: number; task: Record<string, unknown> }) => {
-    const rawTask = lease.task && typeof lease.task === 'object' && !Array.isArray(lease.task) ? lease.task : {}
+    const rawTask: Record<string, unknown> = lease.task && typeof lease.task === 'object' && !Array.isArray(lease.task) ? lease.task : {}
     const target = rawTask.target && typeof rawTask.target === 'object' && !Array.isArray(rawTask.target)
       ? rawTask.target as Record<string, unknown>
       : {}
@@ -159,6 +159,50 @@ ipcMain.handle(ZERO3_AGENT_DESKTOP_CHANNELS.dispatch, (_event, request: unknown)
 ipcMain.handle(ZERO3_AGENT_DESKTOP_CHANNELS.reviewDecision, (_event, request: unknown) => zero3AgentDesktopHandlers.reviewDecision(request))
 ipcMain.handle(ZERO3_AGENT_DESKTOP_CHANNELS.recoveryInspect, (_event, request: unknown) => zero3AgentDesktopHandlers.recoveryInspect(request))
 ipcMain.handle(ZERO3_AGENT_DESKTOP_CHANNELS.recoveryResolve, (_event, request: unknown) => zero3AgentDesktopHandlers.recoveryResolve(request))
+
+function zero3AgentCompatRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+function zero3AgentCompatText(value: unknown, label: string, max = 256): string {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text || text.length > max) throw new Error(label + ' is invalid')
+  return text
+}
+ipcMain.handle('zero3:agent-tasks:dispatch', async (_event, request: unknown) => {
+  const input = zero3AgentCompatRecord(request)
+  const taskSpec = zero3AgentCompatRecord(input.taskSpec)
+  const originEntryId = zero3AgentCompatText(input.originEntryId, 'originEntryId')
+  const createdBySessionId = zero3AgentCompatText(taskSpec.createdBySessionId, 'taskSpec.createdBySessionId')
+  if (createdBySessionId !== originEntryId) throw new Error('TaskSpec origin entry mismatch')
+  const target = zero3AgentCompatText(taskSpec.target, 'taskSpec.target', 16)
+  if (target !== 'CODEX' && target !== 'GEMINI') throw new Error('GPT Web compatibility handoff requires an explicit CODEX or GEMINI target')
+  const projectId = zero3AgentCompatText(taskSpec.projectId, 'taskSpec.projectId')
+  const taskId = zero3AgentCompatText(taskSpec.taskId, 'taskSpec.taskId', 128)
+  const executionId = zero3AgentCompatText(taskSpec.executionId, 'taskSpec.executionId', 128)
+
+  let webEntry: Awaited<ReturnType<typeof zero3GeminiWeb.create>> | null = null
+  const targetLogicalSessionId = target === 'GEMINI'
+    ? (webEntry = await zero3GeminiWeb.create(projectId)).logicalSessionId
+    : 'codex-task:' + taskId + ':' + executionId
+  const taskRecord = await zero3AgentDesktopHandlers.dispatch({
+    task: taskSpec,
+    context: { targetLogicalSessionId, reviewSessionId: originEntryId }
+  })
+  const record = zero3AgentCompatRecord(taskRecord)
+  const binding = zero3AgentCompatRecord(record.binding)
+  return {
+    taskId,
+    executionId,
+    target: record.resolvedTarget === 'GEMINI' ? 'GEMINI' : 'CODEX',
+    logicalSessionId: typeof binding.targetLogicalSessionId === 'string' ? binding.targetLogicalSessionId : targetLogicalSessionId,
+    webEntryId: webEntry?.id ?? null
+  }
+})
+
+// Preserve the P04/P06 renderer surface while routing decisions through the
+// authoritative task store so ReviewDecision and task state cannot diverge.
+ipcMain.removeHandler('zero3:review:decision')
+ipcMain.handle('zero3:review:decision', (_event, request: unknown) => zero3AgentDesktopHandlers.reviewDecision(request))
 `
 
 const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3AgentTask', {
@@ -167,6 +211,10 @@ const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3AgentTas
   reviewDecision: request => ipcRenderer.invoke('zero3:agent-task:review-decision', request),
   recoveryInspect: request => ipcRenderer.invoke('zero3:agent-task:recovery-inspect', request),
   recoveryResolve: request => ipcRenderer.invoke('zero3:agent-task:recovery-resolve', request)
+})
+
+contextBridge.exposeInMainWorld('zero3AgentTasks', {
+  dispatch: request => ipcRenderer.invoke('zero3:agent-tasks:dispatch', request)
 })
 
 contextBridge.exposeInMainWorld('zero3Artifacts', {`
@@ -209,6 +257,9 @@ const globalSurface = String.raw`    zero3AgentTask: {
       recoveryInspect: (request: { taskId: string }) => Promise<unknown>
       recoveryResolve: (request: { taskId: string; resolution: Zero3AgentRecoveryResolution; rationale: string }) => Promise<unknown>
     }
+    zero3AgentTasks: {
+      dispatch: (request: { taskSpec: Zero3AgentTaskSpecV2; originEntryId: string }) => Promise<{ taskId: string; executionId: string; target: 'CODEX' | 'GEMINI'; logicalSessionId?: string | null; webEntryId?: string | null }>
+    }
     zero3Artifacts: {`
 
 export function applyZero3AgentIntegrationRuntime() {
@@ -241,7 +292,7 @@ export function applyZero3AgentIntegrationRuntime() {
     { label: 'integrated task preload surface', from: "contextBridge.exposeInMainWorld('zero3Artifacts', {", to: preloadSurface }
   ])
   patchFile('src/global.d.ts', [
-    { label: 'integrated task renderer types', from: 'type Zero3ArtifactRecord = {', to: globalTypes + '\ntype Zero3ArtifactRecord = {' },
+    { label: 'integrated task renderer types', from: 'type Zero3ReviewDecisionInput = {', to: globalTypes + '\ntype Zero3ReviewDecisionInput = {' },
     { label: 'integrated task renderer surface', from: '    zero3Artifacts: {', to: globalSurface }
   ])
 }
