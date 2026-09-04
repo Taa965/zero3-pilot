@@ -107,7 +107,18 @@ try {
   Write-Host 'Prepared Gemini/Antigravity overlay files: PASS'
 
   Invoke-Step 'Zero3 Desktop exact-candidate typecheck' {
-    npm --prefix apps/zero3-desktop run typecheck
+    $previousPrepared = $env:ZERO3_DESKTOP_ALREADY_PREPARED
+    $env:ZERO3_DESKTOP_ALREADY_PREPARED = '1'
+    try {
+      npm --prefix apps/zero3-desktop run typecheck
+    }
+    finally {
+      if ($null -eq $previousPrepared) {
+        Remove-Item Env:ZERO3_DESKTOP_ALREADY_PREPARED -ErrorAction SilentlyContinue
+      } else {
+        $env:ZERO3_DESKTOP_ALREADY_PREPARED = $previousPrepared
+      }
+    }
   }
 
   $Agy = Get-Command agy -ErrorAction SilentlyContinue
