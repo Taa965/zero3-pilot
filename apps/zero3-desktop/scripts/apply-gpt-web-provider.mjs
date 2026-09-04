@@ -2,7 +2,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
-import { applyZero3GptWebUi } from './apply-gpt-web-ui.mjs'
 import { applyZero3ProjectContextMcp } from './apply-project-context-mcp.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'gpt-web-runtime')
@@ -24,8 +23,8 @@ function patchFile(relativePath, replacements) {
     if (source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) {
       throw new Error(
-        `Zero3 GPT Web overlay drift in ${relativePath}: could not find ${replacement.label}. ` +
-          'Review the pinned Hermes desktop boundary before updating the upstream pin.'
+        `Zero3 GPT Web runtime drift in ${relativePath}: could not find ${replacement.label}. ` +
+          'Review the pinned Electron host boundary before updating the upstream pin.'
       )
     }
     source = source.replace(replacement.from, replacement.to)
@@ -194,6 +193,8 @@ export function applyZero3GptWebProvider() {
     }
   ])
 
-  applyZero3GptWebUi()
+  // The old Hermes React GPT presentation adapter is retired. The only product
+  // UI is renderer-v2, which consumes this purpose-specific preload surface
+  // directly. Project-context MCP remains a runtime concern and stays enabled.
   applyZero3ProjectContextMcp()
 }
