@@ -275,7 +275,6 @@ export class Zero3WorkspaceEntryStore {
               lastActiveAt: now
             }
           } else {
-            const geminiSource = source as Zero3GeminiWebWorkspaceEntry
             target = {
               id: `gemini-web-${randomUUID()}`,
               kind,
@@ -289,10 +288,6 @@ export class Zero3WorkspaceEntryStore {
               createdAt: now,
               lastActiveAt: now
             }
-            // Navigating within one Gemini web surface starts a distinct visible
-            // logical session rather than silently changing the identity of the
-            // previous Gemini task/runtime binding.
-            void geminiSource.logicalSessionId
           }
         }
         state.entries[target.id] = target
