@@ -3,8 +3,8 @@ import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
 
-const sourceFile = path.join(repoRoot, 'apps', 'zero3-desktop', 'gpt-web-ui', 'gpt-web-section.tsx')
-const targetFile = path.join(hermesDesktopDir, 'src', 'app', 'chat', 'sidebar', 'zero3-gpt-web-section.tsx')
+const uiSourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'gpt-web-ui')
+const uiTargetDir = path.join(hermesDesktopDir, 'src', 'app', 'chat', 'sidebar')
 
 function read(file) {
   return fs.readFileSync(file, 'utf8')
@@ -13,6 +13,17 @@ function read(file) {
 function write(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, content)
+}
+
+function copyUiSources() {
+  for (const [sourceName, targetName] of [
+    ['gpt-web-section.tsx', 'zero3-gpt-web-section.tsx'],
+    ['gpt-web-handoff-actions.tsx', 'gpt-web-handoff-actions.tsx']
+  ]) {
+    const source = path.join(uiSourceDir, sourceName)
+    if (!fs.statSync(source).isFile()) throw new Error(`Zero3 GPT Web UI source template missing: ${source}`)
+    write(path.join(uiTargetDir, targetName), read(source))
+  }
 }
 
 function patchFile(relativePath, replacements) {
@@ -32,8 +43,7 @@ function patchFile(relativePath, replacements) {
 }
 
 export function applyZero3GptWebUi() {
-  if (!fs.statSync(sourceFile).isFile()) throw new Error(`Zero3 GPT Web UI source template missing: ${sourceFile}`)
-  write(targetFile, read(sourceFile))
+  copyUiSources()
 
   patchFile('src/app/chat/sidebar/index.tsx', [
     {
