@@ -43,7 +43,8 @@ requireText(worktreeResolver, 'resolve(repositoryRoot, session.worktree)', 'rela
 const supervisor = read('apps/zero3-desktop/group-runtime/runtime/worker-supervisor.ts')
 requireText(supervisor, 'markOutcomeUnknown', 'supervisor fail-closed ambiguity handling')
 requireText(supervisor, 'mayReleaseExecutorBinding', 'settled Executor binding release policy')
-requireText(supervisor, 'input.runner.close()', 'settled Executor binding release')
+requireText(supervisor, 'releaseSettledBinding(input.runner)', 'settled Executor binding release')
+requireText(supervisor, 'core.catch(() => undefined)', 'non-blocking supervisor rejection containment')
 forbid(supervisor, /setInterval|setTimeout\([^,]+,\s*0\)/u, 'polling/retry loop in worker supervisor')
 
 const retry = read('apps/zero3-desktop/group-runtime/runtime/retry-session.ts')
