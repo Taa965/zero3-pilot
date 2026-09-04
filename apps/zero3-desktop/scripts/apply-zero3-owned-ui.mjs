@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { applyZero3ProjectTaskLoopRuntime } from './apply-project-task-loop-runtime.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'zero3-ui')
 const targetDir = path.join(hermesDesktopDir, 'src', 'zero3-ui')
@@ -18,7 +19,17 @@ function write(file, content) {
 function copyOwnedRenderer() {
   fs.rmSync(targetDir, { recursive: true, force: true })
   fs.mkdirSync(targetDir, { recursive: true })
-  for (const file of ['App.tsx', 'ProductApp.tsx', 'HandoffDock.tsx', 'styles.css', 'layout.css', 'handoff.css']) {
+  for (const file of [
+    'App.tsx',
+    'ProductApp.tsx',
+    'HandoffDock.tsx',
+    'ProjectDock.tsx',
+    'TaskDock.tsx',
+    'styles.css',
+    'layout.css',
+    'handoff.css',
+    'project-task.css'
+  ]) {
     const source = path.join(sourceDir, file)
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) {
       throw new Error(`Zero3 owned renderer source is missing: ${source}`)
@@ -35,6 +46,7 @@ import { ProductApp } from './zero3-ui/ProductApp'
 import './zero3-ui/styles.css'
 import './zero3-ui/layout.css'
 import './zero3-ui/handoff.css'
+import './zero3-ui/project-task.css'
 
 const root = document.getElementById('root')
 if (!root) throw new Error('Zero3 renderer root element is missing')
@@ -73,6 +85,8 @@ function recordRendererProvenance() {
   current.hermesRenderer = 'disabled'
   current.codexUi = 'disabled-app-server-only'
   current.electronHost = 'pinned-hermes-electron-temporary'
+  current.projectUi = 'zero3-project-workspace-manager-v1'
+  current.taskUi = 'zero3-durable-task-review-board-v1'
   write(file, `${JSON.stringify(current, null, 2)}\n`)
 }
 
@@ -85,8 +99,8 @@ function assertSoleRenderer() {
     throw new Error('Legacy Hermes renderer leaked back into the Zero3 desktop entrypoint')
   }
   const productApp = read(path.join(targetDir, 'ProductApp.tsx'))
-  if (!productApp.includes('<App />') || !productApp.includes('<HandoffDock />')) {
-    throw new Error('Zero3 product renderer lost the real session workspace or task-handoff surface')
+  for (const marker of ['<App />', '<HandoffDock />', '<ProjectDock />', '<TaskDock />']) {
+    if (!productApp.includes(marker)) throw new Error(`Zero3 product renderer lost required surface ${marker}`)
   }
   const packageJson = JSON.parse(read(path.join(hermesDesktopDir, 'package.json')))
   if (!String(packageJson.scripts?.typecheck ?? '').includes('tsconfig.zero3-renderer.json')) {
@@ -95,12 +109,17 @@ function assertSoleRenderer() {
 }
 
 export function applyZero3OwnedUi() {
+  // Product composition is invoked twice during the full prepare sequence. The
+  // first pass stages the Project registry; the second pass also sees the Agent
+  // Router and attaches durable task/review list bridges. Both operations are
+  // idempotent and finish before the renderer entrypoint is replaced.
+  applyZero3ProjectTaskLoopRuntime()
   copyOwnedRenderer()
   replaceRendererEntrypoint()
   configureOwnedRendererTooling()
   recordRendererProvenance()
   assertSoleRenderer()
-  console.log('Zero3 owned three-column renderer is the sole desktop UI entrypoint and renderer typecheck surface; real task handoff is included; Hermes/Codex product UIs are disabled.')
+  console.log('Zero3 owned three-column renderer is the sole desktop UI entrypoint; Project/Workspace and durable Task/Review surfaces are attached to real runtime bridges.')
 }
 
 if (process.argv[1]?.endsWith('apply-zero3-owned-ui.mjs')) applyZero3OwnedUi()
