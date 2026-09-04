@@ -77,6 +77,27 @@ function normalizeControllerWaves(
   })
 }
 
+function compileWaves(
+  groupId: string,
+  partitions: readonly SessionPartition[],
+  dependencies: readonly SessionDependencyPlan[],
+  proposals?: readonly WaveProposal[]
+): DevelopmentWave[] {
+  if (proposals?.length) return normalizeControllerWaves(groupId, proposals)
+  try {
+    return planWaves(groupId, partitions, dependencies)
+  } catch (error) {
+    if (error instanceof Error && error.message === 'session dependency graph contains a cycle') {
+      throw new PlanningValidationError([{
+        code: 'session_cycle',
+        path: 'sessions',
+        message: error.message
+      }])
+    }
+    throw error
+  }
+}
+
 export function compilePlanningProposal(
   request: PlanningRequest,
   controllerProposal: ControllerPlanningProposal,
@@ -98,9 +119,7 @@ export function compilePlanningProposal(
     : derivedDependencies
   const dependencyMap = new Map(dependencies.map(item => [item.sessionId, item.dependsOn] as const))
 
-  const waves = controllerProposal.waves?.length
-    ? normalizeControllerWaves(groupId, controllerProposal.waves)
-    : planWaves(groupId, partitions, dependencies)
+  const waves = compileWaves(groupId, partitions, dependencies, controllerProposal.waves)
   const waveBySession = new Map<string, string>()
   for (const wave of waves) for (const sessionId of wave.sessionIds) waveBySession.set(sessionId, wave.waveId)
 

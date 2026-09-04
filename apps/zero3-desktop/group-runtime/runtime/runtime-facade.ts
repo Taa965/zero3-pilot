@@ -17,6 +17,7 @@ import { buildDevelopmentGroupViewModel, type DevelopmentGroupViewModel } from '
 import { executeVerification, type VerificationCommandExecutor } from '../verification/index.ts'
 import { assertGroupCompletable, buildCompletionProof, type CompletionProofBuildResult } from '../completion/index.ts'
 import type { WaveGateEvidence } from '../scheduler/index.ts'
+import { resolveSessionWorktree } from '../workspace/index.ts'
 import type { RuntimeDeliveryVerifierPort } from './delivery-verifier.ts'
 import type { RuntimeDeliveryMaterializerPort } from './delivery-materializer.ts'
 import { loadDurableGroupRecords, type DurableGroupRecords } from './record-reader.ts'
@@ -102,9 +103,12 @@ function normalizeRuntimeState(state: DevelopmentGroupRuntimeState, records: Dur
   const outcomeUnknownCount = records.runtimes.filter(runtime => runtime.status === 'outcome_unknown').length
   const unresolvedBlockers = currentBlockers(records)
   const terminal = ['completed', 'cancelled', 'failed'].includes(state.status)
+  let status = state.status
+  if (outcomeUnknownCount > 0 && !terminal) status = 'outcome_unknown'
+  else if (outcomeUnknownCount === 0 && state.status === 'outcome_unknown') status = unresolvedBlockers.length > 0 ? 'blocked' : 'ready'
   return {
     ...state,
-    status: outcomeUnknownCount > 0 && !terminal ? 'outcome_unknown' : state.status,
+    status,
     unresolvedBlockers,
     outcomeUnknownCount
   }
@@ -166,7 +170,8 @@ export class DevelopmentGroupRuntimeFacade {
     await this.controller.record(groupId, 'wave.started', undefined, waveId)
     const launches: WorkerLaunchResult[] = []
     for (const [index, sessionId] of eligible.entries()) {
-      const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)!
+      const persistedSession = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)!
+      const session = resolveSessionWorktree(snapshot.plan.definition, persistedSession)
       const runner = await this.controller.sessionRunner(groupId, sessionId, this.options.executorManager)
       if (runner.snapshot().status === 'waiting_dependencies') await runner.markReady()
       await this.controller.record(groupId, 'session.started', sessionId, waveId)
@@ -192,8 +197,9 @@ export class DevelopmentGroupRuntimeFacade {
 
   async submitDelivery(delivery: DevelopmentDelivery): Promise<DevelopmentSessionRuntime> {
     const plan = await this.controller.loadPlan(delivery.groupId)
-    const session = plan.sessions.find(candidate => candidate.sessionId === delivery.sessionId)
-    if (!session) throw new Error(`unknown Development Session ${delivery.sessionId}`)
+    const persistedSession = plan.sessions.find(candidate => candidate.sessionId === delivery.sessionId)
+    if (!persistedSession) throw new Error(`unknown Development Session ${delivery.sessionId}`)
+    const session = resolveSessionWorktree(plan.definition, persistedSession)
     const gate = await this.options.deliveryVerifier.verify(session, delivery)
     if (gate.decision !== 'DELIVERY_ACCEPT') {
       await this.controller.record(delivery.groupId, 'delivery.rejected', delivery.sessionId, session.waveId, gate.reasons.join('; '))
@@ -207,9 +213,10 @@ export class DevelopmentGroupRuntimeFacade {
   async integrateDelivery(groupId: string, sessionId: string): Promise<IntegrationMilestone> {
     const snapshot = await this.snapshot(groupId)
     if (snapshot.state.outcomeUnknownCount > 0) throw new Error('Development Group has unresolved OutcomeUnknown and cannot integrate')
-    const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
+    const persistedSession = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
     const delivery = snapshot.records.deliveries.find(candidate => candidate.sessionId === sessionId)
-    if (!session || !delivery) throw new Error(`missing Session or Delivery for ${sessionId}`)
+    if (!persistedSession || !delivery) throw new Error(`missing Session or Delivery for ${sessionId}`)
+    const session = resolveSessionWorktree(snapshot.plan.definition, persistedSession)
     const queue = new IntegrationQueue()
     queue.enqueue(session, delivery, snapshot.plan.waves)
     const initialIntegratedSessionIds = [...mergedSessionIds(snapshot.records)]
@@ -271,8 +278,9 @@ export class DevelopmentGroupRuntimeFacade {
     if (!finalSha) throw new Error('Completion Proof requires a final integration SHA')
     const validDeliveryHashes = new Set<string>()
     for (const delivery of snapshot.records.deliveries) {
-      const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === delivery.sessionId)
-      if (!session) continue
+      const persistedSession = snapshot.plan.sessions.find(candidate => candidate.sessionId === delivery.sessionId)
+      if (!persistedSession) continue
+      const session = resolveSessionWorktree(snapshot.plan.definition, persistedSession)
       const gate = await this.options.deliveryVerifier.verify(session, delivery)
       if (gate.decision === 'DELIVERY_ACCEPT') validDeliveryHashes.add(delivery.deliveryHash)
     }
@@ -304,13 +312,14 @@ export class DevelopmentGroupRuntimeFacade {
       let requiredDeliveriesValid = true
       let ownershipValid = true
       for (const sessionId of wave.requiredSessionIds) {
-        const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
+        const persistedSession = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
         const delivery = snapshot.records.deliveries.find(candidate => candidate.sessionId === sessionId)
-        if (!session || !delivery) {
+        if (!persistedSession || !delivery) {
           requiredDeliveriesValid = false
           ownershipValid = false
           continue
         }
+        const session = resolveSessionWorktree(snapshot.plan.definition, persistedSession)
         const gate = await this.options.deliveryVerifier.verify(session, delivery)
         if (gate.decision !== 'DELIVERY_ACCEPT') requiredDeliveriesValid = false
         if (gate.ownership?.valid === false) ownershipValid = false

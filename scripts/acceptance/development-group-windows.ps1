@@ -75,6 +75,7 @@ try {
     'apps/zero3-desktop/group-runtime/completion/completion.test.ts',
     'apps/zero3-desktop/group-runtime/ui/groups-view-model.test.ts',
     'apps/zero3-desktop/group-runtime/runtime/runtime-facade.test.ts',
+    'apps/zero3-desktop/group-runtime/runtime/closeout.test.ts',
     'apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts'
   )
 
@@ -111,8 +112,8 @@ console.log('Skills-only Plugin static package: PASS');
   }
 
   Write-Host "`nManual/real-runtime gates still required:" -ForegroundColor Yellow
-  Write-Host '- Real pinned-Codex Development Session and permission path.'
-  Write-Host '- Kill/restart during active state-changing prompt => durable OutcomeUnknown, no auto-retry.'
+  Write-Host '- Real pinned-Codex Development Session, permission response, clean commit and Delivery materialization path.'
+  Write-Host '- Kill/restart during active state-changing prompt => durable OutcomeUnknown, no auto-retry, then explicit evidence-bound recovery.'
   Write-Host '- Real two-worktree Integration/Handoff/restart/rollback fixture if not covered by a dedicated executable fixture yet.'
   Write-Host '- OpenAI Skills-only 5 positive + 3 negative review cases in the actual submission-capable environment.'
   Write-Host 'These gates remain NOT_RUN until separately recorded; this script does not infer them from static/unit results.'

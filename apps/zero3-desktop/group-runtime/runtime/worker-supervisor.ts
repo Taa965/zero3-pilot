@@ -7,6 +7,25 @@ export interface WorkerLaunchResult {
   active: boolean
 }
 
+function mayReleaseExecutorBinding(status: DevelopmentSessionRuntime['status']): boolean {
+  // OutcomeUnknown deliberately keeps the binding quarantined until an explicit
+  // human resolution classifies the uncertain execution. Every authoritative
+  // terminal/blocked outcome may release the native Executor session so an
+  // allowed retry/start-from-handoff can acquire the same task execution key.
+  return status !== 'outcome_unknown' && !['starting', 'running', 'waiting_input'].includes(status)
+}
+
+async function releaseSettledBinding(runner: DevelopmentSessionRunner): Promise<void> {
+  try {
+    await runner.close()
+  } catch {
+    // Zero3ExecutorManager.close deletes the in-memory binding in a finally block.
+    // Provider-side cleanup failure must not turn the fire-and-forget supervisor
+    // into an unhandled rejected Promise after the Session already has a durable
+    // authoritative outcome.
+  }
+}
+
 export class DevelopmentGroupWorkerSupervisor {
   readonly #active = new Map<string, Promise<void>>()
 
@@ -29,15 +48,28 @@ export class DevelopmentGroupWorkerSupervisor {
     if (before.status !== 'running') throw new Error(`supervised prompt requires running Session; got ${before.status}`)
 
     const prompt = input.runner.sendInitialInstruction(input.clientRequestId)
-    const job = prompt.then(
-      async runtime => { await input.afterSettled?.(runtime) },
+    const core = prompt.then(
+      async runtime => {
+        try {
+          await input.afterSettled?.(runtime)
+        } finally {
+          if (mayReleaseExecutorBinding(runtime.status)) await releaseSettledBinding(input.runner)
+        }
+      },
       async error => {
         const current = input.runner.snapshot()
         if (!['outcome_unknown', 'failed', 'blocked', 'cancelled'].includes(current.status)) {
           await input.runner.markOutcomeUnknown(`supervisor_prompt_exception: ${String(error)}`)
         }
+        const settled = input.runner.snapshot()
+        if (mayReleaseExecutorBinding(settled.status)) await releaseSettledBinding(input.runner)
       }
-    ).finally(() => {
+    )
+    // launch() is deliberately non-blocking. Consume any last-resort persistence
+    // failure here so Electron does not receive an unhandled rejection from a
+    // Promise that no renderer caller owns. Durable state remains fail-closed.
+    let job: Promise<void>
+    job = core.catch(() => undefined).finally(() => {
       if (this.#active.get(sessionId) === job) this.#active.delete(sessionId)
     })
     this.#active.set(sessionId, job)

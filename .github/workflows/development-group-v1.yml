@@ -6,10 +6,12 @@ on:
       - integration/development-group-v1
       - main
     paths:
+      - '.zero3/verification-policy.json'
       - 'apps/zero3-desktop/group-runtime/**'
       - 'apps/zero3-desktop/executor-runtime/handoff/**'
       - 'plugins/zero3-development-group/**'
       - 'apps/zero3-desktop/scripts/apply-development-group-bridge.mjs'
+      - 'apps/zero3-desktop/scripts/prepare-codex-upstream.mjs'
       - 'scripts/check-development-group-v1.mjs'
       - '.github/workflows/development-group-v1.yml'
   workflow_dispatch: {}
@@ -58,6 +60,7 @@ jobs:
           apps/zero3-desktop/group-runtime/completion/completion.test.ts
           apps/zero3-desktop/group-runtime/ui/groups-view-model.test.ts
           apps/zero3-desktop/group-runtime/runtime/runtime-facade.test.ts
+          apps/zero3-desktop/group-runtime/runtime/closeout.test.ts
           apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts
 
       - name: Review package syntax
