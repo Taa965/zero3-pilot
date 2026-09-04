@@ -1,0 +1,9 @@
+{
+  "schema": "zero3.pilot.development-group-scope-lock.v1",
+  "handoff": "P12_product_wiring_closeout",
+  "locked": true,
+  "after_lock_allowed_changes": [
+    "PR-review fixes required to make the existing P12 scope correct",
+    "no new features"
+  ]
+}
