@@ -22,6 +22,8 @@ import { applyZero3CodexStructuredInput } from './apply-codex-structured-input.m
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3ControlRuntime } from './apply-control-runtime.mjs'
 import { applyZero3GptWebProvider } from './apply-gpt-web-provider.mjs'
+import { applyZero3GptWebUi } from './apply-gpt-web-ui.mjs'
+import { applyZero3ProjectContextMcp } from './apply-project-context-mcp.mjs'
 import { applyZero3RemoteHostRuntime } from './apply-remote-host-runtime.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 import { applyZero3WorkspaceEntryRuntime } from './apply-workspace-entry-runtime.mjs'
@@ -87,6 +89,8 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/electron/main.ts',
     'apps/desktop/electron/preload.ts',
     'apps/desktop/public/apple-touch-icon.png',
+    'apps/desktop/src/app/chat/index.tsx',
+    'apps/desktop/src/app/chat/sidebar/index.tsx',
     'apps/desktop/src/app/chat/composer/status-stack/index.tsx',
     'apps/desktop/src/app/chat/sidebar/session-actions-menu.tsx',
     'apps/desktop/src/app/command-palette/index.tsx',
@@ -263,9 +267,11 @@ applyBrandOverlay()
 applyZero3ShellPolicy()
 applyZero3ChineseUi()
 applyZero3CodexTransport()
+applyZero3ProjectContextMcp()
 applyZero3WorkspaceEntryRuntime()
 applyZero3GptWebProvider()
 applyZero3ControlRuntime()
+applyZero3GptWebUi()
 applyZero3CodexPrimaryChat()
 applyZero3CodexPrompts()
 applyZero3CodexPromptQueueHardening()
@@ -284,4 +290,4 @@ console.log('R3C: Hermes composer images use native Codex localImage; other atta
 console.log('R3C safety: Renderer may submit only text/localImage structured inputs; default sandbox stays read-only and unsupported server requests stay fail-closed.')
 console.log('R3D: archive/unarchive/delete/rename/whole-thread fork/active-turn steer use typed Codex app-server operations.')
 console.log('Remote Host H0-H3: external tasks enter the same pinned Codex Thread/Turn runtime through an outbound HTTPS host node; no second agent loop or direct remote shell is introduced.')
-console.log('GPT Web handoff: renderer dispatch uses a purpose-specific Control Plane bridge; control credentials remain in Electron main.')
+console.log('GPT Web unified workspace: provider/UI/control overlays and the packaged project-context MCP are wired through the shared prepare pipeline.')
