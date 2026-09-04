@@ -54,8 +54,9 @@ jobs:
         run: |
           set -euo pipefail
           test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/App.tsx
+          test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/HandoffDock.tsx
           test -f upstream/hermes-agent/apps/desktop/tsconfig.zero3-renderer.json
-          grep -F "import { App } from './zero3-ui/App'" upstream/hermes-agent/apps/desktop/src/main.tsx
+          grep -F "import { ProductApp } from './zero3-ui/ProductApp'" upstream/hermes-agent/apps/desktop/src/main.tsx
           ! grep -E "RouterProvider|from ['\"]\\./app|Hermes" upstream/hermes-agent/apps/desktop/src/main.tsx
           node scripts/check-prepared-gemini-integration.mjs
 
