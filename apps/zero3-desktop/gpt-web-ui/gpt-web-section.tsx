@@ -145,6 +145,9 @@ export function Zero3GptWebSection({ onNewCodexSession }: Zero3GptWebSectionProp
     if (!available) return
     return window.zero3GptWeb.onEvent(event => {
       if (event.kind === 'navigation') {
+        if (event.previousEntryId) {
+          setActiveEntryId(current => (current === event.previousEntryId ? event.entryId : current))
+        }
         void refresh()
       } else if (event.state === 'created' || event.state === 'suspended') {
         void refresh()
