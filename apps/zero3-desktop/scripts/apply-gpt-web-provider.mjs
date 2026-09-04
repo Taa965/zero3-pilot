@@ -182,8 +182,10 @@ export function applyZero3GptWebProvider() {
   patchFile('src/global.d.ts', [
     {
       label: 'GPT Web renderer type definitions',
-      from: 'type Zero3WorkspaceEntry = {',
-      to: globalTypeDefinitions + '\ntype Zero3WorkspaceEntry = {'
+      from: 'type Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry',
+      to:
+        globalTypeDefinitions +
+        '\ntype Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry'
     },
     {
       label: 'GPT Web renderer window surface',
