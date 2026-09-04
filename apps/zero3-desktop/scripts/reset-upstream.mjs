@@ -37,15 +37,24 @@ const generatedFiles = [
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'primary-chat.ts'),
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'prompt-store.ts'),
   path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'prompt-overlay.tsx'),
-  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'item-projection.ts')
+  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex', 'item-projection.ts'),
+  path.join(hermesDesktopDir, 'src', 'app', 'chat', 'sidebar', 'zero3-gpt-web-section.tsx'),
+  path.join(hermesDesktopDir, 'src', 'app', 'chat', 'sidebar', 'gpt-web-handoff-actions.tsx')
 ]
 for (const file of generatedFiles) {
   if (fs.existsSync(file)) fs.rmSync(file, { force: true })
 }
 
-const generatedDir = path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex')
-if (fs.existsSync(generatedDir) && fs.readdirSync(generatedDir).length === 0) {
-  fs.rmdirSync(generatedDir)
+const generatedDirs = [
+  path.join(hermesDesktopDir, 'src', 'app', 'zero3-codex'),
+  path.join(hermesDesktopDir, 'electron', 'zero3', 'workspace'),
+  path.join(hermesDesktopDir, 'electron', 'zero3', 'gpt-web'),
+  path.join(hermesDesktopDir, 'electron', 'zero3', 'control'),
+  path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp'),
+  path.join(hermesDesktopDir, 'electron', 'zero3', 'remote-host')
+]
+for (const directory of generatedDirs) {
+  if (fs.existsSync(directory)) fs.rmSync(directory, { recursive: true, force: true })
 }
 
 console.log(`Hermes upstream reset to ${pins.hermes}.`)
