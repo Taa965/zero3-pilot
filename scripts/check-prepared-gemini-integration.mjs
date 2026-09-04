@@ -36,6 +36,7 @@ const staged = [
   'electron/zero3/agent-routing/task-prompt.ts',
   'electron/zero3/agent-desktop-bridge/bridge.ts',
   'electron/zero3/artifacts/artifact-store.ts',
+  'electron/zero3/artifacts/antigravity-mcp-lease.ts',
   'electron/zero3/mcp/task-mcp-server.mjs',
   'electron/zero3/mcp/project-context-server.mjs',
   'electron/zero3/remote-host/remote-task-runner.ts',
@@ -52,6 +53,12 @@ requireAll(main, mainPath, [
   'assertZero3GitPreflight',
   'const zero3TaskAwareAntigravity = {',
   'const zero3FixAwareCodex = {',
+  'const zero3AgentMcpLeases = new Map',
+  'async function zero3ResetAntigravityRuntime',
+  'const lease = new Zero3AntigravityMcpLease()',
+  'await lease.install({',
+  'zero3AgentMcpLeases.set(started.turnId',
+  'finally { await scoped.lease.restore() }',
   'const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({',
   'const zero3AgentRecovery = new Zero3AgentRecoveryController({',
   'const zero3AgentDesktopHandlers = createZero3AgentDesktopHandlers({',
@@ -119,5 +126,27 @@ const packagedBridge = read('electron/zero3/agent-desktop-bridge/bridge.ts')
 requireAll(packagedBridge, 'electron/zero3/agent-desktop-bridge/bridge.ts', ["../agent-routing/agent-contracts"])
 forbid(packagedBridge, 'electron/zero3/agent-desktop-bridge/bridge.ts', ['../agent-routing-runtime/agent-contracts'])
 
+const packagedArtifacts = read('electron/zero3/artifacts/artifact-store.ts')
+requireAll(packagedArtifacts, 'electron/zero3/artifacts/artifact-store.ts', [
+  "createHash('sha256')",
+  'artifact index task identity mismatch',
+  'storageName(logicalTaskId)'
+])
+const packagedLease = read('electron/zero3/artifacts/antigravity-mcp-lease.ts')
+requireAll(packagedLease, 'electron/zero3/artifacts/antigravity-mcp-lease.ts', [
+  "createHash('sha256')",
+  'storageName(taskId)',
+  'this.taskSnapshotPath = null',
+  'await fs.unlink(taskSnapshotPath)'
+])
+const packagedTaskMcp = read('electron/zero3/mcp/task-mcp-server.mjs')
+requireAll(packagedTaskMcp, 'electron/zero3/mcp/task-mcp-server.mjs', [
+  "import { createHash } from 'node:crypto'",
+  'storageName(id)',
+  'Zero3 task snapshot identity mismatch',
+  'artifact index task identity mismatch',
+  'review record task identity mismatch'
+])
+
 console.log('Prepared Gemini/Antigravity desktop composition gate passed.')
-console.log(`Verified ${staged.length} staged runtime/UI files plus Electron main/preload/global composition.`)
+console.log(`Verified ${staged.length} staged runtime/UI files plus Electron main/preload/global/MCP composition.`)
