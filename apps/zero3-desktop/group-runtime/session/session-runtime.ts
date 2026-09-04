@@ -130,6 +130,20 @@ export class DevelopmentSessionRunner {
     await this.persist()
   }
 
+  async prepareRetry(): Promise<DevelopmentSessionRuntime> {
+    if (this.#runtime.status === 'outcome_unknown') {
+      throw new DevelopmentSessionRuntimeError('OutcomeUnknown cannot enter retry; resolve the uncertain execution first')
+    }
+    if (!['failed', 'blocked'].includes(this.#runtime.status)) {
+      throw new DevelopmentSessionRuntimeError(`only failed/blocked sessions may retry; got ${this.#runtime.status}`)
+    }
+    if (this.#runtime.attempt >= this.group.policy.maxSessionAttempts) throw new DevelopmentSessionRuntimeError('session attempt budget exhausted')
+    await this.transition('ready')
+    this.#runtime.blocker = undefined
+    await this.persist()
+    return this.snapshot()
+  }
+
   async start(): Promise<DevelopmentSessionRuntime> {
     if (this.#runtime.status !== 'ready') throw new DevelopmentSessionRuntimeError(`session must be ready before start; got ${this.#runtime.status}`)
     if (this.#runtime.attempt >= this.group.policy.maxSessionAttempts) throw new DevelopmentSessionRuntimeError('session attempt budget exhausted')
