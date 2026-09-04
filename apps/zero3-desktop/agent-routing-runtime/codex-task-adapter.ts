@@ -22,6 +22,18 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
+function remoteEvidenceGate(task: Zero3TaskSpecV2): string[] {
+  const evidence = new Set<string>([
+    'codex.turn.completed',
+    'git.preflight',
+    'git.postflight',
+    'agent.summary',
+    'execution.result'
+  ])
+  if (task.completionGate.includes('git.clean')) evidence.add('git.clean')
+  return [...evidence]
+}
+
 function remoteTask(task: Zero3TaskSpecV2): Record<string, unknown> {
   if (!task.worktreePath?.trim()) throw new Error('Codex TaskSpecV2 requires an explicit isolated worktreePath')
   return {
@@ -50,7 +62,7 @@ function remoteTask(task: Zero3TaskSpecV2): Record<string, unknown> {
     handoff: {
       result_protocol: 'zero3.pilot.execution-result.v1',
       return_entry_id: task.createdBySessionId,
-      required_evidence: [...task.completionGate]
+      required_evidence: remoteEvidenceGate(task)
     }
   }
 }
