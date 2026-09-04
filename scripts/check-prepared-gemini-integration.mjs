@@ -12,6 +12,7 @@ function forbid(source, relative, patterns) { for (const pattern of patterns) if
 function count(source, value) { return source.split(value).length - 1 }
 
 const staged = [
+  'electron/zero3/gpt-web/gpt-web-reviewer.ts',
   'electron/zero3/gemini-web/gemini-web-provider.ts',
   'electron/zero3/antigravity/antigravity-adapter.ts',
   'electron/zero3/agent-routing/agent-contracts.ts',
@@ -63,7 +64,13 @@ requireAll(main, mainPath, [
   "ipcMain.removeHandler('zero3:review:decision')",
   'AUTO fix cycle would change provider',
   'assertZero3GitPreflight(preflight, record.task.baseSha ?? null, true)',
-  'assertZero3GitPreflight(preflight, task.baseSha ?? null, true)'
+  'assertZero3GitPreflight(preflight, task.baseSha ?? null, true)',
+  'const zero3GptWebReviewLoops = new Map<string, Promise<unknown>>()',
+  'zero3RunGptWebReviewerLoop',
+  'zero3GptWeb.review(reviewSessionId',
+  'zero3AgentDesktopHandlers.reviewDecision({',
+  "ipcMain.handle('zero3:agent-task:review-gpt-web'",
+  "console.warn('[zero3:gpt-web-reviewer]'"
 ])
 if (count(main, 'const zero3CodexAppServer = createZero3CodexAppServer()') !== 1) throw new Error('electron/main.ts: Codex App Server singleton count drifted')
 const oldReview = main.indexOf("ipcMain.handle('zero3:review:decision'")
@@ -84,11 +91,27 @@ forbid(agentCore, `${mainPath} Zero3 agent core`, ["child_process.exec", 'shell:
 
 const preloadPath = 'electron/preload.ts'
 const preload = read(preloadPath)
-requireAll(preload, preloadPath, ["contextBridge.exposeInMainWorld('zero3AgentTask'", "contextBridge.exposeInMainWorld('zero3AgentTasks'", "ipcRenderer.invoke('zero3:agent-task:dispatch'", "ipcRenderer.invoke('zero3:agent-task:review-decision'", "ipcRenderer.invoke('zero3:agent-task:recovery-inspect'", "ipcRenderer.invoke('zero3:agent-task:recovery-resolve'", "ipcRenderer.invoke('zero3:agent-tasks:dispatch'"])
+requireAll(preload, preloadPath, [
+  "contextBridge.exposeInMainWorld('zero3AgentTask'",
+  "contextBridge.exposeInMainWorld('zero3AgentTasks'",
+  "ipcRenderer.invoke('zero3:agent-task:dispatch'",
+  "ipcRenderer.invoke('zero3:agent-task:review-decision'",
+  "ipcRenderer.invoke('zero3:agent-task:review-gpt-web'",
+  "ipcRenderer.invoke('zero3:agent-task:recovery-inspect'",
+  "ipcRenderer.invoke('zero3:agent-task:recovery-resolve'",
+  "ipcRenderer.invoke('zero3:agent-tasks:dispatch'"
+])
 
 const globalPath = 'src/global.d.ts'
 const global = read(globalPath)
-requireAll(global, globalPath, ["type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'AUTO'",'zero3AgentTask: {','zero3AgentTasks: {','recoveryInspect:','recoveryResolve:'])
+requireAll(global, globalPath, [
+  "type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'AUTO'",
+  'zero3AgentTask: {',
+  'zero3AgentTasks: {',
+  'reviewGptWeb:',
+  'recoveryInspect:',
+  'recoveryResolve:'
+])
 
 const handoffPath = 'src/app/chat/sidebar/gpt-web-handoff-actions.tsx'
 const handoff = read(handoffPath)
@@ -99,6 +122,32 @@ const geminiUiPath = 'src/app/chat/sidebar/gemini-session-section.tsx'
 const geminiUi = read(geminiUiPath)
 requireAll(geminiUi, geminiUiPath, ['CustomEvent<{ entryId: string; taskId?: string }>','if (detail?.taskId) setTaskId(detail.taskId)','诊断：直接启动 Antigravity'])
 forbid(geminiUi, geminiUiPath, ['executeJavaScript(', 'sendInputEvent('])
+
+const packagedReviewer = read('electron/zero3/gpt-web/gpt-web-reviewer.ts')
+requireAll(packagedReviewer, 'electron/zero3/gpt-web/gpt-web-reviewer.ts', [
+  'runZero3GptWebReview',
+  'Accessibility.getFullAXTree',
+  'Input.dispatchMouseEvent',
+  'Input.insertText',
+  'ZERO3_REVIEW_DECISION',
+  'refused to overwrite it'
+])
+forbid(packagedReviewer, 'electron/zero3/gpt-web/gpt-web-reviewer.ts', [
+  'executeJavaScript',
+  'querySelector',
+  'document.',
+  'Runtime.evaluate',
+  'Network.',
+  '/backend-api/',
+  '/api/conversation'
+])
+
+const packagedGptProvider = read('electron/zero3/gpt-web/gpt-web-provider.ts')
+requireAll(packagedGptProvider, 'electron/zero3/gpt-web/gpt-web-provider.ts', [
+  "import { runZero3GptWebReview, type Zero3GptWebReviewInput } from './gpt-web-reviewer'",
+  'async review(idValue: unknown, input: Zero3GptWebReviewInput)',
+  'return await runZero3GptWebReview(contents'
+])
 
 const packagedBridge = read('electron/zero3/agent-desktop-bridge/bridge.ts')
 requireAll(packagedBridge, 'electron/zero3/agent-desktop-bridge/bridge.ts', ["../agent-routing/agent-contracts"])
@@ -116,5 +165,5 @@ requireAll(packagedTaskMcp, 'electron/zero3/mcp/task-mcp-server.mjs', ["import {
 const packagedProjectMcp = read('electron/zero3/mcp/project-context-server.mjs')
 requireAll(packagedProjectMcp, 'electron/zero3/mcp/project-context-server.mjs', ["createHash('sha256')",'storageName(id)','invalid persisted project context','invalid persisted handoff'])
 
-console.log('Prepared Gemini/Antigravity desktop composition gate passed.')
-console.log(`Verified ${staged.length} staged runtime/UI files plus Electron main/preload/global/MCP composition.`)
+console.log('Prepared Gemini/Antigravity/GPT-Web-reviewer desktop composition gate passed.')
+console.log(`Verified ${staged.length} staged runtime/UI files plus Electron main/preload/global/MCP/reviewer composition.`)
