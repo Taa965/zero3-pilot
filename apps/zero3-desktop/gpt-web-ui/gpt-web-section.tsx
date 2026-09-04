@@ -198,56 +198,43 @@ export function Zero3GptWebSection({ onNewCodexSession }: Zero3GptWebSectionProp
 
   return (
     <>
-      <div className="shrink-0 px-1 pb-1" data-zero3-gpt-web-section="">
-        <div className="flex h-7 items-center gap-2 px-2 text-xs font-medium text-(--ui-text-tertiary)">
-          <Codicon className="size-4 shrink-0 text-blue-500" name="globe" />
-          <span className="min-w-0 flex-1 truncate">GPT 网页</span>
-          <button
-            aria-label="新建 GPT 网页会话"
-            className="grid size-6 place-items-center rounded-md text-(--ui-text-tertiary) hover:bg-(--ui-control-hover-background) hover:text-foreground disabled:opacity-40"
-            disabled={busy}
-            onClick={() => void create()}
-            title="新建 GPT 网页会话"
-            type="button"
-          >
-            <Codicon className="size-4" name="add" />
-          </button>
-        </div>
+      {(visibleEntries.length > 0 || error) && (
+        <div className="shrink-0 px-1 pb-1" data-zero3-gpt-web-section="">
+          <div className="flex flex-col gap-px">
+            {visibleEntries.map(entry => {
+              const active = entry.id === activeEntryId
+              return (
+                <button
+                  className={cn(
+                    'flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-transparent px-2 text-left text-[0.8125rem] text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-foreground',
+                    active && 'border-(--ui-stroke-tertiary) bg-(--ui-control-active-background) text-foreground'
+                  )}
+                  data-zero3-gpt-web-entry={entry.id}
+                  key={entry.id}
+                  onClick={() => void activate(entry.id)}
+                  title={entryTitle(entry)}
+                  type="button"
+                >
+                  <Codicon className="size-4 shrink-0 text-blue-500" name="globe" />
+                  <span className="min-w-0 flex-1 truncate">{entryTitle(entry)}</span>
+                  {active && <span className="size-1.5 shrink-0 rounded-full bg-blue-500" aria-label="当前 GPT 网页会话" />}
+                </button>
+              )
+            })}
+          </div>
 
-        <div className="flex flex-col gap-px">
-          {visibleEntries.map(entry => {
-            const active = entry.id === activeEntryId
-            return (
-              <button
-                className={cn(
-                  'flex h-8 w-full min-w-0 items-center gap-2 rounded-md border border-transparent px-2 text-left text-[0.8125rem] text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-foreground',
-                  active && 'border-(--ui-stroke-tertiary) bg-(--ui-control-active-background) text-foreground'
-                )}
-                data-zero3-gpt-web-entry={entry.id}
-                key={entry.id}
-                onClick={() => void activate(entry.id)}
-                title={entryTitle(entry)}
-                type="button"
-              >
-                <Codicon className="size-4 shrink-0 text-blue-500" name="globe" />
-                <span className="min-w-0 flex-1 truncate">{entryTitle(entry)}</span>
-                {active && <span className="size-1.5 shrink-0 rounded-full bg-blue-500" aria-label="当前 GPT 网页会话" />}
-              </button>
-            )
-          })}
+          {error && (
+            <button
+              className="mt-1 w-full rounded-md px-2 py-1 text-left text-[0.6875rem] text-(--ui-text-tertiary) hover:bg-(--ui-control-hover-background)"
+              onClick={() => setError(null)}
+              title={error}
+              type="button"
+            >
+              <span className="line-clamp-2">{error}</span>
+            </button>
+          )}
         </div>
-
-        {error && (
-          <button
-            className="mt-1 w-full rounded-md px-2 py-1 text-left text-[0.6875rem] text-(--ui-text-tertiary) hover:bg-(--ui-control-hover-background)"
-            onClick={() => setError(null)}
-            title={error}
-            type="button"
-          >
-            <span className="line-clamp-2">{error}</span>
-          </button>
-        )}
-      </div>
+      )}
 
       <Dialog onOpenChange={setPickerOpen} open={pickerOpen}>
         <DialogContent className="max-w-sm" onOpenAutoFocus={preventCloseButtonAutoFocus} showCloseButton>
