@@ -1,5 +1,3 @@
-import type { Zero3AntigravityAdapter } from '../antigravity-runtime/antigravity-adapter'
-import type { Zero3AntigravityTurnResult } from '../antigravity-runtime/antigravity-types'
 import {
   ZERO3_EXECUTION_RESULT_V2,
   type Zero3ArtifactRef,
@@ -17,6 +15,29 @@ export type Zero3CodexTaskDispatcher = {
   dispatchTask(task: Zero3TaskSpecV2): Promise<Zero3ExecutionResultV2>
 }
 
+export type Zero3AntigravityTurnResultLike = {
+  turnId: string
+  logicalSessionId: string
+  conversationId: string | null
+  status: 'COMPLETE' | 'PARTIAL' | 'BLOCKED' | 'FAILED' | 'OUTCOME_UNKNOWN'
+  response: string | null
+  structuredOutput: unknown | null
+  error: string | null
+  rawStatus: string | null
+}
+
+export type Zero3AntigravityTaskRuntime = {
+  startTurn(input: {
+    logicalSessionId: string
+    projectId?: string | null
+    cwd: string
+    prompt: string
+    taskId?: string | null
+    contextVersion?: number | null
+  }): Promise<{ turnId: string }>
+  waitTurn(turnId: string): Promise<Zero3AntigravityTurnResultLike>
+}
+
 export type Zero3AgentDispatchContext = {
   targetLogicalSessionId: string
   reviewSessionId?: string | null
@@ -27,9 +48,10 @@ export type Zero3AgentRuntimeDependencies = {
   router: Zero3AgentRouter
   taskStore: Zero3AgentTaskStore
   reviewStore: Zero3ReviewLoopStore
-  antigravity: Zero3AntigravityAdapter
+  antigravity: Zero3AntigravityTaskRuntime
   codex: Zero3CodexTaskDispatcher
   availability: () => Promise<Zero3ProviderAvailability> | Zero3ProviderAvailability
+  finalizeResult: (task: Zero3TaskSpecV2, candidate: Zero3ExecutionResultV2) => Promise<Zero3ExecutionResultV2>
 }
 
 type JsonRecord = Record<string, unknown>
@@ -51,7 +73,7 @@ function stringArray(value: unknown): string[] {
     .slice(0, 10_000)
 }
 
-function artifactRefs(value: unknown, task: Zero3TaskSpecV2, cycle = 1): Zero3ArtifactRef[] {
+function artifactRefs(value: unknown, cycle = 1): Zero3ArtifactRef[] {
   if (!Array.isArray(value)) return []
   const result: Zero3ArtifactRef[] = []
   for (const item of value.slice(0, 1_000)) {
@@ -100,7 +122,7 @@ function normalizeRecommendedAction(value: unknown): Zero3ExecutionResultV2['rec
     : 'GPT_REVIEW'
 }
 
-function mapGeminiTurn(task: Zero3TaskSpecV2, turn: Zero3AntigravityTurnResult): Zero3ExecutionResultV2 {
+function mapGeminiTurn(task: Zero3TaskSpecV2, turn: Zero3AntigravityTurnResultLike): Zero3ExecutionResultV2 {
   if (turn.status === 'OUTCOME_UNKNOWN') {
     return {
       protocol: ZERO3_EXECUTION_RESULT_V2,
@@ -129,6 +151,7 @@ function mapGeminiTurn(task: Zero3TaskSpecV2, turn: Zero3AntigravityTurnResult):
   const status = ['COMPLETE', 'PARTIAL', 'BLOCKED', 'FAILED'].includes(structuredStatus)
     ? structuredStatus as Zero3ExecutionResultV2['status']
     : turn.status
+  const rawGit = record(structured.git)
 
   return {
     protocol: ZERO3_EXECUTION_RESULT_V2,
@@ -142,13 +165,13 @@ function mapGeminiTurn(task: Zero3TaskSpecV2, turn: Zero3AntigravityTurnResult):
     conversationId: turn.conversationId,
     summary: text(structured.summary, turn.response || turn.error || 'Gemini task completed without a summary.'),
     changedFiles: stringArray(structured.changedFiles),
-    artifacts: artifactRefs(structured.artifacts, task),
-    git: record(structured.git) && Object.keys(record(structured.git)).length > 0
+    artifacts: artifactRefs(structured.artifacts),
+    git: Object.keys(rawGit).length > 0
       ? {
-          baseSha: text(record(structured.git).baseSha, task.baseSha ?? '') || null,
-          headSha: text(record(structured.git).headSha) || null,
-          commitSha: text(record(structured.git).commitSha) || null,
-          branch: text(record(structured.git).branch, task.branch ?? '') || null
+          baseSha: text(rawGit.baseSha, task.baseSha ?? '') || null,
+          headSha: text(rawGit.headSha) || null,
+          commitSha: text(rawGit.commitSha) || null,
+          branch: text(rawGit.branch, task.branch ?? '') || null
         }
       : task.baseSha || task.branch
         ? { baseSha: task.baseSha ?? null, branch: task.branch ?? null }
@@ -159,6 +182,17 @@ function mapGeminiTurn(task: Zero3TaskSpecV2, turn: Zero3AntigravityTurnResult):
     recommendedAction: normalizeRecommendedAction(structured.recommendedAction),
     completedAt: new Date().toISOString()
   }
+}
+
+function assertResultIdentity(task: Zero3TaskSpecV2, target: 'CODEX' | 'GEMINI', result: Zero3ExecutionResultV2): void {
+  if (result.protocol !== ZERO3_EXECUTION_RESULT_V2) throw new Error('execution result protocol is invalid')
+  if (result.taskId !== task.taskId || result.executionId !== task.executionId || result.projectId !== task.projectId) {
+    throw new Error('execution result identity mismatch')
+  }
+  if (result.contextVersion !== task.contextVersion) throw new Error('execution result contextVersion mismatch')
+  if (result.provider !== target) throw new Error(`execution result provider ${result.provider} does not match resolved target ${target}`)
+  if (target === 'CODEX' && result.providerRuntime !== 'CODEX_LOCAL') throw new Error('CODEX result must use CODEX_LOCAL runtime')
+  if (target === 'GEMINI' && result.providerRuntime !== 'GEMINI_AGENT') throw new Error('GEMINI result must use GEMINI_AGENT runtime')
 }
 
 function stateForResult(result: Zero3ExecutionResultV2, reviewRequired: boolean): Zero3AgentTaskState {
@@ -197,7 +231,7 @@ export class Zero3AgentRuntimeOrchestrator {
     await this.deps.taskStore.setState(task.taskId, 'DISPATCHED')
     await this.deps.taskStore.setState(task.taskId, 'RUNNING')
 
-    let result: Zero3ExecutionResultV2
+    let candidate: Zero3ExecutionResultV2
     try {
       if (route.target === 'GEMINI') {
         if (!task.worktreePath?.trim()) throw new Error('Gemini writable tasks require an explicit isolated worktreePath')
@@ -214,26 +248,24 @@ export class Zero3AgentRuntimeOrchestrator {
           binding = { ...binding, runtimeConversationId: turn.conversationId, updatedAt: new Date().toISOString() }
           await this.deps.taskStore.setBinding(task.taskId, binding)
         }
-        result = mapGeminiTurn(task, turn)
+        candidate = mapGeminiTurn(task, turn)
       } else {
-        result = await this.deps.codex.dispatchTask(task)
-        if (result.protocol !== ZERO3_EXECUTION_RESULT_V2 || result.provider !== 'CODEX') {
-          throw new Error('Codex dispatcher returned an invalid provider-neutral execution result')
-        }
-        if (result.taskId !== task.taskId || result.executionId !== task.executionId || result.projectId !== task.projectId) {
-          throw new Error('Codex execution result identity mismatch')
-        }
+        candidate = await this.deps.codex.dispatchTask(task)
       }
+
+      assertResultIdentity(task, route.target, candidate)
+      candidate = await this.deps.finalizeResult(task, candidate)
+      assertResultIdentity(task, route.target, candidate)
     } catch (error) {
       await this.deps.taskStore.setState(task.taskId, 'FAILED')
       throw error
     }
 
-    const nextState = stateForResult(result, task.reviewPolicy.required)
-    await this.deps.taskStore.setResult(task.taskId, result, nextState)
+    const nextState = stateForResult(candidate, task.reviewPolicy.required)
+    await this.deps.taskStore.setResult(task.taskId, candidate, nextState)
 
-    if (task.reviewPolicy.required && result.status !== 'FAILED' && result.status !== 'BLOCKED' && result.status !== 'OUTCOME_UNKNOWN') {
-      await this.deps.reviewStore.createReview(task, result, binding)
+    if (task.reviewPolicy.required && candidate.status !== 'FAILED' && candidate.status !== 'BLOCKED' && candidate.status !== 'OUTCOME_UNKNOWN') {
+      await this.deps.reviewStore.createReview(task, candidate, binding)
       await this.deps.taskStore.setState(task.taskId, 'REVIEW_PENDING')
     }
     return (await this.deps.taskStore.get(task.taskId))!
