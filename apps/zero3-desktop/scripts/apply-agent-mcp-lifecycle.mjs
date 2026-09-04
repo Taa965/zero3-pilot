@@ -1,10 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { hermesDesktopDir } from './config.mjs'
+import { hermesDesktopDir, repoRoot } from './config.mjs'
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
-function write(file, content) { fs.writeFileSync(file, content) }
+function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
 function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = read(file)
@@ -16,8 +16,16 @@ function patchFile(relativePath, replacements) {
   write(file, source)
 }
 
+function stageCandidateStore() {
+  const source = path.join(repoRoot, 'apps', 'zero3-desktop', 'agent-routing-runtime', 'task-mcp-candidate-store.ts')
+  const target = path.join(hermesDesktopDir, 'electron', 'zero3', 'agent-routing', 'task-mcp-candidate-store.ts')
+  if (!fs.statSync(source).isFile()) throw new Error(`Zero3 task MCP candidate store missing: ${source}`)
+  write(target, read(source))
+}
+
 const lifecycleHelpers = String.raw`
-const zero3AgentMcpLeases = new Map<string, { lease: Zero3AntigravityMcpLease; logicalSessionId: string }>()
+const zero3TaskMcpCandidates = new Zero3TaskMcpCandidateStore(zero3AgentTaskStateRoot)
+const zero3AgentMcpLeases = new Map<string, { lease: Zero3AntigravityMcpLease; logicalSessionId: string; taskId: string }>()
 async function zero3AgentDelay(ms: number) {
   await new Promise<void>(resolve => setTimeout(resolve, ms))
 }
@@ -42,6 +50,7 @@ const startReplacement = String.raw`    const preflight = await zero3GitEvidence
     const review = await zero3ReviewStore.get(taskId)
     const fixRequest = review?.state === 'FIX_DISPATCHED' ? await zero3ReviewStore.latestFixRequest(taskId) : null
     await zero3ResetAntigravityRuntime(input.logicalSessionId)
+    await zero3TaskMcpCandidates.beginTurn(taskId)
     const lease = new Zero3AntigravityMcpLease()
     try {
       await lease.install({
@@ -60,7 +69,7 @@ const startReplacement = String.raw`    const preflight = await zero3GitEvidence
         ...input,
         prompt: renderZero3AgentTaskPrompt(record.task, fixRequest)
       })
-      zero3AgentMcpLeases.set(started.turnId, { lease, logicalSessionId: input.logicalSessionId })
+      zero3AgentMcpLeases.set(started.turnId, { lease, logicalSessionId: input.logicalSessionId, taskId })
       return started
     } catch (error) {
       try { await zero3ResetAntigravityRuntime(input.logicalSessionId) } finally { await lease.restore() }
@@ -70,7 +79,32 @@ const startReplacement = String.raw`    const preflight = await zero3GitEvidence
 const waitReplacement = String.raw`  waitTurn: async (turnId: string) => {
     const scoped = zero3AgentMcpLeases.get(turnId) ?? null
     try {
-      return await zero3Antigravity.waitTurn(turnId)
+      const raw = await zero3Antigravity.waitTurn(turnId)
+      if (!scoped) return raw
+      let published = null
+      try {
+        published = await zero3TaskMcpCandidates.consumeResult(scoped.taskId)
+      } catch (error) {
+        return {
+          ...raw,
+          status: 'BLOCKED' as const,
+          structuredOutput: null,
+          error: 'Task-scoped MCP result candidate is invalid: ' + (error instanceof Error ? error.message : String(error))
+        }
+      }
+      if (!published) return raw
+      if (raw.structuredOutput == null) {
+        return { ...raw, structuredOutput: published.payload }
+      }
+      if (!zero3ResultCandidatesEqual(raw.structuredOutput, published.payload)) {
+        return {
+          ...raw,
+          status: 'BLOCKED' as const,
+          structuredOutput: null,
+          error: 'Antigravity terminal structured output conflicts with the task-scoped MCP result candidate.'
+        }
+      }
+      return raw
     } finally {
       zero3AgentMcpLeases.delete(turnId)
       if (scoped) {
@@ -81,7 +115,13 @@ const waitReplacement = String.raw`  waitTurn: async (turnId: string) => {
   }`
 
 export function applyZero3AgentMcpLifecycle() {
+  stageCandidateStore()
   patchFile('electron/main.ts', [
+    {
+      label: 'task MCP candidate store import',
+      from: "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, zero3GitEvidence, assertZero3GitPreflight, renderZero3AgentTaskPrompt, type Zero3TaskSpecV2 } from './zero3/agent-routing/index'",
+      to: "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, Zero3TaskMcpCandidateStore, zero3ResultCandidatesEqual, zero3GitEvidence, assertZero3GitPreflight, renderZero3AgentTaskPrompt, type Zero3TaskSpecV2 } from './zero3/agent-routing/index'"
+    },
     {
       label: 'task-scoped MCP lifecycle helpers',
       from: 'const zero3TaskAwareAntigravity = {',
