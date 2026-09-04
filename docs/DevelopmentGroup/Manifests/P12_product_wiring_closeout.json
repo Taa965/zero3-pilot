@@ -1,0 +1,48 @@
+{
+  "schema": "zero3.pilot.development-group-handoff-manifest.v1",
+  "handoff": "P12_product_wiring_closeout",
+  "source_integration_branch": "integration/development-group-v1",
+  "source_integration_sha": "2fbe6b8926364b5fc90943c8cd62215b3c4aa210",
+  "closeout_branch": "closeout/development-group-v1-product-wiring",
+  "authority": {
+    "agent_kernel": "openai-codex-app-server",
+    "executor": "Zero3Executor",
+    "development_session": "DevelopmentSession",
+    "renderer_generic_codex_rpc": false,
+    "second_agent_loop": false,
+    "outcome_unknown_auto_retry": false
+  },
+  "static_closeout": {
+    "product_composition_authored": true,
+    "bounded_ipc_authored": true,
+    "renderer_route_authored": true,
+    "delivery_handoff_authority_authored": true,
+    "overlapping_ownership_scope_guard_authored": true,
+    "bounded_repair_wiring_authored": true,
+    "frozen_verification_policy_authored": true,
+    "windows_one_shot_acceptance_authored": true
+  },
+  "verification_policy": {
+    "path": ".zero3/verification-policy.json",
+    "revision": "zero3-pilot-dg-v1-2026-09-04.1",
+    "mandatory_tests": [
+      "development-group-product-audit",
+      "desktop-typecheck"
+    ]
+  },
+  "final_windows_acceptance": {
+    "command": "npm --prefix apps/zero3-desktop run acceptance:dg:win",
+    "exact_sha_env": "ZERO3_EXPECTED_SHA",
+    "report_default": "%TEMP%\\zero3-pilot-development-group-closeout.json",
+    "status": "NOT_RUN"
+  },
+  "promotion": {
+    "merge_to_integration_after_static_closeout": true,
+    "promote_to_main_before_exact_sha_windows_pass": false
+  },
+  "external_public_review": {
+    "p11_openai_plugin_submission": "SEPARATE_TRACK",
+    "production_https_mcp": "NOT_IMPLEMENTED",
+    "openai_review": "NOT_RUN"
+  }
+}
