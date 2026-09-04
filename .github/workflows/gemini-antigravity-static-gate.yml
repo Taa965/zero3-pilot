@@ -21,6 +21,7 @@ on:
       - 'apps/zero3-desktop/package.json'
       - 'scripts/check-gemini-antigravity-architecture.mjs'
       - 'scripts/check-prepared-gemini-integration.mjs'
+      - 'scripts/check-prepared-gpt-web-reviewer-recovery.mjs'
       - 'scripts/check-zero3-owned-ui.mjs'
       - 'scripts/check-gpt-web-reviewer.mjs'
       - 'scripts/acceptance/gemini-antigravity-windows.ps1'
@@ -44,6 +45,7 @@ on:
       - 'apps/zero3-desktop/package.json'
       - 'scripts/check-gemini-antigravity-architecture.mjs'
       - 'scripts/check-prepared-gemini-integration.mjs'
+      - 'scripts/check-prepared-gpt-web-reviewer-recovery.mjs'
       - 'scripts/check-zero3-owned-ui.mjs'
       - 'scripts/check-gpt-web-reviewer.mjs'
       - 'scripts/acceptance/gemini-antigravity-windows.ps1'
@@ -85,6 +87,7 @@ jobs:
           trap cleanup EXIT
           npm --prefix apps/zero3-desktop run prepare
           node scripts/check-prepared-gemini-integration.mjs
+          node scripts/check-prepared-gpt-web-reviewer-recovery.mjs
           cd upstream/hermes-agent
           npm install --workspace apps/desktop
           npm --workspace apps/desktop run typecheck
@@ -102,6 +105,8 @@ jobs:
           grep -F "zero3:agent-task:review-get" upstream/hermes-agent/apps/desktop/electron/preload.ts
           grep -F "zero3:agent-task:review-gpt-web" upstream/hermes-agent/apps/desktop/electron/preload.ts
           grep -F "Accessibility.getFullAXTree" upstream/hermes-agent/apps/desktop/electron/zero3/gpt-web/gpt-web-reviewer.ts
+          grep -F "zero3RecoverPendingGptWebReviews" upstream/hermes-agent/apps/desktop/electron/main.ts
+          grep -F "BEGIN_UNTRUSTED_REVIEW_PACKET" upstream/hermes-agent/apps/desktop/electron/zero3/gpt-web/gpt-web-reviewer.ts
           ! grep -E "executeJavaScript|querySelector|document\\.|/backend-api/|/api/conversation" upstream/hermes-agent/apps/desktop/electron/zero3/gpt-web/gpt-web-reviewer.ts
           ! grep -E "RouterProvider|from ['\"]\\./app|Hermes" upstream/hermes-agent/apps/desktop/src/main.tsx
 
