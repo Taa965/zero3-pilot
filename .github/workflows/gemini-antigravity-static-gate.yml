@@ -13,6 +13,7 @@ on:
       - 'apps/zero3-desktop/mcp-runtime/**'
       - 'apps/zero3-desktop/gpt-web-ui/**'
       - 'apps/zero3-desktop/zero3-ui/**'
+      - 'apps/zero3-desktop/project-runtime/**'
       - 'apps/zero3-desktop/workspace-runtime/**'
       - 'apps/zero3-desktop/host-runtime/**'
       - 'apps/zero3-desktop/scripts/**'
@@ -33,6 +34,7 @@ on:
       - 'apps/zero3-desktop/mcp-runtime/**'
       - 'apps/zero3-desktop/gpt-web-ui/**'
       - 'apps/zero3-desktop/zero3-ui/**'
+      - 'apps/zero3-desktop/project-runtime/**'
       - 'apps/zero3-desktop/workspace-runtime/**'
       - 'apps/zero3-desktop/host-runtime/**'
       - 'apps/zero3-desktop/scripts/**'
@@ -84,8 +86,14 @@ jobs:
           cd ../..
           test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/App.tsx
           test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/HandoffDock.tsx
+          test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/ProjectDock.tsx
+          test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/TaskDock.tsx
+          test -f upstream/hermes-agent/apps/desktop/electron/zero3/projects/project-store.ts
           test -f upstream/hermes-agent/apps/desktop/tsconfig.zero3-renderer.json
           grep -F "import { ProductApp } from './zero3-ui/ProductApp'" upstream/hermes-agent/apps/desktop/src/main.tsx
+          grep -F "contextBridge.exposeInMainWorld('zero3Projects'" upstream/hermes-agent/apps/desktop/electron/preload.ts
+          grep -F "zero3:agent-task:list" upstream/hermes-agent/apps/desktop/electron/preload.ts
+          grep -F "zero3:agent-task:review-get" upstream/hermes-agent/apps/desktop/electron/preload.ts
           ! grep -E "RouterProvider|from ['\"]\\./app|Hermes" upstream/hermes-agent/apps/desktop/src/main.tsx
 
       - name: Reject whitespace errors in committed closeout diff
