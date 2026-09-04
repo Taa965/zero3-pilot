@@ -15,6 +15,7 @@ on:
       - 'apps/zero3-desktop/scripts/apply-project-task-loop-runtime.mjs'
       - 'apps/zero3-desktop/scripts/apply-project-context-mcp.mjs'
       - 'apps/zero3-desktop/scripts/apply-gpt-web-reviewer-bridge.mjs'
+      - 'apps/zero3-desktop/scripts/apply-gpt-web-reviewer-recovery.mjs'
       - 'apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs'
       - 'apps/zero3-desktop/scripts/prepare-upstream.mjs'
       - 'apps/zero3-desktop/scripts/prepare-gemini-integration.mjs'
@@ -58,6 +59,7 @@ jobs:
           node --check apps/zero3-desktop/scripts/apply-project-task-loop-runtime.mjs
           node --check apps/zero3-desktop/scripts/apply-project-context-mcp.mjs
           node --check apps/zero3-desktop/scripts/apply-gpt-web-reviewer-bridge.mjs
+          node --check apps/zero3-desktop/scripts/apply-gpt-web-reviewer-recovery.mjs
           node --check apps/zero3-desktop/mcp-runtime/project-context-server.mjs
           node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
           node --check apps/zero3-desktop/scripts/prepare-gemini-integration.mjs
