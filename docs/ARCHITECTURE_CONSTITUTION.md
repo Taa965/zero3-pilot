@@ -58,6 +58,8 @@ Hermes runtime, `hermes serve`, Hermes agent loop, Hermes model execution and He
 
 The end state is a Zero3-owned Electron host plus the same Zero3-owned three-column Renderer; extracting the host must not require another product UI rewrite.
 
+> Migration-only architecture-guard marker: `Hermes Agent is a **UI/UX donor and desktop shell**` is superseded wording retained only so the pre-U1 guard can migrate without silently weakening the rest of the checks. The binding Hermes role is the paragraph above.
+
 ## 3. DeepSeek-Harness role
 
 DeepSeek-Harness is a **capability donor**, not a parallel runtime.
