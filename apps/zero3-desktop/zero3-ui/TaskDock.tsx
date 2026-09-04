@@ -72,6 +72,9 @@ function taskRecord(value: unknown): TaskRecord | null {
   const taskId = text(task.taskId).trim()
   const projectId = text(task.projectId).trim()
   if (!taskId || !projectId) return null
+  const contextVersion = typeof task.contextVersion === 'number' && Number.isSafeInteger(task.contextVersion)
+    ? task.contextVersion
+    : 1
   return {
     task: {
       taskId,
@@ -79,7 +82,7 @@ function taskRecord(value: unknown): TaskRecord | null {
       projectId,
       title: text(task.title, taskId),
       goal: text(task.goal),
-      contextVersion: Number.isSafeInteger(task.contextVersion) ? Number(task.contextVersion) : 1,
+      contextVersion,
       reviewPolicy: record(task.reviewPolicy) as TaskRecord['task']['reviewPolicy']
     },
     resolvedTarget: raw.resolvedTarget === 'GEMINI' ? 'GEMINI' : 'CODEX',
