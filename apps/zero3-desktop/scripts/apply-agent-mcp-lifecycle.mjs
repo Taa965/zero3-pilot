@@ -43,19 +43,19 @@ const startReplacement = String.raw`    const preflight = await zero3GitEvidence
     const fixRequest = review?.state === 'FIX_DISPATCHED' ? await zero3ReviewStore.latestFixRequest(taskId) : null
     await zero3ResetAntigravityRuntime(input.logicalSessionId)
     const lease = new Zero3AntigravityMcpLease()
-    await lease.install({
-      taskId: record.task.taskId,
-      projectId: record.task.projectId,
-      workspace: input.cwd,
-      taskSnapshot: record,
-      serverPath: zero3TaskMcpServerPath,
-      electronExecutable: process.execPath,
-      stateDir: zero3AgentTaskStateRoot,
-      artifactDir: zero3ArtifactRoot,
-      reviewDir: zero3ReviewRoot,
-      projectContextDir: zero3ProjectContextRoot
-    })
     try {
+      await lease.install({
+        taskId: record.task.taskId,
+        projectId: record.task.projectId,
+        workspace: input.cwd,
+        taskSnapshot: record,
+        serverPath: zero3TaskMcpServerPath,
+        electronExecutable: process.execPath,
+        stateDir: zero3AgentTaskStateRoot,
+        artifactDir: zero3ArtifactRoot,
+        reviewDir: zero3ReviewRoot,
+        projectContextDir: zero3ProjectContextRoot
+      })
       const started = await zero3Antigravity.startTurn({
         ...input,
         prompt: renderZero3AgentTaskPrompt(record.task, fixRequest)
