@@ -14,6 +14,7 @@ import {
 import { cn } from '@/lib/utils'
 import { $activeProjectId } from '@/store/projects'
 import { $focusedStoredSessionId } from '@/store/session-states'
+import { Zero3GptWebHandoffActions } from './gpt-web-handoff-actions'
 
 export const ZERO3_NEW_SESSION_PROVIDER_EVENT = 'zero3:new-session-provider-picker'
 
@@ -66,6 +67,11 @@ export function Zero3GptWebSection({ onNewCodexSession }: Zero3GptWebSectionProp
     const filtered = activeProjectId ? entries.filter(entry => entry.projectId === activeProjectId) : entries
     return [...filtered].sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
   }, [activeProjectId, entries])
+
+  const activeEntry = useMemo(
+    () => (activeEntryId ? entries.find(entry => entry.id === activeEntryId) ?? null : null),
+    [activeEntryId, entries]
+  )
 
   const hideActive = useCallback(async () => {
     const id = activeEntryId
@@ -226,6 +232,8 @@ export function Zero3GptWebSection({ onNewCodexSession }: Zero3GptWebSectionProp
             })}
           </div>
 
+          {activeEntry && <Zero3GptWebHandoffActions entry={activeEntry} />}
+
           {error && (
             <button
               className="mt-1 w-full rounded-md px-2 py-1 text-left text-[0.6875rem] text-(--ui-text-tertiary) hover:bg-(--ui-control-hover-background)"
@@ -240,7 +248,7 @@ export function Zero3GptWebSection({ onNewCodexSession }: Zero3GptWebSectionProp
       )}
 
       <Dialog onOpenChange={setPickerOpen} open={pickerOpen}>
-        <DialogContent className="max-w-sm" onOpenAutoFocus={preventCloseButtonAutoFocus} showCloseButton>
+        <DialogContent className="max-w-sm" data-zero3-gpt-web-section="" onOpenAutoFocus={preventCloseButtonAutoFocus} showCloseButton>
           <DialogHeader>
             <DialogTitle>新建会话</DialogTitle>
             <DialogDescription>选择本次会话使用 ChatGPT 网页还是本地 Codex。</DialogDescription>
