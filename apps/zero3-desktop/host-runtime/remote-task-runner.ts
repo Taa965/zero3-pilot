@@ -16,9 +16,21 @@ export type Zero3CodexRuntime = {
   startThread(params: unknown): Promise<unknown>
   startTurn(params: unknown, timeoutMs?: number): Promise<unknown>
   readThread(params: unknown): Promise<unknown>
+  execCommand(params: unknown, timeoutMs?: number): Promise<unknown>
 }
 
 type RecordValue = Record<string, unknown>
+
+type Zero3RemoteGitPreflight = {
+  repositoryRoot: string
+  headCommit: string
+  baseCommit: string | null
+  cleanWorktree: boolean | null
+}
+
+const GIT_COMMAND_TIMEOUT_MS = 10_000
+const GIT_COMMAND_REQUEST_TIMEOUT_MS = 15_000
+const GIT_OUTPUT_BYTES_CAP = 64 * 1024
 
 export class Zero3RemoteTaskBlockedError extends Error {
   constructor(message: string) {
@@ -66,6 +78,9 @@ function validateTask(task: Zero3RemoteTask): Zero3RemoteTask {
     throw new Error('execution.timeout_seconds must be an integer from 30 to 28800')
   }
 
+  const baseRef = target.base_ref == null ? null : requiredString(target.base_ref, 'target.base_ref', 256)
+  if (baseRef?.startsWith('-')) throw new Error('target.base_ref must not start with a dash')
+
   return {
     protocol: ZERO3_REMOTE_TASK_PROTOCOL,
     task_id: requiredString(raw.task_id, 'task_id', 256),
@@ -73,7 +88,7 @@ function validateTask(task: Zero3RemoteTask): Zero3RemoteTask {
     objective: requiredString(raw.objective, 'objective', 64_000),
     target: {
       workspace: requiredString(target.workspace, 'target.workspace', 4096),
-      ...(target.base_ref == null ? {} : { base_ref: requiredString(target.base_ref, 'target.base_ref', 256) })
+      ...(baseRef ? { base_ref: baseRef } : {})
     },
     constraints: stringArray(raw.constraints, 'constraints', 64, 4096),
     acceptance_criteria: stringArray(raw.acceptance_criteria, 'acceptance_criteria', 64, 4096),
@@ -86,12 +101,13 @@ function validateTask(task: Zero3RemoteTask): Zero3RemoteTask {
   }
 }
 
-function taskPrompt(task: Zero3RemoteTask): string {
+function taskPrompt(task: Zero3RemoteTask, gitPreflight: Zero3RemoteGitPreflight): string {
   const constraints = task.constraints?.length ? task.constraints.map(value => `- ${value}`).join('\n') : '- none supplied'
   const acceptance = task.acceptance_criteria?.length
     ? task.acceptance_criteria.map(value => `- ${value}`).join('\n')
     : '- verify the requested objective against the real project'
-  return `[ZERO3 REMOTE TASK]\n\nTask ID: ${task.task_id}\nExecution ID: ${task.execution_id}\nPermission intent: ${task.permission_profile ?? 'standard'}\nMaximum host-started Codex Turns: ${task.execution?.max_turns ?? 1}\n\nObjective:\n${task.objective}\n\nConstraints:\n${constraints}\n\nAcceptance Criteria:\n${acceptance}\n\nExecution requirements:\n- Inspect the real repository before modifying it.\n- Preserve Zero3 architecture invariants; open-source Codex remains the only Agent Kernel.\n- Use real project verification rather than assuming generated code works.\n- Do not bypass sandbox or approval policy.\n- Do not claim success until the acceptance criteria have been verified.\n- If an action needs permission outside the granted profile, stop and surface the requirement.\n`
+  const clean = gitPreflight.cleanWorktree == null ? 'not required' : gitPreflight.cleanWorktree ? 'clean' : 'dirty'
+  return `[ZERO3 REMOTE TASK]\n\nTask ID: ${task.task_id}\nExecution ID: ${task.execution_id}\nPermission intent: ${task.permission_profile ?? 'standard'}\nMaximum host-started Codex Turns: ${task.execution?.max_turns ?? 1}\n\nAuthoritative Git preflight:\n- repository root: ${gitPreflight.repositoryRoot}\n- HEAD: ${gitPreflight.headCommit}\n- requested base commit: ${gitPreflight.baseCommit ?? 'not required'}\n- worktree: ${clean}\n\nObjective:\n${task.objective}\n\nConstraints:\n${constraints}\n\nAcceptance Criteria:\n${acceptance}\n\nExecution requirements:\n- Inspect the real repository before modifying it.\n- Preserve Zero3 architecture invariants; open-source Codex remains the only Agent Kernel.\n- Use real project verification rather than assuming generated code works.\n- Do not bypass sandbox or approval policy.\n- Do not claim success until the acceptance criteria have been verified.\n- If an action needs permission outside the granted profile, stop and surface the requirement.\n`
 }
 
 function taskFingerprint(task: Zero3RemoteTask): string {
@@ -145,6 +161,108 @@ function findTurnByClientId(threadRead: unknown, clientId: string): { turnId: st
   return null
 }
 
+function commandExecResult(value: unknown, label: string): { exitCode: number; stdout: string; stderr: string } {
+  const root = record(value)
+  const exitCode = Number(root.exitCode)
+  if (!Number.isInteger(exitCode)) throw new Zero3RemoteTaskBlockedError(`${label} returned an invalid exit code`)
+  const stdout = typeof root.stdout === 'string' ? root.stdout : ''
+  const stderr = typeof root.stderr === 'string' ? root.stderr : ''
+  return { exitCode, stdout, stderr }
+}
+
+function boundedDiagnostic(value: string): string {
+  const text = value.trim()
+  return text.length <= 2_000 ? text : `${text.slice(0, 1_997)}...`
+}
+
+async function runGitCommand(
+  codex: Zero3CodexRuntime,
+  workspace: string,
+  args: string[],
+  label: string
+): Promise<{ stdout: string; stderr: string }> {
+  let response: unknown
+  try {
+    response = await codex.execCommand(
+      {
+        command: ['git', ...args],
+        cwd: workspace,
+        timeoutMs: GIT_COMMAND_TIMEOUT_MS,
+        outputBytesCap: GIT_OUTPUT_BYTES_CAP,
+        sandboxPolicy: { type: 'readOnly', networkAccess: false }
+      },
+      GIT_COMMAND_REQUEST_TIMEOUT_MS
+    )
+  } catch (error) {
+    throw new Zero3RemoteTaskBlockedError(
+      `${label} could not be proven through Codex command/exec: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+
+  const result = commandExecResult(response, label)
+  if (result.exitCode !== 0) {
+    const detail = boundedDiagnostic(result.stderr || result.stdout || `exit code ${result.exitCode}`)
+    throw new Zero3RemoteTaskBlockedError(`${label} failed: ${detail}`)
+  }
+  return { stdout: result.stdout, stderr: result.stderr }
+}
+
+function workspaceInsideRepository(repositoryRoot: string, workspace: string): boolean {
+  const relative = path.relative(repositoryRoot, workspace)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+async function runGitPreflight(
+  codex: Zero3CodexRuntime,
+  workspace: string,
+  task: Zero3RemoteTask
+): Promise<Zero3RemoteGitPreflight> {
+  const rootResult = await runGitCommand(codex, workspace, ['rev-parse', '--show-toplevel'], 'Git repository-root preflight')
+  const repositoryRootText = rootResult.stdout.trim().split(/\r?\n/, 1)[0] ?? ''
+  if (!repositoryRootText) throw new Zero3RemoteTaskBlockedError('Git repository-root preflight returned an empty repository root')
+  const repositoryRoot = path.resolve(repositoryRootText)
+  if (!workspaceInsideRepository(repositoryRoot, workspace)) {
+    throw new Zero3RemoteTaskBlockedError('remote task workspace is not inside the Git repository reported by Codex command/exec')
+  }
+
+  const headResult = await runGitCommand(codex, workspace, ['rev-parse', '--verify', 'HEAD'], 'Git HEAD preflight')
+  const headCommit = requiredString(headResult.stdout.trim().split(/\r?\n/, 1)[0], 'Git HEAD commit', 128)
+
+  let baseCommit: string | null = null
+  if (task.target.base_ref) {
+    const baseResult = await runGitCommand(
+      codex,
+      workspace,
+      ['rev-parse', '--verify', '--end-of-options', `${task.target.base_ref}^{commit}`],
+      'Git base-ref preflight'
+    )
+    baseCommit = requiredString(baseResult.stdout.trim().split(/\r?\n/, 1)[0], 'Git base commit', 128)
+    if (headCommit.toLowerCase() !== baseCommit.toLowerCase()) {
+      throw new Zero3RemoteTaskBlockedError(
+        `Git base-ref preflight failed: workspace HEAD ${headCommit} does not match requested base ${baseCommit}`
+      )
+    }
+  }
+
+  let cleanWorktree: boolean | null = null
+  if (task.execution?.require_clean_worktree) {
+    const statusResult = await runGitCommand(
+      codex,
+      workspace,
+      ['status', '--porcelain=v1', '--untracked-files=normal'],
+      'Git clean-worktree preflight'
+    )
+    cleanWorktree = statusResult.stdout.trim().length === 0
+    if (!cleanWorktree) {
+      throw new Zero3RemoteTaskBlockedError(
+        `Git clean-worktree preflight failed: ${boundedDiagnostic(statusResult.stdout) || 'workspace is dirty'}`
+      )
+    }
+  }
+
+  return { repositoryRoot, headCommit, baseCommit, cleanWorktree }
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
@@ -173,19 +291,7 @@ export class Zero3RemoteTaskRunner {
     const allowedWorkspace = zero3RemoteWorkspaceAllowed(this.config, task.target.workspace)
     if (!allowedWorkspace) throw new Zero3RemoteTaskBlockedError('remote task workspace is not present in the local allow-list')
     const workspace = path.resolve(allowedWorkspace)
-
-    // H3 has no generic Git or shell escape hatch outside Codex. Until a
-    // host-owned, Codex-authoritative Git preflight exists, explicit conditions
-    // that cannot be proven through the narrow adapter are rejected rather than
-    // silently treated as satisfied.
-    if (task.target.base_ref) {
-      throw new Zero3RemoteTaskBlockedError('target.base_ref requires a future Codex-authoritative Git preflight; H3 will not guess it')
-    }
-    if (task.execution?.require_clean_worktree) {
-      throw new Zero3RemoteTaskBlockedError(
-        'execution.require_clean_worktree requires a future Codex-authoritative Git preflight; H3 will not bypass the kernel to inspect it'
-      )
-    }
+    const gitPreflight = await runGitPreflight(this.codex, workspace, task)
 
     let mapping = await this.mappings.get(task.task_id)
     if (mapping) {
@@ -200,9 +306,9 @@ export class Zero3RemoteTaskRunner {
       }
       mapping = { ...mapping, turnIds: [...mapping.turnIds] }
     } else {
-      // H3 deliberately preserves the current Zero3 desktop safety boundary:
-      // remote tasks do not silently widen the default sandbox. Codex can issue
-      // its normal server-originated approval request if a write/escalation is needed.
+      // Remote tasks deliberately preserve the current Zero3 desktop safety
+      // boundary: the host does not silently widen the default sandbox. Codex
+      // remains authoritative for write/escalation approval.
       const threadResult = await this.codex.startThread({
         cwd: workspace,
         approvalPolicy: 'on-request',
@@ -222,6 +328,8 @@ export class Zero3RemoteTaskRunner {
     }
 
     const evidence = new Zero3RemoteEvidenceCollector(mapping)
+    const gitEvidence = evidence.push('remote.git.preflight', gitPreflight)
+    if (onEvidence) await onEvidence(gitEvidence.sequence, gitEvidence.method, gitEvidence.params)
     const threadEvidence = evidence.push(mapping.turnIds.length ? 'remote.thread.resumed' : 'remote.thread.started', {
       threadId: mapping.threadId,
       workspace
@@ -260,7 +368,7 @@ export class Zero3RemoteTaskRunner {
           {
             threadId: mapping.threadId,
             clientUserMessageId,
-            input: [{ type: 'text', text: taskPrompt(task), text_elements: [] }]
+            input: [{ type: 'text', text: taskPrompt(task, gitPreflight), text_elements: [] }]
           },
           30_000
         )
@@ -315,6 +423,7 @@ export class Zero3RemoteTaskRunner {
           state: 'succeeded' as const,
           task,
           mapping,
+          gitPreflight,
           terminal: { turnId, status },
           evidence: evidence.snapshot()
         }
@@ -324,6 +433,7 @@ export class Zero3RemoteTaskRunner {
           state: 'failed' as const,
           task,
           mapping,
+          gitPreflight,
           terminal: { turnId, status, error: turn.error ?? null },
           evidence: evidence.snapshot()
         }
@@ -336,6 +446,7 @@ export class Zero3RemoteTaskRunner {
       state: 'outcome_unknown' as const,
       task,
       mapping,
+      gitPreflight,
       terminal: { turnId, status: lastStatus || 'unknown', reason: 'remote task observation timed out' },
       evidence: evidence.snapshot()
     }
