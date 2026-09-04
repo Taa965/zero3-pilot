@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -39,6 +39,7 @@ function id(value: unknown, label: string) {
   if (!text || text.length > 256 || !/^[A-Za-z0-9._:-]+$/.test(text)) throw new Error(`${label} is invalid`)
   return text
 }
+function storageName(logicalId: string) { return createHash('sha256').update(logicalId, 'utf8').digest('hex') }
 
 export class Zero3ReviewLoopStore {
   private tail: Promise<void> = Promise.resolve()
@@ -49,7 +50,9 @@ export class Zero3ReviewLoopStore {
     try {
       const buffer = await fs.readFile(this.file(taskId))
       if (buffer.byteLength > MAX_FILE_BYTES) throw new Error('review record exceeds size limit')
-      return JSON.parse(buffer.toString('utf8')) as ReviewRecord
+      const record = JSON.parse(buffer.toString('utf8')) as ReviewRecord
+      if (record.taskId !== taskId) throw new Error('review record identity mismatch')
+      return structuredClone(record)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error
@@ -158,17 +161,18 @@ export class Zero3ReviewLoopStore {
     return this.get(taskIdValue).then(record => record?.cycles.at(-1)?.fixRequest ? structuredClone(record.cycles.at(-1)!.fixRequest) : null)
   }
 
-  private file(taskId: string) { return path.join(this.root, `${taskId}.json`) }
+  private file(taskId: string) { return path.join(this.root, `${storageName(id(taskId, 'taskId'))}.json`) }
   private mutate<T>(operation: () => Promise<T>) {
     const task = this.tail.then(operation, operation)
     this.tail = task.then(() => undefined, () => undefined)
     return task
   }
   private async write(record: ReviewRecord) {
+    const taskId = id(record.taskId, 'taskId')
     const serialized = `${JSON.stringify(record, null, 2)}\n`
     if (Buffer.byteLength(serialized, 'utf8') > MAX_FILE_BYTES) throw new Error('review record exceeds size limit')
     await fs.mkdir(this.root, { recursive: true })
-    const target = this.file(record.taskId)
+    const target = this.file(taskId)
     const temporary = `${target}.tmp-${process.pid}-${randomUUID()}`
     await fs.writeFile(temporary, serialized, { encoding: 'utf8', mode: 0o600 })
     await fs.rename(temporary, target)
