@@ -35,6 +35,11 @@ export type Zero3UpdateGptWebNavigationInput = {
   pageTitle?: string | null
 }
 
+export type Zero3ResolveGptWebNavigationResult = {
+  entry: Zero3GptWebWorkspaceEntry
+  previousEntryId: string | null
+}
+
 export type Zero3RenameWorkspaceEntryInput = {
   id: string
   title: string | null
