@@ -66,3 +66,8 @@ export type Zero3RenameWorkspaceEntryInput = {
   id: string
   title: string | null
 }
+
+export type Zero3SetWorkspaceProjectInput = {
+  id: string
+  projectId: string | null
+}
