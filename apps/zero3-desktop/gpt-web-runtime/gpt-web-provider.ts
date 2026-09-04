@@ -128,17 +128,13 @@ function normalizeBounds(value: unknown): Zero3GptWebBounds {
 
 export class Zero3GptWebProvider {
   private readonly live = new Map<string, LiveGptWebView>()
-  private readonly profileSession: Session
+  private profileSession: Session | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly entries: Zero3WorkspaceEntryStore,
     private readonly emitEvent: EventSink
-  ) {
-    this.profileSession = electronSession.fromPartition(ZERO3_GPT_WEB_PARTITION, { cache: true })
-    this.profileSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
-    this.profileSession.setPermissionCheckHandler(() => false)
-  }
+  ) {}
 
   async create(projectId?: string | null): Promise<Zero3GptWebWorkspaceEntry> {
     const entry = await this.entries.createGptWeb({ projectId: projectId ?? null })
@@ -233,6 +229,15 @@ export class Zero3GptWebProvider {
     for (const id of [...this.live.keys()]) this.destroyLive(id, 'suspended')
   }
 
+  private getProfileSession(): Session {
+    if (this.profileSession) return this.profileSession
+    const profile = electronSession.fromPartition(ZERO3_GPT_WEB_PARTITION, { cache: true })
+    profile.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
+    profile.setPermissionCheckHandler(() => false)
+    this.profileSession = profile
+    return profile
+  }
+
   private async requireEntry(id: string): Promise<Zero3GptWebWorkspaceEntry> {
     const entry = await this.entries.get(id)
     if (!entry || entry.kind !== 'gpt_web') throw new Error('GPT Web workspace entry was not found')
@@ -249,9 +254,10 @@ export class Zero3GptWebProvider {
     }
     if (existing) this.live.delete(entry.id)
 
+    const profile = this.getProfileSession()
     const view = new WebContentsView({
       webPreferences: {
-        session: this.profileSession,
+        session: profile,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -305,7 +311,7 @@ export class Zero3GptWebProvider {
           height: 760,
           show: true,
           webPreferences: {
-            session: this.profileSession,
+            session: contents.session,
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: true,
