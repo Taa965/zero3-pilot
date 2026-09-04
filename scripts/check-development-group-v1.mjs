@@ -42,7 +42,13 @@ requireText(worktreeResolver, 'resolve(repositoryRoot, session.worktree)', 'rela
 
 const supervisor = read('apps/zero3-desktop/group-runtime/runtime/worker-supervisor.ts')
 requireText(supervisor, 'markOutcomeUnknown', 'supervisor fail-closed ambiguity handling')
+requireText(supervisor, 'mayReleaseExecutorBinding', 'settled Executor binding release policy')
+requireText(supervisor, 'input.runner.close()', 'settled Executor binding release')
 forbid(supervisor, /setInterval|setTimeout\([^,]+,\s*0\)/u, 'polling/retry loop in worker supervisor')
+
+const retry = read('apps/zero3-desktop/group-runtime/runtime/retry-session.ts')
+requireText(retry, 'facade.supervisor.isActive(sessionId)', 'retry active-authority collision gate')
+requireText(retry, 'OutcomeUnknown cannot enter retry', 'OutcomeUnknown retry prohibition')
 
 const lifecycle = read('apps/zero3-desktop/group-runtime/runtime/session-lifecycle.ts')
 requireText(lifecycle, 'runtime_restart_without_authoritative_executor_outcome', 'restart ambiguity evidence')
@@ -59,6 +65,14 @@ const handoffStore = read('apps/zero3-desktop/executor-runtime/handoff/handoff-s
 requireText(handoffStore, "createHash('sha256')", 'unsafe logical identity path encoding')
 requireText(handoffStore, 'parsed.task_id !== taskId', 'logical task identity verification after storage encoding')
 requireText(handoffStore, 'parsed.execution_id !== executionId', 'logical execution identity verification after storage encoding')
+
+const verificationPolicy = JSON.parse(read('.zero3/verification-policy.json'))
+if (verificationPolicy.schema !== 'zero3.pilot.verification-policy.v1') throw new Error('Development Group verification policy schema changed')
+if (verificationPolicy.revision !== 'zero3-pilot-dg-v1-2026-09-04.2') throw new Error('Development Group verification policy revision changed')
+if (!Array.isArray(verificationPolicy.commands) || verificationPolicy.commands.length < 3) throw new Error('Development Group verification policy is incomplete')
+for (const command of verificationPolicy.commands) {
+  if (typeof command.command !== 'string' || !command.command.startsWith('[')) throw new Error('verification commands must remain shellless JSON argv arrays')
+}
 
 const desktopPort = read('apps/zero3-desktop/group-runtime/desktop/desktop-port.ts')
 const desktopIpc = read('apps/zero3-desktop/group-runtime/desktop/desktop-ipc.ts')
@@ -96,6 +110,7 @@ requireText(desktopRuntime, 'GitSessionWorkspaceProvisioner', 'Session Git workt
 requireText(desktopRuntime, 'createSessionWorktree(worktree, session.branch, session.baselineSha)', 'fresh Session worktree creation from frozen baseline')
 requireText(desktopRuntime, 'refusing to adopt pre-existing fresh Session branch', 'fresh Session branch collision fail-closed gate')
 requireText(desktopRuntime, 'refusing to recreate from baseline', 'retry worktree evidence-preserving fail-closed gate')
+requireText(desktopRuntime, 'this.executorManager.close(taskId', 'post-recovery quarantined Executor binding release')
 requireText(desktopRuntime, 'shell: false', 'shellless verification execution')
 requireText(desktopRuntime, 'JSON.parse(command)', 'argv-only verification command parsing')
 forbid(desktopRuntime, /spawn\s*\(|createZero3CodexAppServer|codex\s+app-server/iu, 'second Codex process/kernel in Desktop runtime composition')
