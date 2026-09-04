@@ -35,7 +35,7 @@ function broadcastZero3GeminiWebEvent(event: unknown) {
 }
 const zero3GeminiWeb = new Zero3GeminiWebProvider(zero3WorkspaceEntries, broadcastZero3GeminiWebEvent)
 function zero3GeminiRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 function zero3GeminiId(value: unknown): string {
   const id = zero3GeminiRecord(value).id
@@ -47,11 +47,13 @@ function zero3GeminiParent(event: Electron.IpcMainInvokeEvent): BrowserWindow {
   if (!parent || parent.isDestroyed()) throw new Error('Gemini Web parent window is unavailable')
   return parent
 }
-ipcMain.handle('zero3:gemini-web:create', (_event, request: unknown) => {
+ipcMain.handle('zero3:gemini-web:create', async (_event, request: unknown) => {
   const input = zero3GeminiRecord(request)
-  const projectId = input.projectId == null ? null : input.projectId
-  if (projectId != null && typeof projectId !== 'string') throw new Error('projectId must be a string or null')
-  return zero3GeminiWeb.create(projectId as string | null)
+  const requestedProjectId = input.projectId == null ? null : input.projectId
+  if (requestedProjectId != null && typeof requestedProjectId !== 'string') throw new Error('projectId must be a string or null')
+  const activeProject = requestedProjectId == null ? await zero3ProjectStore.getActive() : null
+  const projectId = (requestedProjectId as string | null) ?? activeProject?.id ?? null
+  return zero3GeminiWeb.create(projectId)
 })
 ipcMain.handle('zero3:gemini-web:show', (event, request: unknown) => {
   const input = zero3GeminiRecord(request)
