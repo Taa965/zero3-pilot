@@ -1,8 +1,8 @@
 import type { Zero3AgentTarget, Zero3TaskSpecV2, Zero3TaskType } from './agent-contracts'
 
 export type Zero3ProviderAvailability = {
-  codex: { available: boolean; authenticated: boolean }
-  gemini: { available: boolean; authenticated: boolean }
+  codex: { available: boolean; authenticated: boolean | null }
+  gemini: { available: boolean; authenticated: boolean | null }
 }
 
 export type Zero3RouteDecision = {
@@ -14,9 +14,13 @@ export type Zero3RouteDecision = {
 const GEMINI_PREFERRED = new Set<Zero3TaskType>(['DESIGN', 'RESEARCH', 'REVIEW'])
 const CODEX_PREFERRED = new Set<Zero3TaskType>(['IMPLEMENT', 'VERIFY', 'FIX', 'INTEGRATE'])
 
-function available(target: 'CODEX' | 'GEMINI', availability: Zero3ProviderAvailability) {
-  const state = target === 'CODEX' ? availability.codex : availability.gemini
-  return state.available && state.authenticated
+function providerState(target: 'CODEX' | 'GEMINI', availability: Zero3ProviderAvailability) {
+  return target === 'CODEX' ? availability.codex : availability.gemini
+}
+
+function autoEligible(target: 'CODEX' | 'GEMINI', availability: Zero3ProviderAvailability) {
+  const state = providerState(target, availability)
+  return state.available && state.authenticated === true
 }
 
 export function validateTaskSpecV2(task: Zero3TaskSpecV2): void {
@@ -39,10 +43,20 @@ export class Zero3AgentRouter {
     validateTaskSpecV2(task)
 
     if (task.target !== 'AUTO') {
-      if (!available(task.target, availability)) {
-        throw new Error(`Target ${task.target} is unavailable or unauthenticated; explicit targets are never silently changed`)
+      const state = providerState(task.target, availability)
+      if (!state.available) {
+        throw new Error(`Target ${task.target} is unavailable; explicit targets are never silently changed`)
       }
-      return { target: task.target, reason: 'explicit user/task target', fallbackAllowed: false }
+      if (state.authenticated === false) {
+        throw new Error(`Target ${task.target} is known unauthenticated; explicit targets are never silently changed`)
+      }
+      return {
+        target: task.target,
+        reason: state.authenticated === true
+          ? 'explicit user/task target with known authenticated provider'
+          : 'explicit user/task target; provider runtime must verify authentication before sending the task prompt',
+        fallbackAllowed: false
+      }
     }
 
     const preferred: 'CODEX' | 'GEMINI' = GEMINI_PREFERRED.has(task.type)
@@ -50,13 +64,19 @@ export class Zero3AgentRouter {
       : CODEX_PREFERRED.has(task.type)
         ? 'CODEX'
         : 'CODEX'
-    if (available(preferred, availability)) {
-      return { target: preferred, reason: `AUTO policy prefers ${preferred} for task type ${task.type}`, fallbackAllowed: true }
+    if (autoEligible(preferred, availability)) {
+      return { target: preferred, reason: `AUTO policy prefers known-authenticated ${preferred} for task type ${task.type}`, fallbackAllowed: true }
     }
     const alternate = preferred === 'CODEX' ? 'GEMINI' : 'CODEX'
-    if (available(alternate, availability)) {
-      return { target: alternate, reason: `${preferred} unavailable; AUTO fallback to ${alternate}`, fallbackAllowed: true }
+    if (autoEligible(alternate, availability)) {
+      const preferredState = providerState(preferred, availability)
+      const reason = !preferredState.available
+        ? `${preferred} unavailable; AUTO fallback to known-authenticated ${alternate}`
+        : preferredState.authenticated === false
+          ? `${preferred} unauthenticated; AUTO fallback to known-authenticated ${alternate}`
+          : `${preferred} authentication is not yet proven; AUTO fallback to known-authenticated ${alternate}`
+      return { target: alternate, reason, fallbackAllowed: true }
     }
-    throw new Error('No eligible authenticated provider is available for AUTO routing')
+    throw new Error('No eligible known-authenticated provider is available for AUTO routing')
   }
 }
