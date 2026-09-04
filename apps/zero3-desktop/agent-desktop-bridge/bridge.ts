@@ -6,8 +6,12 @@ import type {
 export const ZERO3_AGENT_DESKTOP_CHANNELS = {
   taskGet: 'zero3:agent-task:get',
   dispatch: 'zero3:agent-task:dispatch',
-  reviewDecision: 'zero3:agent-task:review-decision'
+  reviewDecision: 'zero3:agent-task:review-decision',
+  recoveryInspect: 'zero3:agent-task:recovery-inspect',
+  recoveryResolve: 'zero3:agent-task:recovery-resolve'
 } as const
+
+export type Zero3AgentRecoveryResolution = 'KEEP_UNKNOWN' | 'ACCEPT_PARTIAL' | 'MARK_FAILED'
 
 export type Zero3AgentDesktopRuntime = {
   task(taskId: string): Promise<unknown>
@@ -17,12 +21,16 @@ export type Zero3AgentDesktopRuntime = {
     runtimeConversationId?: string | null
   }): Promise<unknown>
   submitReviewDecision(taskId: string, decision: Zero3ReviewDecision, contextVersion: number): Promise<unknown>
+  recoveryInspect(taskId: string): Promise<unknown>
+  recoveryResolve(taskId: string, resolution: Zero3AgentRecoveryResolution, rationale: string): Promise<unknown>
 }
 
 export type Zero3AgentDesktopHandlers = {
   taskGet(request: unknown): Promise<unknown>
   dispatch(request: unknown): Promise<unknown>
   reviewDecision(request: unknown): Promise<unknown>
+  recoveryInspect(request: unknown): Promise<unknown>
+  recoveryResolve(request: unknown): Promise<unknown>
 }
 
 type JsonRecord = Record<string, unknown>
@@ -64,6 +72,10 @@ function taskSpec(value: unknown): Zero3TaskSpecV2 {
   if (!Array.isArray(task.requirements) || !Array.isArray(task.constraints) || !Array.isArray(task.completionGate)) {
     throw new Error('TaskSpec arrays are invalid')
   }
+  if (!Array.isArray(task.requiredContracts) || !Array.isArray(task.inputArtifacts) || !Array.isArray(task.expectedOutputs) || !Array.isArray(task.verification)) {
+    throw new Error('TaskSpec contract/artifact/output/verification arrays are invalid')
+  }
+  if (!task.reviewPolicy || typeof task.reviewPolicy !== 'object') throw new Error('TaskSpec reviewPolicy is invalid')
   return task
 }
 
@@ -80,6 +92,11 @@ function reviewDecision(value: unknown): Zero3ReviewDecision {
     throw new Error('ReviewDecision arrays are invalid')
   }
   return decision
+}
+
+function recoveryResolution(value: unknown): Zero3AgentRecoveryResolution {
+  if (value === 'KEEP_UNKNOWN' || value === 'ACCEPT_PARTIAL' || value === 'MARK_FAILED') return value
+  throw new Error('recovery resolution is invalid')
 }
 
 export function createZero3AgentDesktopHandlers(runtime: Zero3AgentDesktopRuntime): Zero3AgentDesktopHandlers {
@@ -106,6 +123,20 @@ export function createZero3AgentDesktopHandlers(runtime: Zero3AgentDesktopRuntim
       const taskId = boundedString(input.taskId, 'taskId', 128)
       if (decision.taskId !== taskId) throw new Error('ReviewDecision task identity mismatch')
       return runtime.submitReviewDecision(taskId, decision, safeContextVersion(input.contextVersion))
+    },
+
+    async recoveryInspect(request) {
+      const input = record(request)
+      return runtime.recoveryInspect(boundedString(input.taskId, 'taskId', 128))
+    },
+
+    async recoveryResolve(request) {
+      const input = record(request)
+      return runtime.recoveryResolve(
+        boundedString(input.taskId, 'taskId', 128),
+        recoveryResolution(input.resolution),
+        boundedString(input.rationale, 'rationale', 8_000)
+      )
     }
   }
 }

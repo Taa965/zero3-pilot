@@ -23,6 +23,16 @@ function text(value: unknown, label: string, max: number) {
   return normalized
 }
 
+function taskId(value: unknown): string {
+  const normalized = text(value, 'taskId', 256)
+  if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) throw new Error('taskId is invalid')
+  return normalized
+}
+
+function storageName(logicalId: string): string {
+  return createHash('sha256').update(logicalId, 'utf8').digest('hex')
+}
+
 function inside(root: string, candidate: string) {
   const relative = path.relative(root, candidate)
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
@@ -47,7 +57,7 @@ export class Zero3ArtifactStore {
     allowedRoot: string
   }): Promise<Zero3ArtifactRecord> {
     return this.mutate(async () => {
-      const taskId = text(input.taskId, 'taskId', 256)
+      const logicalTaskId = taskId(input.taskId)
       const kind = text(input.kind, 'kind', 128)
       if (!Number.isInteger(input.sourceCycle) || input.sourceCycle < 1 || input.sourceCycle > 1000) throw new Error('sourceCycle is invalid')
       const allowedRoot = path.resolve(input.allowedRoot)
@@ -63,7 +73,7 @@ export class Zero3ArtifactStore {
 
       const record: Zero3ArtifactRecord = {
         artifactId: `artifact-${randomUUID()}`,
-        taskId,
+        taskId: logicalTaskId,
         sourceProvider: input.sourceProvider,
         sourceCycle: input.sourceCycle,
         kind,
@@ -73,8 +83,8 @@ export class Zero3ArtifactStore {
         sizeBytes,
         createdAt: new Date().toISOString()
       }
-      const indexFile = path.join(this.root, 'tasks', `${taskId}.json`)
-      const existing = await this.readIndex(indexFile)
+      const indexFile = this.indexFile(logicalTaskId)
+      const existing = await this.readIndex(indexFile, logicalTaskId)
       existing.push(record)
       await this.atomicJson(indexFile, existing)
       return { ...record }
@@ -82,14 +92,14 @@ export class Zero3ArtifactStore {
   }
 
   async list(taskIdValue: unknown): Promise<Zero3ArtifactRecord[]> {
-    const taskId = text(taskIdValue, 'taskId', 256)
-    return this.readIndex(path.join(this.root, 'tasks', `${taskId}.json`))
+    const logicalTaskId = taskId(taskIdValue)
+    return this.readIndex(this.indexFile(logicalTaskId), logicalTaskId)
   }
 
   async get(taskIdValue: unknown, artifactIdValue: unknown): Promise<Zero3ArtifactRecord | null> {
-    const taskId = text(taskIdValue, 'taskId', 256)
+    const logicalTaskId = taskId(taskIdValue)
     const artifactId = text(artifactIdValue, 'artifactId', 256)
-    return (await this.list(taskId)).find(value => value.artifactId === artifactId) ?? null
+    return (await this.list(logicalTaskId)).find(value => value.artifactId === artifactId) ?? null
   }
 
   async verify(record: Zero3ArtifactRecord): Promise<boolean> {
@@ -99,16 +109,23 @@ export class Zero3ArtifactStore {
     } catch { return false }
   }
 
+  private indexFile(logicalTaskId: string): string {
+    return path.join(this.root, 'tasks', `${storageName(logicalTaskId)}.json`)
+  }
+
   private mutate<T>(operation: () => Promise<T>): Promise<T> {
     const task = this.tail.then(operation, operation)
     this.tail = task.then(() => undefined, () => undefined)
     return task
   }
 
-  private async readIndex(file: string): Promise<Zero3ArtifactRecord[]> {
+  private async readIndex(file: string, logicalTaskId: string): Promise<Zero3ArtifactRecord[]> {
     try {
       const parsed = JSON.parse(await fs.readFile(file, 'utf8'))
-      return Array.isArray(parsed) ? parsed : []
+      if (!Array.isArray(parsed)) throw new Error('artifact index is invalid')
+      const records = parsed as Zero3ArtifactRecord[]
+      if (records.some(record => record?.taskId !== logicalTaskId)) throw new Error('artifact index task identity mismatch')
+      return records.map(record => ({ ...record }))
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw error

@@ -75,16 +75,30 @@ try {
     npm --prefix apps/zero3-desktop run prepare
   }
 
+  Invoke-Step 'Prepared Hermes desktop composition guard' {
+    node scripts/check-prepared-gemini-integration.mjs
+  }
+
   Write-Host "`n=== Prepared overlay presence ===" -ForegroundColor Cyan
   $Expected = @(
     'electron\zero3\gemini-web\gemini-web-provider.ts',
     'electron\zero3\antigravity\antigravity-adapter.ts',
     'electron\zero3\agent-routing\agent-contracts.ts',
+    'electron\zero3\agent-routing\agent-router.ts',
     'electron\zero3\agent-routing\agent-task-store.ts',
     'electron\zero3\agent-routing\git-authority.ts',
+    'electron\zero3\agent-routing\agent-runtime-orchestrator.ts',
+    'electron\zero3\agent-routing\agent-recovery-controller.ts',
+    'electron\zero3\agent-routing\codex-task-adapter.ts',
+    'electron\zero3\agent-routing\authoritative-result-finalizer.ts',
+    'electron\zero3\agent-routing\verification-collector.ts',
+    'electron\zero3\agent-routing\task-prompt.ts',
+    'electron\zero3\agent-desktop-bridge\bridge.ts',
     'electron\zero3\artifacts\artifact-store.ts',
     'electron\zero3\mcp\task-mcp-server.mjs',
     'electron\zero3\mcp\project-context-server.mjs',
+    'electron\zero3\remote-host\remote-task-runner.ts',
+    'src\app\chat\sidebar\gpt-web-handoff-actions.tsx',
     'src\app\chat\sidebar\gemini-session-section.tsx'
   )
   foreach ($file in $Expected) { Assert-StagedFile $file }
@@ -112,11 +126,11 @@ try {
 
   Write-Host "`nReal-runtime gates still required for final acceptance:" -ForegroundColor Yellow
   Write-Host '- ChatGPT/Gemini persistent-login isolation and credential-leak review.'
-  Write-Host '- Real GPT -> Gemini TaskSpecV2 -> Antigravity -> ExecutionResultV2 -> GPT review cycle.'
-  Write-Host '- CHANGES_REQUESTED fix preserving logical Gemini session/runtime conversation where supported.'
-  Write-Host '- Explicit CODEX/GEMINI target behavior and observable AUTO fallback.'
-  Write-Host '- Dedicated Gemini worktree, Codex-authoritative Git evidence, artifact hash tamper failure.'
-  Write-Host '- Kill/restart before terminal result => durable OutcomeUnknown; no auto-retry; explicit recovery.'
+  Write-Host '- Real GPT -> TaskSpecV2 -> Gemini/Antigravity -> authoritative ExecutionResultV2 -> GPT review cycle.'
+  Write-Host '- CHANGES_REQUESTED executes every requiredFix in the same logical session/worktree/provider and creates a new immutable review cycle.'
+  Write-Host '- Explicit CODEX/GEMINI target behavior, tri-state authentication handling, and observable AUTO fallback.'
+  Write-Host '- Dedicated linked worktree preflight, Codex-authoritative Git evidence, committed changed-file capture, and artifact hash tamper failure.'
+  Write-Host '- Kill/restart before terminal result => durable OutcomeUnknown; no auto-retry; explicit recovery with state/result consistency.'
   Write-Host '- Task-scoped MCP isolation, candidate-only writes, lease cleanup and no credential leakage.'
   Write-Host 'All items above remain NOT_RUN until separately executed and recorded for this exact SHA.'
 }

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -25,6 +26,7 @@ function contextRoot() { const value = requiredEnv('ZERO3_PROJECT_CONTEXT_DIR');
 
 function assertTask(value) { if (value !== taskId()) throw new Error('MCP tool is scoped to a different task') }
 function assertProject(value) { if (value !== projectId()) throw new Error('MCP tool is scoped to a different project') }
+function storageName(logicalId) { return createHash('sha256').update(logicalId, 'utf8').digest('hex') }
 async function readJson(file) {
   try {
     const buffer = await fs.readFile(file)
@@ -47,21 +49,25 @@ function response(value) { return { content: [{ type: 'text', text: JSON.stringi
 
 async function taskSnapshot(id) {
   assertTask(id)
-  const value = await readJson(path.join(stateRoot(), 'tasks', `${id}.json`))
+  const value = await readJson(path.join(stateRoot(), 'tasks', `${storageName(id)}.json`))
   if (!value) throw new Error('Zero3 task snapshot is unavailable')
+  if (value?.task?.taskId !== id && value?.taskId !== id) throw new Error('Zero3 task snapshot identity mismatch')
   return value
 }
 async function projectContext(id) {
   assertProject(id)
-  return (await readJson(path.join(contextRoot(), 'projects', `${id}.json`))) ?? { projectId: id, version: 0, payload: null }
+  return (await readJson(path.join(contextRoot(), 'projects', `${storageName(id)}.json`))) ?? { projectId: id, version: 0, payload: null }
 }
 async function artifactList(id) {
   assertTask(id)
-  return (await readJson(path.join(artifactsRoot(), 'tasks', `${id}.json`))) ?? []
+  const value = (await readJson(path.join(artifactsRoot(), 'tasks', `${storageName(id)}.json`))) ?? []
+  if (!Array.isArray(value)) throw new Error('artifact index is invalid')
+  if (value.some(record => record?.taskId !== id)) throw new Error('artifact index task identity mismatch')
+  return value
 }
 async function artifactGet(id, artifactId) {
   const list = await artifactList(id)
-  const record = Array.isArray(list) ? list.find(value => value?.artifactId === artifactId) : null
+  const record = list.find(value => value?.artifactId === artifactId)
   if (!record) throw new Error('artifact not found for current task')
   const result = { ...record }
   try {
@@ -75,12 +81,15 @@ async function artifactGet(id, artifactId) {
 }
 async function reviewGet(id) {
   assertTask(id)
-  return (await readJson(path.join(reviewsRoot(), `${id}.json`))) ?? { taskId: id, state: 'DRAFT', cycles: [] }
+  const value = (await readJson(path.join(reviewsRoot(), `${storageName(id)}.json`))) ?? { taskId: id, state: 'DRAFT', cycles: [] }
+  if (value?.taskId !== id) throw new Error('review record task identity mismatch')
+  return value
 }
 async function publish(kind, id, payload) {
   assertTask(id)
-  const file = path.join(stateRoot(), kind, `${id}.json`)
+  const file = path.join(stateRoot(), kind, `${storageName(id)}.json`)
   const current = (await readJson(file)) ?? { taskId: id, version: 0 }
+  if (current?.taskId !== id) throw new Error('published task candidate identity mismatch')
   const next = { ...current, taskId: id, version: Number(current.version ?? 0) + 1, updatedAt: new Date().toISOString(), payload }
   await atomicJson(file, next)
   return next
