@@ -8,6 +8,7 @@ import readline from 'node:readline'
 
 import {
   ZERO3_GEMINI_EXECUTION_RESULT_SCHEMA,
+  type Zero3AntigravityAuthState,
   type Zero3AntigravityMappedEvent,
   type Zero3AntigravitySessionBinding,
   type Zero3AntigravityTurnInput,
@@ -35,7 +36,6 @@ const MAX_LINE_BYTES = 4 * 1024 * 1024
 const MAX_STDERR_LINES = 100
 const START_TIMEOUT_MS = 30_000
 const RESULT_TIMEOUT_MS = 60 * 60 * 1000
-const AUTH_REQUIRED_TEXT = 'authentication required'
 
 function now() { return new Date().toISOString() }
 function record(value: unknown): Record<string, unknown> {
@@ -52,11 +52,29 @@ function isDirectory(value: string) {
 function executableExists(value: string) {
   try { return fs.statSync(value).isFile() } catch { return false }
 }
+function authDiagnostic(value: string): Zero3AntigravityAuthState | null {
+  const lower = value.toLowerCase()
+  if (lower.includes('authentication required') || lower.includes('please sign in') || lower.includes('not authenticated')) {
+    return 'AUTH_REQUIRED'
+  }
+  if (
+    lower.includes('expired') &&
+    (lower.includes('authentication') || lower.includes('credential') || lower.includes('session') || lower.includes('token'))
+  ) {
+    return 'AUTH_EXPIRED'
+  }
+  return null
+}
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null
+}
 
 export function discoverAntigravityBinary(): string | null {
   const configured = process.env.ZERO3_ANTIGRAVITY_BIN?.trim()
   if (configured) {
-    if (!path.isAbsolute(configured) || !executableExists(configured)) throw new Error('ZERO3_ANTIGRAVITY_BIN must point to an existing absolute executable')
+    if (!path.isAbsolute(configured) || !executableExists(configured)) {
+      throw new Error('ZERO3_ANTIGRAVITY_BIN must point to an existing absolute executable')
+    }
     return configured
   }
 
@@ -147,7 +165,11 @@ export class Zero3AntigravityAdapter {
     if (!isDirectory(cwd)) throw new Error(`Antigravity cwd does not exist: ${cwd}`)
 
     const handle = await this.ensureRuntime(logicalSessionId, cwd, inputValue.projectId ?? null)
+    if (handle.binding.authState === 'AUTH_REQUIRED' || handle.binding.authState === 'AUTH_EXPIRED') {
+      throw new Error(`Antigravity ${handle.binding.authState.toLowerCase()}; authenticate with the official interactive agy client and retry`)
+    }
     if (handle.pending) throw new Error('Antigravity logical session already has an active turn')
+
     const turnId = `agy-turn-${randomUUID()}`
     const taskId = inputValue.taskId?.trim() || null
     handle.terminalSeenForCurrentTurn = false
@@ -180,8 +202,16 @@ export class Zero3AntigravityAdapter {
     const turnId = required(turnIdValue, 'turnId', 256)
     const promise = this.turns.get(turnId)
     if (!promise) throw new Error('Antigravity turn is unknown or no longer retained')
-    const timer = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Antigravity turn observation timed out')), RESULT_TIMEOUT_MS))
-    try { return await Promise.race([promise, timer]) } finally { this.turns.delete(turnId) }
+    let timer: NodeJS.Timeout | null = null
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Antigravity turn observation timed out')), RESULT_TIMEOUT_MS)
+    })
+    try {
+      return await Promise.race([promise, timeout])
+    } finally {
+      if (timer) clearTimeout(timer)
+      this.turns.delete(turnId)
+    }
   }
 
   async interrupt(logicalSessionIdValue: unknown) {
@@ -218,8 +248,6 @@ export class Zero3AntigravityAdapter {
 
     const persisted = await this.store.get(logicalSessionId)
     if (persisted && path.resolve(persisted.cwd) !== cwd && persisted.conversationId) {
-      // Antigravity conversation caches are workspace scoped. Refuse to silently
-      // resume one conversation into a different worktree.
       throw new Error('Antigravity logical session is already bound to a different cwd; create a new logical session')
     }
     const binding: Zero3AntigravitySessionBinding = persisted ?? {
@@ -239,34 +267,60 @@ export class Zero3AntigravityAdapter {
     binding.updatedAt = now()
     await this.store.put(binding)
 
-    const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--sandbox', '--json-schema', JSON.stringify(ZERO3_GEMINI_EXECUTION_RESULT_SCHEMA)]
+    const args = [
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
+      '--sandbox',
+      '--print-timeout', '60m',
+      '--json-schema', JSON.stringify(ZERO3_GEMINI_EXECUTION_RESULT_SCHEMA)
+    ]
     if (binding.conversationId) args.push('--conversation', binding.conversationId)
+    const shell = process.platform === 'win32' && /\.cmd$/i.test(this.binary!)
     const child = spawn(this.binary!, args, {
       cwd,
       env: { ...process.env },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      shell: false
+      shell
     })
     const handle: RuntimeHandle = { binding, child, pending: null, terminalSeenForCurrentTurn: false, stderrTail: [] }
     this.handles.set(logicalSessionId, handle)
     this.observeProcess(handle)
-
-    await Promise.race([
-      new Promise<void>((resolve, reject) => {
-        const onEvent = (event: Zero3AntigravityMappedEvent) => {
-          if (event.logicalSessionId !== logicalSessionId) return
-          if (event.type === 'agent.runtime.started' || event.type === 'provider.auth.required') {
-            cleanup(); resolve()
-          }
-        }
-        const onError = (error: Error) => { cleanup(); reject(error) }
-        const cleanup = () => { this.listeners.delete(onEvent); child.off('error', onError) }
-        this.listeners.add(onEvent); child.once('error', onError)
-      }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Antigravity runtime did not emit init within 30 seconds')), START_TIMEOUT_MS))
-    ])
+    await this.waitUntilStarted(handle)
     return handle
+  }
+
+  private waitUntilStarted(handle: RuntimeHandle): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup()
+        reject(new Error('Antigravity runtime did not emit init/auth state within 30 seconds'))
+      }, START_TIMEOUT_MS)
+      const onEvent = (event: Zero3AntigravityMappedEvent) => {
+        if (event.logicalSessionId !== handle.binding.logicalSessionId) return
+        if (event.type === 'agent.runtime.started' || event.type === 'provider.auth.required') {
+          cleanup()
+          resolve()
+        }
+      }
+      const onError = (error: Error) => {
+        cleanup()
+        reject(error)
+      }
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        cleanup()
+        reject(new Error(`Antigravity runtime exited before init (code=${code ?? 'null'}, signal=${signal ?? 'none'})`))
+      }
+      const cleanup = () => {
+        clearTimeout(timer)
+        this.listeners.delete(onEvent)
+        handle.child.off('error', onError)
+        handle.child.off('exit', onExit)
+      }
+      this.listeners.add(onEvent)
+      handle.child.once('error', onError)
+      handle.child.once('exit', onExit)
+    })
   }
 
   private observeProcess(handle: RuntimeHandle) {
@@ -278,7 +332,9 @@ export class Zero3AntigravityAdapter {
         return
       }
       let message: Record<string, unknown>
-      try { message = record(JSON.parse(line)) } catch {
+      try {
+        message = record(JSON.parse(line))
+      } catch {
         this.failPending(handle, new Error('Antigravity stdout emitted invalid NDJSON'))
         handle.child.kill()
         return
@@ -291,11 +347,13 @@ export class Zero3AntigravityAdapter {
       const bounded = line.slice(0, 4000)
       handle.stderrTail.push(bounded)
       if (handle.stderrTail.length > MAX_STDERR_LINES) handle.stderrTail.shift()
-      if (bounded.toLowerCase().includes(AUTH_REQUIRED_TEXT)) {
-        handle.binding.authState = 'AUTH_REQUIRED'
+      const auth = authDiagnostic(bounded)
+      if (auth) {
+        handle.binding.authState = auth
         handle.binding.state = 'ERROR'
+        handle.binding.updatedAt = now()
         void this.store.put(handle.binding)
-        this.emit(handle, 'provider.auth.required', { message: 'Antigravity authentication required' })
+        this.emit(handle, 'provider.auth.required', { state: auth, message: 'Authenticate with the official interactive agy client' })
       }
     })
 
@@ -325,25 +383,45 @@ export class Zero3AntigravityAdapter {
   }
 
   private async handleMessage(handle: RuntimeHandle, message: Record<string, unknown>) {
-    const event = typeof message.event === 'string' ? message.event : ''
+    const event = asString(message.event) ?? ''
     if (event === 'init') {
-      const conversationId = typeof message.conversation_id === 'string' ? message.conversation_id : null
+      const init = record(message.init)
+      const conversationId = asString(message.conversation_id) ?? asString(init.conversation_id)
       if (conversationId) {
         handle.binding.conversationId = conversationId
         handle.binding.authState = 'AUTHENTICATED'
       }
       handle.binding.state = handle.pending ? 'RUNNING' : 'READY'
-      handle.binding.lastEventAt = now(); handle.binding.updatedAt = now()
+      handle.binding.lastEventAt = now()
+      handle.binding.updatedAt = now()
       await this.store.put(handle.binding)
-      this.emit(handle, 'agent.runtime.started', { init: record(message.init) })
+      this.emit(handle, 'agent.runtime.started', { init })
+      this.emit(handle, 'provider.health.changed', {
+        available: true,
+        authenticated: handle.binding.authState === 'AUTHENTICATED',
+        authState: handle.binding.authState
+      })
       return
     }
+
     if (event === 'step_update') {
-      const step = record(message.step_update)
+      const nested = record(message.step_update)
+      const step = Object.keys(nested).length > 0 ? nested : message
       const pending = handle.pending
-      const stepType = typeof step.step_type === 'string' ? step.step_type : 'unknown'
-      const state = typeof step.state === 'string' ? step.state : 'unknown'
-      const payload = { stepIndex: step.step_index ?? null, state, stepType, toolName: step.tool_name ?? null, toolInfo: step.tool_info ?? null, subagentInfo: step.subagent_info ?? null }
+      const stepType = asString(step.step_type) ?? 'unknown'
+      const state = asString(step.state) ?? 'unknown'
+      const conversationId = asString(step.conversation_id)
+      if (conversationId) handle.binding.conversationId = conversationId
+      const payload = {
+        stepIndex: step.step_index ?? null,
+        state,
+        stepType,
+        toolName: step.tool_name ?? null,
+        toolInfo: step.tool_info ?? null,
+        subagentInfo: step.subagent_info ?? null,
+        usage: step.usage ?? null,
+        durationSeconds: step.duration_seconds ?? null
+      }
       if (stepType === 'agent_response' && typeof step.text_delta === 'string' && step.text_delta) {
         this.emit(handle, 'agent.response.delta', { delta: step.text_delta }, pending?.turnId ?? null, pending?.taskId ?? null)
       } else if (stepType === 'tool') {
@@ -353,31 +431,47 @@ export class Zero3AntigravityAdapter {
       }
       return
     }
+
     if (event === 'result') {
       const pending = handle.pending
       if (!pending) return
+      const envelope = record(message.result)
+      const resultPayload = Object.keys(envelope).length > 0 ? envelope : message
       handle.terminalSeenForCurrentTurn = true
       handle.pending = null
-      const conversationId = typeof message.conversation_id === 'string' ? message.conversation_id : handle.binding.conversationId
+
+      const conversationId = asString(resultPayload.conversation_id) ?? handle.binding.conversationId
       if (conversationId) handle.binding.conversationId = conversationId
       handle.binding.authState = 'AUTHENTICATED'
-      const rawStatus = typeof message.status === 'string' ? message.status : null
+      const rawStatus = asString(resultPayload.status)
       const status = this.mapResultStatus(rawStatus)
       handle.binding.state = status === 'OUTCOME_UNKNOWN' ? 'OUTCOME_UNKNOWN' : status === 'FAILED' ? 'ERROR' : 'READY'
-      handle.binding.lastEventAt = now(); handle.binding.updatedAt = now()
+      handle.binding.lastEventAt = now()
+      handle.binding.updatedAt = now()
       await this.store.put(handle.binding)
+
       const result: Zero3AntigravityTurnResult = {
         turnId: pending.turnId,
         logicalSessionId: handle.binding.logicalSessionId,
         conversationId: handle.binding.conversationId,
         status,
-        response: typeof message.response === 'string' ? message.response : null,
-        structuredOutput: message.structured_output ?? null,
-        error: typeof message.error === 'string' ? message.error : null,
+        response: asString(resultPayload.response),
+        structuredOutput: resultPayload.structured_output ?? null,
+        error: asString(resultPayload.error),
         rawStatus
       }
-      const type = status === 'COMPLETE' ? 'agent.turn.completed' : status === 'OUTCOME_UNKNOWN' ? 'agent.turn.outcome_unknown' : 'agent.turn.failed'
-      this.emit(handle, type, { rawStatus, structuredOutput: result.structuredOutput, error: result.error }, pending.turnId, pending.taskId)
+      const type = status === 'COMPLETE'
+        ? 'agent.turn.completed'
+        : status === 'OUTCOME_UNKNOWN'
+          ? 'agent.turn.outcome_unknown'
+          : 'agent.turn.failed'
+      this.emit(handle, type, {
+        rawStatus,
+        structuredOutput: result.structuredOutput,
+        error: result.error,
+        usage: resultPayload.usage ?? null,
+        numTurns: resultPayload.num_turns ?? null
+      }, pending.turnId, pending.taskId)
       pending.resolve(result)
     }
   }
@@ -401,10 +495,22 @@ export class Zero3AntigravityAdapter {
     if (pending) pending.reject(error)
   }
 
-  private emit(handle: RuntimeHandle, type: Zero3AntigravityMappedEvent['type'], payload: Record<string, unknown>, turnId: string | null = null, taskId: string | null = null) {
+  private emit(
+    handle: RuntimeHandle,
+    type: Zero3AntigravityMappedEvent['type'],
+    payload: Record<string, unknown>,
+    turnId: string | null = null,
+    taskId: string | null = null
+  ) {
     const event: Zero3AntigravityMappedEvent = {
-      eventId: randomUUID(), logicalSessionId: handle.binding.logicalSessionId, taskId, turnId,
-      conversationId: handle.binding.conversationId, at: now(), type, payload
+      eventId: randomUUID(),
+      logicalSessionId: handle.binding.logicalSessionId,
+      taskId,
+      turnId,
+      conversationId: handle.binding.conversationId,
+      at: now(),
+      type,
+      payload
     }
     for (const listener of this.listeners) listener(event)
   }
