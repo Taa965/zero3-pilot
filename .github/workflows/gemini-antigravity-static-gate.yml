@@ -19,6 +19,7 @@ on:
       - 'scripts/check-gemini-antigravity-architecture.mjs'
       - 'scripts/check-prepared-gemini-integration.mjs'
       - 'scripts/acceptance/gemini-antigravity-windows.ps1'
+      - '.github/workflows/windows-alpha-artifact.yml'
       - '.github/workflows/gemini-antigravity-static-gate.yml'
   pull_request:
     paths:
@@ -36,6 +37,7 @@ on:
       - 'scripts/check-gemini-antigravity-architecture.mjs'
       - 'scripts/check-prepared-gemini-integration.mjs'
       - 'scripts/acceptance/gemini-antigravity-windows.ps1'
+      - '.github/workflows/windows-alpha-artifact.yml'
       - '.github/workflows/gemini-antigravity-static-gate.yml'
   workflow_dispatch:
 
