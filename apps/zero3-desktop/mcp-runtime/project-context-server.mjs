@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -22,8 +22,12 @@ function rootDir() {
   return path.resolve(configured)
 }
 
+function storageName(logicalId) {
+  return createHash('sha256').update(logicalId, 'utf8').digest('hex')
+}
+
 function fileFor(kind, id) {
-  return path.join(rootDir(), kind, `${id}.json`)
+  return path.join(rootDir(), kind, `${storageName(id)}.json`)
 }
 
 function serialized(value) {
