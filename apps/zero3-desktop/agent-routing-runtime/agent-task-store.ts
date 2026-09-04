@@ -26,7 +26,15 @@ export type Zero3AgentTaskRecord = {
   updatedAt: string
 }
 
+export type Zero3AgentTaskListInput = {
+  projectId?: string | null
+  states?: Zero3AgentTaskState[] | null
+  limit?: number | null
+}
+
 const MAX_FILE_BYTES = 8 * 1024 * 1024
+const MAX_LIST_FILES = 5_000
+const MAX_LIST_LIMIT = 1_000
 
 function validId(value: unknown, label: string): string {
   const text = typeof value === 'string' ? value.trim() : ''
@@ -40,6 +48,15 @@ function storageName(logicalId: string): string {
 
 function clone<T>(value: T): T {
   return structuredClone(value)
+}
+
+function listLimit(value: unknown): number {
+  if (value == null) return 200
+  const limit = Number(value)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
+    throw new Error(`task list limit must be between 1 and ${MAX_LIST_LIMIT}`)
+  }
+  return limit
 }
 
 export class Zero3AgentTaskStore {
@@ -59,6 +76,42 @@ export class Zero3AgentTaskStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw error
     }
+  }
+
+  async list(input: Zero3AgentTaskListInput = {}): Promise<Zero3AgentTaskRecord[]> {
+    const projectId = input.projectId == null || input.projectId === '' ? null : validId(input.projectId, 'projectId')
+    const states = input.states == null ? null : new Set(input.states)
+    const limit = listLimit(input.limit)
+    if (states && [...states].some(state => typeof state !== 'string' || !state.trim())) {
+      throw new Error('task list states are invalid')
+    }
+
+    let entries: string[]
+    try {
+      entries = (await fs.readdir(this.root))
+        .filter(name => /^[a-f0-9]{64}\.json$/.test(name))
+        .slice(0, MAX_LIST_FILES)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+
+    const records: Zero3AgentTaskRecord[] = []
+    for (const name of entries) {
+      const file = path.join(this.root, name)
+      const buffer = await fs.readFile(file)
+      if (buffer.byteLength > MAX_FILE_BYTES) throw new Error(`agent task record exceeds size limit: ${name}`)
+      const record = JSON.parse(buffer.toString('utf8')) as Zero3AgentTaskRecord
+      const taskId = validId(record.task?.taskId, 'stored taskId')
+      if (storageName(taskId) + '.json' !== name) throw new Error('agent task record filename/identity mismatch')
+      if (projectId && record.task.projectId !== projectId) continue
+      if (states && !states.has(record.state)) continue
+      records.push(clone(record))
+    }
+
+    return records
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, limit)
   }
 
   create(task: Zero3TaskSpecV2, resolvedTarget: 'CODEX' | 'GEMINI'): Promise<Zero3AgentTaskRecord> {
