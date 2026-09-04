@@ -186,7 +186,7 @@ requireAll(bridge, paths.bridge, [
   "reviewDecision: 'zero3:agent-task:review-decision'",
   "recoveryInspect: 'zero3:agent-task:recovery-inspect'",
   "recoveryResolve: 'zero3:agent-task:recovery-resolve'",
-  "'KEEP_UNKNOWN' || value === 'ACCEPT_PARTIAL' || value === 'MARK_FAILED'"
+  "value === 'KEEP_UNKNOWN' || value === 'ACCEPT_PARTIAL' || value === 'MARK_FAILED'"
 ])
 forbid(bridge, paths.bridge, ['shell', 'command:', 'credential', 'token'])
 
