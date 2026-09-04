@@ -1,7 +1,7 @@
 {
   "name": "zero3-development-group",
   "version": "0.1.0",
-  "description": "Persistent, evidence-gated development orchestration for coding projects.",
+  "description": "Plan and verify bounded multi-session coding work with explicit evidence gates.",
   "author": {
     "name": "Zero3 Pilot"
   },
@@ -16,8 +16,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Zero3 Development Group",
-    "shortDescription": "Persistent, evidence-gated coding orchestration",
-    "longDescription": "Plan coding work into bounded development sessions, coordinate dependency waves, verify deliveries and integrations, and produce fail-closed completion evidence.",
+    "shortDescription": "Evidence-gated multi-session coding workflow",
+    "longDescription": "Plan coding goals into bounded sessions and dependency waves, keep scope and Git evidence explicit, distinguish delivery from integration and verification, and refuse completion when required evidence is missing or uncertain.",
     "developerName": "Zero3 Pilot",
     "category": "Developer Tools",
     "capabilities": [
@@ -25,9 +25,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Use Zero3 Development Group to plan this coding goal into bounded development sessions.",
-      "Review the current Development Group and tell me what is blocking completion.",
-      "Show me the evidence required before this Development Group can be marked complete."
+      "Plan this coding goal into bounded Development Sessions and dependency waves without starting execution yet.",
+      "Review this repository work against the Development Group evidence gates and tell me what is still blocking completion.",
+      "Audit whether this coding work can be called verified, and clearly mark any required evidence that has not been run."
     ]
   }
 }
