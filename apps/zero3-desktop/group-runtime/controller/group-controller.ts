@@ -5,6 +5,7 @@ import { compilePlanningProposal, type ControllerPlanningProposal, type Planning
 import { DevelopmentSessionScheduler, type WaveGateEvidence } from '../scheduler/index.ts'
 import { DevelopmentSessionRunner, initialSessionRuntime, type ExecutorManagerPort } from '../session/index.ts'
 import { DevelopmentGroupStore, nextEventSequence, readDurableJson, writeDurableJson } from '../store/index.ts'
+import { resolveSessionWorktree } from '../workspace/index.ts'
 
 export const ZERO3_GROUP_PLAN_RECORD = 'zero3.pilot.group-plan-record.v1' as const
 
@@ -104,8 +105,9 @@ export class DevelopmentGroupController {
 
   async sessionRunner(groupId: string, sessionId: string, executorManager: ExecutorManagerPort): Promise<DevelopmentSessionRunner> {
     const plan = await this.loadPlan(groupId)
-    const session = plan.sessions.find(candidate => candidate.sessionId === sessionId)
-    if (!session) throw new Error(`unknown Development Session ${sessionId}`)
+    const persistedSession = plan.sessions.find(candidate => candidate.sessionId === sessionId)
+    if (!persistedSession) throw new Error(`unknown Development Session ${sessionId}`)
+    const session = resolveSessionWorktree(plan.definition, persistedSession)
     const runtime = await this.store.loadSession(groupId, sessionId)
     return new DevelopmentSessionRunner(
       plan.definition,
