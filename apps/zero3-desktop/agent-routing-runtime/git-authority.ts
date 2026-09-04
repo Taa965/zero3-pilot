@@ -72,6 +72,14 @@ function resolveGitPath(workspace: string, value: string): string {
   return path.resolve(path.isAbsolute(value) ? value : path.join(workspace, value))
 }
 
+function sameFilesystemPath(leftValue: string, rightValue: string): boolean {
+  const left = path.normalize(leftValue)
+  const right = path.normalize(rightValue)
+  return process.platform === 'win32'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right
+}
+
 export async function zero3GitEvidence(
   executor: Zero3CodexCommandExecutor,
   workspaceValue: string,
@@ -83,7 +91,7 @@ export async function zero3GitEvidence(
 
   const gitDir = resolveGitPath(workspace, firstLine(await git(executor, workspace, ['rev-parse', '--git-dir'], 'Git directory check'), 'Git directory'))
   const commonGitDir = resolveGitPath(workspace, firstLine(await git(executor, workspace, ['rev-parse', '--git-common-dir'], 'Git common-directory check'), 'Git common directory'))
-  const linkedWorktree = path.normalize(gitDir).toLowerCase() !== path.normalize(commonGitDir).toLowerCase()
+  const linkedWorktree = !sameFilesystemPath(gitDir, commonGitDir)
 
   const headSha = firstLine(await git(executor, workspace, ['rev-parse', '--verify', 'HEAD'], 'Git HEAD check'), 'HEAD')
   let baseSha: string | null = null
