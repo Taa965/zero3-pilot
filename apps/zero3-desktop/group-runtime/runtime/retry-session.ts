@@ -1,4 +1,5 @@
 import type { DevelopmentSessionRuntime } from '../contracts/index.ts'
+import { resolveSessionWorktree } from '../workspace/index.ts'
 import { markSessionBlocked } from './session-lifecycle.ts'
 import type { DevelopmentGroupRuntimeFacade } from './runtime-facade.ts'
 import type { WorkerLaunchResult } from './worker-supervisor.ts'
@@ -15,9 +16,10 @@ export async function retryDevelopmentSession(
 ): Promise<WorkerLaunchResult> {
   const snapshot = await facade.snapshot(groupId)
   if (snapshot.state.outcomeUnknownCount > 0) throw new Error('Development Group has unresolved OutcomeUnknown and cannot retry Sessions')
-  const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
+  const persistedSession = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
   const runtime = snapshot.records.runtimes.find(candidate => candidate.sessionId === sessionId)
-  if (!session || !runtime) throw new Error(`unknown Development Session ${sessionId}`)
+  if (!persistedSession || !runtime) throw new Error(`unknown Development Session ${sessionId}`)
+  const session = resolveSessionWorktree(snapshot.plan.definition, persistedSession)
   if (runtime.status === 'outcome_unknown') throw new Error('OutcomeUnknown cannot enter retry; resolve the uncertain execution first')
   if (!['failed', 'blocked'].includes(runtime.status)) throw new Error(`only failed/blocked Sessions may retry; got ${runtime.status}`)
   if (runtime.attempt >= snapshot.plan.definition.policy.maxSessionAttempts) throw new Error('session attempt budget exhausted')
@@ -34,9 +36,10 @@ export async function retryDevelopmentSession(
     if (!dependencyWave) throw new Error(`missing dependency Wave ${dependencyWaveId}`)
     for (const requiredSessionId of dependencyWave.requiredSessionIds) {
       if (!integrated.has(requiredSessionId)) throw new Error(`dependency Wave ${dependencyWaveId} is not fully integrated`)
-      const requiredSession = snapshot.plan.sessions.find(candidate => candidate.sessionId === requiredSessionId)
+      const persistedRequiredSession = snapshot.plan.sessions.find(candidate => candidate.sessionId === requiredSessionId)
       const delivery = snapshot.records.deliveries.find(candidate => candidate.sessionId === requiredSessionId)
-      if (!requiredSession || !delivery) throw new Error(`dependency Wave ${dependencyWaveId} is missing durable Delivery evidence`)
+      if (!persistedRequiredSession || !delivery) throw new Error(`dependency Wave ${dependencyWaveId} is missing durable Delivery evidence`)
+      const requiredSession = resolveSessionWorktree(snapshot.plan.definition, persistedRequiredSession)
       const gate = await facade.options.deliveryVerifier.verify(requiredSession, delivery)
       if (gate.decision !== 'DELIVERY_ACCEPT') throw new Error(`dependency Wave ${dependencyWaveId} no longer passes Delivery evidence: ${gate.reasons.join('; ')}`)
     }
