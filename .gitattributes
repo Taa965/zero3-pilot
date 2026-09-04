@@ -1,0 +1,28 @@
+# Zero3 Pilot line-ending policy.
+#
+# The Zero3 Desktop build composes its runtime by applying overlay patches that
+# match multi-line anchors joined with "\n" (apps/zero3-desktop/scripts/apply-*.mjs)
+# against both the pinned upstream trees and this repository's own runtime
+# templates under apps/zero3-desktop/**. Windows Git installs default to
+# core.autocrlf=true, which checks these LF blobs out as CRLF and makes every
+# multi-line anchor miss, so `npm --prefix apps/zero3-desktop run prepare` fails
+# on a clean Windows clone. The pinned Hermes upstream already carries the same
+# policy for the same reason; this file extends it to Zero3 Pilot's own sources.
+#
+# `text=auto eol=lf` normalizes to LF at check-in and checks out as LF on every
+# platform, so the working tree matches the index regardless of core.autocrlf.
+* text=auto eol=lf
+
+# PowerShell is the deliberate exception: Windows PowerShell 5.1 tooling and the
+# Windows acceptance runner expect CRLF.
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Inno Setup packaging scripts are consumed by Windows-native tooling.
+*.iss   text eol=crlf
+
+# Binary assets must never be line-ending normalized.
+*.png   binary
+*.ico   binary
+*.icns  binary
