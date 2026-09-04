@@ -85,7 +85,10 @@ impl AgentProviderDescriptor {
         }
         match self.logical_agent {
             LogicalAgent::Gpt => {
-                if matches!(self.runtime_provider, Some(SessionProvider::GeminiAgent | SessionProvider::CodexLocal)) {
+                if matches!(
+                    self.runtime_provider,
+                    Some(SessionProvider::GeminiAgent) | Some(SessionProvider::CodexLocal)
+                ) {
                     anyhow::bail!("GPT logical agent cannot bind a Gemini/Codex runtime provider");
                 }
             }
