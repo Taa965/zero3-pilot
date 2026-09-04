@@ -29,11 +29,12 @@ jobs:
         with:
           submodules: false
 
+      # The pinned Hermes submodule (and therefore its package-lock.json) is
+      # initialized by the Zero3 prepare step below, so cache discovery cannot
+      # run safely before prepare. Use the pinned Node version without cache.
       - uses: actions/setup-node@v4
         with:
           node-version: '24.11.0'
-          cache: npm
-          cache-dependency-path: upstream/hermes-agent/package-lock.json
 
       - name: Check owned-renderer source invariants
         run: node scripts/check-zero3-owned-ui.mjs
