@@ -47,6 +47,24 @@ createRoot(root).render(
   write(path.join(hermesDesktopDir, 'src', 'main.tsx'), entry)
 }
 
+function configureOwnedRendererTooling() {
+  const tsconfig = {
+    extends: './tsconfig.json',
+    compilerOptions: { noEmit: true },
+    include: ['src/main.tsx', 'src/zero3-ui/**/*.ts', 'src/zero3-ui/**/*.tsx'],
+    exclude: []
+  }
+  write(path.join(hermesDesktopDir, 'tsconfig.zero3-renderer.json'), `${JSON.stringify(tsconfig, null, 2)}\n`)
+
+  const packagePath = path.join(hermesDesktopDir, 'package.json')
+  const packageJson = JSON.parse(read(packagePath))
+  packageJson.scripts = packageJson.scripts ?? {}
+  packageJson.scripts.typecheck = 'tsc -p tsconfig.zero3-renderer.json --noEmit && tsc -p tsconfig.electron.json --noEmit'
+  packageJson.scripts.lint = 'eslint src/main.tsx src/zero3-ui/ electron/'
+  packageJson.scripts.fmt = "prettier --write 'src/main.tsx' 'src/zero3-ui/**/*.{ts,tsx,css}' 'electron/**/*.ts'"
+  write(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
+}
+
 function recordRendererProvenance() {
   const file = path.join(hermesDesktopDir, 'public', 'zero3-upstream.json')
   const current = fs.existsSync(file) ? JSON.parse(read(file)) : {}
@@ -65,14 +83,19 @@ function assertSoleRenderer() {
   if (/from ['\"]\.\/app|<RouterProvider|<Hermes/i.test(entry)) {
     throw new Error('Legacy Hermes renderer leaked back into the Zero3 desktop entrypoint')
   }
+  const packageJson = JSON.parse(read(path.join(hermesDesktopDir, 'package.json')))
+  if (!String(packageJson.scripts?.typecheck ?? '').includes('tsconfig.zero3-renderer.json')) {
+    throw new Error('Retired Hermes renderer is still part of the Zero3 renderer typecheck surface')
+  }
 }
 
 export function applyZero3OwnedUi() {
   copyOwnedRenderer()
   replaceRendererEntrypoint()
+  configureOwnedRendererTooling()
   recordRendererProvenance()
   assertSoleRenderer()
-  console.log('Zero3 owned three-column renderer is the sole desktop UI entrypoint; Hermes/Codex product UIs are disabled.')
+  console.log('Zero3 owned three-column renderer is the sole desktop UI entrypoint and renderer typecheck surface; Hermes/Codex product UIs are disabled.')
 }
 
 if (process.argv[1]?.endsWith('apply-zero3-owned-ui.mjs')) applyZero3OwnedUi()
