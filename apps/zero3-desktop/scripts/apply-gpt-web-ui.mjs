@@ -61,20 +61,39 @@ export function applyZero3GptWebUi() {
         "                      onNavigate(item)"
     },
     {
-      label: 'GPT Web section before Codex session search/list',
+      label: 'recents-header new-session provider picker dispatch',
       from:
-        "        </SidebarGroup>\n\n" +
-        "        {showSessionSections && (",
+        "                                if (agentsGrouped) {\n" +
+        "                                  openProjectCreate()\n" +
+        "                                } else {\n" +
+        "                                  onNewSessionInWorkspace(null)\n" +
+        "                                }",
       to:
-        "        </SidebarGroup>\n\n" +
-        "        <Zero3GptWebSection\n" +
-        "          onNewCodexSession={() => {\n" +
-        "            $newChatProfile.set(null)\n" +
-        "            const newSession = SIDEBAR_NAV.find(item => item.id === 'new-session')\n" +
-        "            if (newSession) onNavigate(newSession)\n" +
-        "          }}\n" +
-        "        />\n\n" +
-        "        {showSessionSections && ("
+        "                                if (agentsGrouped) {\n" +
+        "                                  openProjectCreate()\n" +
+        "                                } else if (typeof window.zero3GptWeb !== 'undefined') {\n" +
+        "                                  window.dispatchEvent(new Event(ZERO3_NEW_SESSION_PROVIDER_EVENT))\n" +
+        "                                } else {\n" +
+        "                                  onNewSessionInWorkspace(null)\n" +
+        "                                }"
+    },
+    {
+      label: 'GPT Web entries inside the primary sessions scroller',
+      from:
+        "            data-sessions-project={inProject ? (enteredProjectId ?? undefined) : undefined}\n" +
+        "          >\n" +
+        "            {trimmedQuery && (",
+      to:
+        "            data-sessions-project={inProject ? (enteredProjectId ?? undefined) : undefined}\n" +
+        "          >\n" +
+        "            <Zero3GptWebSection\n" +
+        "              onNewCodexSession={() => {\n" +
+        "                $newChatProfile.set(null)\n" +
+        "                const newSession = SIDEBAR_NAV.find(item => item.id === 'new-session')\n" +
+        "                if (newSession) onNavigate(newSession)\n" +
+        "              }}\n" +
+        "            />\n\n" +
+        "            {trimmedQuery && ("
     }
   ])
 
