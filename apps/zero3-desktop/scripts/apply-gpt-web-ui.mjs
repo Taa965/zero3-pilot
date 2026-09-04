@@ -78,22 +78,20 @@ export function applyZero3GptWebUi() {
         "                                }"
     },
     {
-      label: 'GPT Web entries inside the primary sessions scroller',
+      label: 'always-mounted GPT Web session rows and provider picker',
       from:
-        "            data-sessions-project={inProject ? (enteredProjectId ?? undefined) : undefined}\n" +
-        "          >\n" +
-        "            {trimmedQuery && (",
+        "        </SidebarGroup>\n\n" +
+        "        {showSessionSections && (",
       to:
-        "            data-sessions-project={inProject ? (enteredProjectId ?? undefined) : undefined}\n" +
-        "          >\n" +
-        "            <Zero3GptWebSection\n" +
-        "              onNewCodexSession={() => {\n" +
-        "                $newChatProfile.set(null)\n" +
-        "                const newSession = SIDEBAR_NAV.find(item => item.id === 'new-session')\n" +
-        "                if (newSession) onNavigate(newSession)\n" +
-        "              }}\n" +
-        "            />\n\n" +
-        "            {trimmedQuery && ("
+        "        </SidebarGroup>\n\n" +
+        "        <Zero3GptWebSection\n" +
+        "          onNewCodexSession={() => {\n" +
+        "            $newChatProfile.set(null)\n" +
+        "            const newSession = SIDEBAR_NAV.find(item => item.id === 'new-session')\n" +
+        "            if (newSession) onNavigate(newSession)\n" +
+        "          }}\n" +
+        "        />\n\n" +
+        "        {showSessionSections && ("
     }
   ])
 
