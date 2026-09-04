@@ -41,7 +41,24 @@ export function applyZero3GptWebUi() {
       from: "import { SidebarSessionsSection, VIRTUALIZE_THRESHOLD } from './sessions-section'",
       to:
         "import { SidebarSessionsSection, VIRTUALIZE_THRESHOLD } from './sessions-section'\n" +
-        "import { Zero3GptWebSection } from './zero3-gpt-web-section'"
+        "import { ZERO3_NEW_SESSION_PROVIDER_EVENT, Zero3GptWebSection } from './zero3-gpt-web-section'"
+    },
+    {
+      label: 'new-session provider picker dispatch',
+      from:
+        "                      if (isNewSession) {\n" +
+        "                        $newChatProfile.set(null)\n" +
+        "                      }\n\n" +
+        "                      onNavigate(item)",
+      to:
+        "                      if (isNewSession) {\n" +
+        "                        $newChatProfile.set(null)\n" +
+        "                        if (typeof window.zero3GptWeb !== 'undefined') {\n" +
+        "                          window.dispatchEvent(new Event(ZERO3_NEW_SESSION_PROVIDER_EVENT))\n" +
+        "                          return\n" +
+        "                        }\n" +
+        "                      }\n\n" +
+        "                      onNavigate(item)"
     },
     {
       label: 'GPT Web section before Codex session search/list',
@@ -50,7 +67,13 @@ export function applyZero3GptWebUi() {
         "        {showSessionSections && (",
       to:
         "        </SidebarGroup>\n\n" +
-        "        <Zero3GptWebSection />\n\n" +
+        "        <Zero3GptWebSection\n" +
+        "          onNewCodexSession={() => {\n" +
+        "            $newChatProfile.set(null)\n" +
+        "            const newSession = SIDEBAR_NAV.find(item => item.id === 'new-session')\n" +
+        "            if (newSession) onNavigate(newSession)\n" +
+        "          }}\n" +
+        "        />\n\n" +
         "        {showSessionSections && ("
     }
   ])
