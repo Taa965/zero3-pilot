@@ -20,6 +20,8 @@ function reject(source, patterns, label) {
 }
 
 const app = read('apps/zero3-desktop/zero3-ui/App.tsx')
+const productApp = read('apps/zero3-desktop/zero3-ui/ProductApp.tsx')
+const handoff = read('apps/zero3-desktop/zero3-ui/HandoffDock.tsx')
 const apply = read('apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs')
 const prepare = read('apps/zero3-desktop/scripts/prepare-upstream.mjs')
 const geminiPrepare = read('apps/zero3-desktop/scripts/prepare-gemini-integration.mjs')
@@ -41,17 +43,28 @@ requireAll(app, [
   'bridge.setBounds({ id, bounds })'
 ], 'Zero3 three-column renderer')
 
-reject(app, [
+requireAll(productApp, ['<App />', '<HandoffDock />'], 'Zero3 product renderer composition')
+
+requireAll(handoff, [
+  "protocol: 'zero3.pilot.task-spec.v2'",
+  'bridges.zero3AgentTasks.dispatch({ taskSpec, originEntryId: source.id })',
+  "completionGate: ['result.summary', 'git.clean', 'verification.no-failures', 'artifact.hashes']",
+  'Commit intended changes and leave the isolated task worktree clean before reporting completion.',
+  "target === 'GEMINI'",
+  'bridges.zero3AgentTask.get({ taskId: id })'
+], 'Zero3 real task handoff surface')
+
+reject(app + '\n' + handoff, [
   /mockSessions/i,
   /sampleSessions/i,
   /fake execution/i,
   /danger-full-access/,
   /approvalPolicy:\s*['"]never['"]/
-], 'Zero3 three-column renderer')
+], 'Zero3 owned renderer')
 
 requireAll(apply, [
   "write(path.join(hermesDesktopDir, 'src', 'main.tsx'), entry)",
-  "import { App } from './zero3-ui/App'",
+  "import { ProductApp } from './zero3-ui/ProductApp'",
   "tsconfig.zero3-renderer.json",
   "packageJson.scripts.typecheck = 'tsc -p tsconfig.zero3-renderer.json --noEmit && tsc -p tsconfig.electron.json --noEmit'",
   "current.productRenderer = 'zero3-owned-three-column-v1'",
@@ -63,4 +76,4 @@ requireAll(prepare, ["import { applyZero3OwnedUi }", 'applyZero3OwnedUi()'], 'ba
 requireAll(geminiPrepare, ["import { applyZero3OwnedUi }", 'applyZero3OwnedUi()'], 'Gemini integration prepare')
 requireAll(constitution, ['Zero3-owned three-column renderer', 'Hermes React application/router', 'Codex stock UI/TUI'], 'architecture constitution')
 
-console.log('Zero3 owned-renderer guard passed: one three-column product UI, real typed bridges, and the retired Hermes/Codex renderers are outside the product entrypoint and renderer typecheck surface.')
+console.log('Zero3 owned-renderer guard passed: one three-column product UI, real Codex/GPT/Gemini bridges, real TaskSpec handoff, and retired Hermes/Codex renderers outside the product entrypoint/typecheck surface.')
