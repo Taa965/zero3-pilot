@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { mkdir, readFile, stat } from 'node:fs/promises'
+import { dirname, isAbsolute, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 import { Zero3ExecutorManager } from '../../executor-runtime/executor-manager.ts'
@@ -9,7 +9,7 @@ import type { ExecutorPermissionResponse } from '../../executor-runtime/executor
 import { HandoffStore } from '../../executor-runtime/handoff/handoff-store.ts'
 import { NativeCodexAppServerDriver, type NativeCodexAppServerTransport } from '../../executor-runtime/native/native-app-server-driver.ts'
 import { NativeCodexExecutor } from '../../executor-runtime/native/native-codex-executor.ts'
-import type { DevelopmentGroupDefinition, VerificationCommand } from '../contracts/index.ts'
+import type { DevelopmentGroupDefinition, DevelopmentSessionDefinition, DevelopmentSessionRuntime, VerificationCommand } from '../contracts/index.ts'
 import { IntegrationGitAdapter } from '../integration/index.ts'
 import type { ControllerPlanningProposal, PlanningRequest } from '../planning/index.ts'
 import {
@@ -22,7 +22,7 @@ import {
   type OutcomeUnknownResolution
 } from '../runtime/index.ts'
 import { DevelopmentGroupStore } from '../store/index.ts'
-import { GitWorkspaceAdapter } from '../workspace/index.ts'
+import { GitWorkspaceAdapter, resolveSessionWorktree } from '../workspace/index.ts'
 import type { DevelopmentGroupDesktopPort } from './desktop-port.ts'
 
 const execFileAsync = promisify(execFile)
@@ -49,6 +49,12 @@ function exactSha(value: unknown, label: string): string {
   return sha.toLowerCase()
 }
 
+function safeBranch(branch: string): string {
+  const value = requiredString(branch, 'branch', 512)
+  if (value.startsWith('-')) throw new Error('branch must not begin with -')
+  return value
+}
+
 function resolveInside(root: string, candidate: string): string {
   const absoluteRoot = resolve(root)
   const absolute = isAbsolute(candidate) ? resolve(candidate) : resolve(absoluteRoot, candidate)
@@ -71,6 +77,68 @@ function parseArgv(command: string): readonly string[] {
   }
   if (value.length > 64 || value.some(item => item.length > 8192)) throw new Error('verification argv exceeds product limits')
   return value as string[]
+}
+
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory()
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function localBranchHead(repositoryRoot: string, branch: string): Promise<string | undefined> {
+  try {
+    const result = await execFileAsync('git', ['rev-parse', '--verify', `refs/heads/${safeBranch(branch)}`], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+      shell: false
+    })
+    return exactSha(result.stdout.trim(), 'branch head')
+  } catch (error) {
+    const failure = error as NodeJS.ErrnoException & { code?: number }
+    if (failure.code === 128) return undefined
+    throw error
+  }
+}
+
+class GitSessionWorkspaceProvisioner {
+  async ensure(group: DevelopmentGroupDefinition, persistedSession: DevelopmentSessionDefinition, runtime: DevelopmentSessionRuntime): Promise<void> {
+    const repositoryRoot = resolve(group.repository)
+    const session = resolveSessionWorktree(group, persistedSession)
+    const worktree = session.worktree
+    const exists = await directoryExists(worktree)
+
+    if (exists) {
+      const git = new GitWorkspaceAdapter(worktree)
+      const [branch, head, status] = await Promise.all([git.currentBranch(), git.resolveHead(), git.status()])
+      if (branch !== session.branch) throw new Error(`Session worktree branch mismatch: expected ${session.branch}, got ${branch}`)
+      if (runtime.attempt === 0 && head !== session.baselineSha) {
+        throw new Error(`fresh Session worktree must be at baseline ${session.baselineSha}; got ${head}`)
+      }
+      if (runtime.attempt === 0 && status.length > 0) throw new Error('fresh Session worktree must be clean')
+      return
+    }
+
+    const branchHead = await localBranchHead(repositoryRoot, session.branch)
+    await mkdir(dirname(worktree), { recursive: true })
+    const rootGit = new GitWorkspaceAdapter(repositoryRoot)
+    if (runtime.attempt === 0) {
+      if (branchHead) throw new Error(`refusing to adopt pre-existing fresh Session branch ${session.branch}`)
+      await rootGit.createSessionWorktree(worktree, session.branch, session.baselineSha)
+      return
+    }
+
+    if (!branchHead) throw new Error(`retry Session branch ${session.branch} is missing; refusing to recreate from baseline`)
+    await execFileAsync('git', ['worktree', 'add', worktree, safeBranch(session.branch)], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+      shell: false
+    })
+  }
 }
 
 class ShelllessVerificationExecutor {
@@ -127,6 +195,7 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
   readonly store: DevelopmentGroupStore
   readonly executorManager: Zero3ExecutorManager
   readonly #handoffStore: HandoffStore
+  readonly #workspaceProvisioner = new GitSessionWorkspaceProvisioner()
   readonly #facades = new Map<string, DevelopmentGroupRuntimeFacade>()
 
   constructor(storeRoot: string, codexTransport: NativeCodexAppServerTransport) {
@@ -169,11 +238,28 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
   }
 
   async startWave(groupId: string, waveId: string): Promise<unknown> {
-    return (await this.facadeFor(groupId)).startWave(groupId, waveId)
+    const facade = await this.facadeFor(groupId)
+    const snapshot = await facade.snapshot(groupId)
+    const wave = snapshot.plan.waves.find(candidate => candidate.waveId === waveId)
+    if (!wave) throw new Error(`unknown Development Wave ${waveId}`)
+    const runtimeBySession = new Map(snapshot.records.runtimes.map(runtime => [runtime.sessionId, runtime] as const))
+    for (const sessionId of wave.sessionIds) {
+      const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
+      const runtime = runtimeBySession.get(sessionId)
+      if (!session || !runtime || !['waiting_dependencies', 'ready'].includes(runtime.status)) continue
+      await this.#workspaceProvisioner.ensure(snapshot.plan.definition, session, runtime)
+    }
+    return facade.startWave(groupId, waveId)
   }
 
   async retrySession(groupId: string, sessionId: string): Promise<unknown> {
-    return retryDevelopmentSession(await this.facadeFor(groupId), groupId, sessionId)
+    const facade = await this.facadeFor(groupId)
+    const snapshot = await facade.snapshot(groupId)
+    const session = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
+    const runtime = snapshot.records.runtimes.find(candidate => candidate.sessionId === sessionId)
+    if (!session || !runtime) throw new Error(`unknown Development Session ${sessionId}`)
+    await this.#workspaceProvisioner.ensure(snapshot.plan.definition, session, runtime)
+    return retryDevelopmentSession(facade, groupId, sessionId)
   }
 
   async respondPermission(groupId: string, sessionId: string, response: ExecutorPermissionResponse): Promise<void> {
