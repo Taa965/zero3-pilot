@@ -38,7 +38,10 @@ type ControlBridge = {
 }
 
 type HandoffWindow = Window & {
-  zero3Workspace?: { list(): Promise<WorkspaceEntry[]> }
+  zero3Workspace?: {
+    list(): Promise<WorkspaceEntry[]>
+    setProject(request: { id: string; projectId: string | null }): Promise<WorkspaceEntry>
+  }
   zero3AgentTasks?: AgentTaskBridge
   zero3AgentTask?: AgentTaskAuthorityBridge
   zero3Control?: ControlBridge
@@ -73,6 +76,7 @@ export function HandoffDock() {
   const [open, setOpen] = useState(false)
   const [entries, setEntries] = useState<WorkspaceEntry[]>([])
   const [sourceId, setSourceId] = useState('')
+  const [projectId, setProjectId] = useState('')
   const [target, setTarget] = useState<Target>('CODEX')
   const [taskType, setTaskType] = useState<TaskType>('IMPLEMENT')
   const [taskId, setTaskId] = useState(() => `gpt-${uid().slice(0, 12)}`)
@@ -107,6 +111,7 @@ export function HandoffDock() {
   }, [open])
 
   useEffect(() => {
+    setProjectId(source?.projectId ?? '')
     if (!source || goal.trim()) return
     setGoal(entryTitle(source))
   }, [source, goal])
@@ -116,6 +121,17 @@ export function HandoffDock() {
     setTaskType(next === 'GEMINI' ? 'DESIGN' : 'IMPLEMENT')
     setError(null)
     setResult(null)
+  }
+
+  const bindProject = async (): Promise<WorkspaceEntry | null> => {
+    if (!source || !bridges.zero3Workspace) return null
+    const nextProjectId = projectId.trim()
+    if (!nextProjectId) throw new Error('Project ID 不能为空。')
+    const updated = await bridges.zero3Workspace.setProject({ id: source.id, projectId: nextProjectId })
+    setEntries(current => current.map(entry => entry.id === updated.id ? updated : entry))
+    setProjectId(updated.projectId ?? '')
+    setResult(`已将 ${entryTitle(updated)} 绑定到 Project ${updated.projectId}`)
+    return updated
   }
 
   const inspect = async (id = taskId.trim()) => {
@@ -139,7 +155,12 @@ export function HandoffDock() {
       const objective = goal.trim()
       const cwd = workspace.trim()
       if (!source) throw new Error('请选择一个真实 GPT Web 来源会话。')
-      if (!source.projectId) throw new Error('该 GPT Web 会话还没有绑定 Zero3 Project。')
+      let dispatchSource = source
+      if (!dispatchSource.projectId || dispatchSource.projectId !== projectId.trim()) {
+        const rebound = await bindProject()
+        if (rebound) dispatchSource = rebound
+      }
+      if (!dispatchSource.projectId) throw new Error('该 GPT Web 会话还没有绑定 Zero3 Project。')
       if (!id || !objective || !cwd) throw new Error('Task ID、目标和独立 Worktree / Workspace 都是必填项。')
 
       const executionId = uid()
@@ -147,7 +168,7 @@ export function HandoffDock() {
         protocol: 'zero3.pilot.task-spec.v2',
         taskId: id,
         executionId,
-        projectId: source.projectId,
+        projectId: dispatchSource.projectId,
         target,
         type: taskType,
         title: objective.slice(0, 160),
@@ -167,12 +188,12 @@ export function HandoffDock() {
         verification: [],
         completionGate: ['result.summary', 'git.clean', 'verification.no-failures', 'artifact.hashes'],
         reviewPolicy: { required: true, reviewer: 'GPT_WEB', maxCycles: 5 },
-        createdBySessionId: source.id,
+        createdBySessionId: dispatchSource.id,
         createdAt: new Date().toISOString()
       }
 
       if (bridges.zero3AgentTasks) {
-        const dispatched = await bridges.zero3AgentTasks.dispatch({ taskSpec, originEntryId: source.id })
+        const dispatched = await bridges.zero3AgentTasks.dispatch({ taskSpec, originEntryId: dispatchSource.id })
         setResult(`已派发 ${dispatched.taskId} → ${dispatched.target}，Execution ${dispatched.executionId}`)
         setTaskId(dispatched.taskId)
         await inspect(dispatched.taskId)
@@ -201,10 +222,10 @@ export function HandoffDock() {
           execution: { max_turns: 1, timeout_seconds: 3600, require_clean_worktree: true }
         },
         extension: {
-          project_context: { project_id: source.projectId, source_entry_id: source.id, source_kind: 'gpt_web' },
+          project_context: { project_id: dispatchSource.projectId, source_entry_id: dispatchSource.id, source_kind: 'gpt_web' },
           handoff: {
             result_protocol: 'zero3.pilot.execution-result.v1',
-            return_entry_id: source.id,
+            return_entry_id: dispatchSource.id,
             required_evidence: ['codex.turn.completed', 'git.preflight', 'git.postflight', 'execution.result']
           }
         }
@@ -253,6 +274,11 @@ export function HandoffDock() {
                   {entries.map(entry => <option key={entry.id} value={entry.id}>{entryTitle(entry)}{entry.projectId ? ` · ${entry.projectId}` : ' · 未绑定项目'}</option>)}
                 </select>
               </label>
+
+              <div className="handoff-project-row">
+                <label><span>Zero3 Project ID</span><input onChange={event => setProjectId(event.target.value)} placeholder="例如 zero3-pilot" value={projectId} /></label>
+                <button disabled={!source || !projectId.trim()} onClick={() => void bindProject().catch(reason => setError(errorMessage(reason)))} type="button">绑定项目</button>
+              </div>
 
               <div className="handoff-row">
                 <label><span>Task ID</span><input onChange={event => setTaskId(event.target.value)} value={taskId} /></label>
