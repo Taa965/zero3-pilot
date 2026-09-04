@@ -88,17 +88,33 @@ export class Zero3AntigravityMcpLease {
   async restore(): Promise<void> {
     const backup = this.backup
     const configPath = this.configPath
+    const taskSnapshotPath = this.taskSnapshotPath
     this.backup = null
     this.configPath = null
-    if (!backup || !configPath) return
-    if (backup.existed) {
-      await fs.writeFile(configPath, backup.content ?? '', { encoding: 'utf8' })
-    } else {
-      try { await fs.unlink(configPath) } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    this.taskSnapshotPath = null
+
+    let restoreError: unknown = null
+    if (backup && configPath) {
+      try {
+        if (backup.existed) {
+          await fs.writeFile(configPath, backup.content ?? '', { encoding: 'utf8' })
+        } else {
+          try { await fs.unlink(configPath) } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+          }
+          try { await fs.rmdir(path.dirname(configPath)) } catch {}
+        }
+      } catch (error) {
+        restoreError = error
       }
-      try { await fs.rmdir(path.dirname(configPath)) } catch {}
     }
+
+    if (taskSnapshotPath) {
+      try { await fs.unlink(taskSnapshotPath) } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !restoreError) restoreError = error
+      }
+    }
+    if (restoreError) throw restoreError
   }
 }
 
