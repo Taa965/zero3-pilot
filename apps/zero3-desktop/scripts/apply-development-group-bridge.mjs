@@ -74,8 +74,11 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Developme
 
 contextBridge.exposeInMainWorld('hermesDesktop', {`
 
-const globalBridge = String.raw`  interface Window {
-    zero3DevelopmentGroup: {
+// Insert only one Window property immediately before the stable hermesDesktop
+// property. Provider/Control overlays may already have inserted other Window
+// properties, so the release-level bridge must not assume hermesDesktop is the
+// first member of `interface Window`.
+const globalBridgeProperty = String.raw`    zero3DevelopmentGroup: {
       listGroups: () => Promise<unknown>
       getGroup: (groupId: string) => Promise<unknown>
       createGroup: (request: Record<string, unknown>, proposal: Record<string, unknown>) => Promise<unknown>
@@ -119,9 +122,8 @@ export function applyDevelopmentGroupBridge() {
   patchFile('src/global.d.ts', [
     {
       label: 'Development Group renderer bridge types',
-      from: `  interface Window {
-    hermesDesktop: {`,
-      to: globalBridge
+      from: '    hermesDesktop: {',
+      to: globalBridgeProperty
     }
   ])
 }
