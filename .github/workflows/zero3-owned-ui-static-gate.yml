@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'apps/zero3-desktop/zero3-ui/**'
+      - 'apps/zero3-desktop/workspace-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-workspace-entry-runtime.mjs'
       - 'apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs'
       - 'apps/zero3-desktop/scripts/prepare-upstream.mjs'
       - 'apps/zero3-desktop/scripts/prepare-gemini-integration.mjs'
@@ -14,24 +16,21 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: zero3-owned-ui-${{ github.event.pull_request.number || github.ref }}
+  group: zero3-owned-ui-source-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  renderer-and-host:
+  renderer-source:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: false
 
-      # The pinned Hermes submodule (and therefore its package-lock.json) is
-      # initialized by the Zero3 prepare step below, so cache discovery cannot
-      # run safely before prepare. Use the pinned Node version without cache.
       - uses: actions/setup-node@v4
         with:
           node-version: '24.11.0'
@@ -39,27 +38,17 @@ jobs:
       - name: Check owned-renderer source invariants
         run: node scripts/check-zero3-owned-ui.mjs
 
-      - name: Prepare the full pinned desktop composition
-        run: npm --prefix apps/zero3-desktop run prepare
-
-      - name: Install pinned desktop dependencies
-        working-directory: upstream/hermes-agent
-        run: npm install --workspace apps/desktop
-
-      - name: Typecheck Zero3 renderer and Electron host only
-        working-directory: upstream/hermes-agent
-        run: npm --workspace apps/desktop run typecheck
-
-      - name: Verify the final renderer entrypoint
-        shell: bash
+      - name: Syntax-check owned renderer staging scripts
         run: |
-          set -euo pipefail
-          test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/App.tsx
-          test -f upstream/hermes-agent/apps/desktop/src/zero3-ui/HandoffDock.tsx
-          test -f upstream/hermes-agent/apps/desktop/tsconfig.zero3-renderer.json
-          grep -F "import { ProductApp } from './zero3-ui/ProductApp'" upstream/hermes-agent/apps/desktop/src/main.tsx
-          ! grep -E "RouterProvider|from ['\"]\\./app|Hermes" upstream/hermes-agent/apps/desktop/src/main.tsx
-          node scripts/check-prepared-gemini-integration.mjs
+          node --check apps/zero3-desktop/scripts/apply-zero3-owned-ui.mjs
+          node --check apps/zero3-desktop/scripts/apply-workspace-entry-runtime.mjs
+          node --check apps/zero3-desktop/scripts/prepare-upstream.mjs
+          node --check apps/zero3-desktop/scripts/prepare-gemini-integration.mjs
 
       - name: Reject whitespace errors
         run: git diff --check
+
+  # Full pinned submodule preparation, prepared-composition inspection and the
+  # renderer+Electron typecheck run once in Gemini Antigravity Static Gate.
+  # Keeping this gate source-only avoids racing two simultaneous full submodule
+  # clones against GitHub rate limits for the same PR.
