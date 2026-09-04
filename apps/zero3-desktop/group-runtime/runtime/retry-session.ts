@@ -16,6 +16,7 @@ export async function retryDevelopmentSession(
 ): Promise<WorkerLaunchResult> {
   const snapshot = await facade.snapshot(groupId)
   if (snapshot.state.outcomeUnknownCount > 0) throw new Error('Development Group has unresolved OutcomeUnknown and cannot retry Sessions')
+  if (facade.supervisor.isActive(sessionId)) throw new Error(`Development Session ${sessionId} still has an active supervised prompt`)
   const persistedSession = snapshot.plan.sessions.find(candidate => candidate.sessionId === sessionId)
   const runtime = snapshot.records.runtimes.find(candidate => candidate.sessionId === sessionId)
   if (!persistedSession || !runtime) throw new Error(`unknown Development Session ${sessionId}`)
