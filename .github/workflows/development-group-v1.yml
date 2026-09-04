@@ -1,0 +1,70 @@
+name: Development Group V1 Integrated Gate
+
+on:
+  pull_request:
+    branches:
+      - integration/development-group-v1
+      - main
+    paths:
+      - 'apps/zero3-desktop/group-runtime/**'
+      - 'apps/zero3-desktop/executor-runtime/handoff/**'
+      - 'plugins/zero3-development-group/**'
+      - 'apps/zero3-desktop/scripts/apply-development-group-bridge.mjs'
+      - 'scripts/check-development-group-v1.mjs'
+      - '.github/workflows/development-group-v1.yml'
+  workflow_dispatch: {}
+
+jobs:
+  static-integrated-gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Diff hygiene
+        shell: bash
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          else
+            git diff --check HEAD^...HEAD
+          fi
+
+      - name: Development Group architecture guard
+        run: node scripts/check-development-group-v1.mjs
+
+      - name: Existing repository architecture guard
+        run: node scripts/check-architecture.mjs
+
+      - name: Development Group core behavior tests
+        run: >-
+          node --experimental-transform-types --test
+          apps/zero3-desktop/group-runtime/planning/planning.test.ts
+          apps/zero3-desktop/group-runtime/workspace/workspace.test.ts
+          apps/zero3-desktop/group-runtime/session/session-runtime.test.ts
+          apps/zero3-desktop/group-runtime/controller/controller.test.ts
+          apps/zero3-desktop/group-runtime/integration/integration.test.ts
+          apps/zero3-desktop/group-runtime/verification/verification.test.ts
+          apps/zero3-desktop/group-runtime/completion/completion.test.ts
+          apps/zero3-desktop/group-runtime/ui/groups-view-model.test.ts
+          apps/zero3-desktop/group-runtime/runtime/runtime-facade.test.ts
+          apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts
+
+      - name: Review package syntax
+        run: >-
+          node --check plugins/zero3-development-group/mcp-server/src/server.mjs
+          && node --check plugins/zero3-development-group/mcp-server/src/http-handler.mjs
+          && node --check plugins/zero3-development-group/mcp-server/src/service-port.mjs
+
+      - name: Plugin manifest JSON
+        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('plugins/zero3-development-group/.codex-plugin/plugin.json','utf8'));if(p.name!=='zero3-development-group'||p.skills!=='./skills/')process.exit(1)"
