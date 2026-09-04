@@ -28,8 +28,13 @@ requireText(facade, 'initialIntegratedSessionIds', 'durable integration restart 
 requireText(facade, 'outcomeUnknownCount', 'OutcomeUnknown gate')
 requireText(facade, 'deliveryMaterializer', 'post-executor Delivery materialization')
 requireText(facade, 'DevelopmentGroupWorkerSupervisor', 'non-blocking worker supervision')
+requireText(facade, 'resolveSessionWorktree', 'repository-bound runtime worktree resolution')
 forbid(facade, /spawn\s*\(|exec\s*\(|execFile\s*\(/u, 'second process/shell authority in Runtime Facade')
 forbid(facade, /codex\s+app-server|@openai\/codex/iu, 'second Codex kernel in Runtime Facade')
+
+const worktreeResolver = read('apps/zero3-desktop/group-runtime/workspace/session-worktree.ts')
+requireText(worktreeResolver, 'resolve(group.repository)', 'Group repository root binding')
+requireText(worktreeResolver, 'resolve(repositoryRoot, session.worktree)', 'relative Session worktree resolution')
 
 const supervisor = read('apps/zero3-desktop/group-runtime/runtime/worker-supervisor.ts')
 requireText(supervisor, 'markOutcomeUnknown', 'supervisor fail-closed ambiguity handling')
@@ -38,6 +43,8 @@ forbid(supervisor, /setInterval|setTimeout\([^,]+,\s*0\)/u, 'polling/retry loop 
 const lifecycle = read('apps/zero3-desktop/group-runtime/runtime/session-lifecycle.ts')
 requireText(lifecycle, 'runtime_restart_without_authoritative_executor_outcome', 'restart ambiguity evidence')
 requireText(lifecycle, "transition(runtime, 'outcome_unknown'", 'restart OutcomeUnknown transition')
+requireText(lifecycle, 'resolveSessionOutcomeUnknown', 'explicit OutcomeUnknown recovery API')
+requireText(lifecycle, 'OutcomeUnknown recovery requires explicit evidence/reason', 'evidence-bound OutcomeUnknown recovery')
 
 const deliveryGate = read('apps/zero3-desktop/group-runtime/workspace/delivery-gate.ts')
 requireText(deliveryGate, 'handoffWorkspaceFingerprint', 'R4E-compatible Handoff fingerprint')
@@ -51,20 +58,45 @@ requireText(handoffStore, 'parsed.execution_id !== executionId', 'logical execut
 
 const desktopPort = read('apps/zero3-desktop/group-runtime/desktop/desktop-port.ts')
 const desktopIpc = read('apps/zero3-desktop/group-runtime/desktop/desktop-ipc.ts')
+const desktopRuntime = read('apps/zero3-desktop/group-runtime/desktop/desktop-runtime.ts')
+const bridgeOverlay = read('apps/zero3-desktop/scripts/apply-development-group-bridge.mjs')
+const prepareCodex = read('apps/zero3-desktop/scripts/prepare-codex-upstream.mjs')
 const expectedChannels = [
   'zero3:development-group:list',
   'zero3:development-group:get',
   'zero3:development-group:create',
   'zero3:development-group:start-wave',
+  'zero3:development-group:retry-session',
+  'zero3:development-group:respond-permission',
+  'zero3:development-group:cancel-session',
+  'zero3:development-group:resolve-outcome-unknown',
   'zero3:development-group:integrate-delivery',
   'zero3:development-group:run-verification',
   'zero3:development-group:completion-proof',
   'zero3:development-group:complete'
 ]
-for (const channel of expectedChannels) requireText(desktopPort, `'${channel}'`, `desktop channel ${channel}`)
+for (const channel of expectedChannels) {
+  requireText(desktopPort, `'${channel}'`, `desktop channel ${channel}`)
+  requireText(bridgeOverlay, channel, `preload bridge channel ${channel}`)
+}
 forbid(desktopPort + desktopIpc, /generic|rpc\s*\(|executeCommand|shell|child_process|codex.*request\s*\(/iu, 'generic Renderer execution/RPC authority')
 requireText(desktopIpc, 'plainRecord(request', 'create payload object validation')
 requireText(desktopIpc, 'requiredId(groupId', 'Group identity validation')
+requireText(desktopIpc, 'permissionResponse(response)', 'permission response allowlist validation')
+requireText(desktopIpc, 'outcomeResolution(resolution)', 'OutcomeUnknown resolution allowlist validation')
+
+requireText(desktopRuntime, 'new NativeCodexAppServerDriver({ transport: codexTransport })', 'reuse of existing pinned Codex transport')
+requireText(desktopRuntime, 'new DevelopmentGroupRuntimeFacade({', 'Electron-owned Runtime Facade composition')
+requireText(desktopRuntime, 'new IntegrationGitAdapter(repositoryRoot)', 'repository-bound Integration Git adapter')
+requireText(desktopRuntime, 'shell: false', 'shellless verification execution')
+requireText(desktopRuntime, 'JSON.parse(command)', 'argv-only verification command parsing')
+forbid(desktopRuntime, /spawn\s*\(|createZero3CodexAppServer|codex\s+app-server/iu, 'second Codex process/kernel in Desktop runtime composition')
+
+requireText(bridgeOverlay, 'copyProductionTree(executorSource', 'authoritative Executor runtime staging')
+requireText(bridgeOverlay, 'copyProductionTree(groupSource', 'authoritative Group runtime staging')
+requireText(bridgeOverlay, "createDevelopmentGroupDesktopRuntime, registerDevelopmentGroupDesktopIpc", 'Electron-main Development Group composition import')
+requireText(bridgeOverlay, 'zero3CodexAppServer', 'existing Codex app-server reuse in Electron main')
+requireText(prepareCodex, 'applyDevelopmentGroupBridge()', 'shared desktop prepare pipeline binding')
 
 const plugin = JSON.parse(read('plugins/zero3-development-group/.codex-plugin/plugin.json'))
 if (plugin.name !== 'zero3-development-group') throw new Error('Development Group Plugin identity changed')
