@@ -27,6 +27,7 @@ export type Zero3GptWebEvent =
   | {
       kind: 'navigation'
       entryId: string
+      previousEntryId: string | null
       currentUrl: string
       conversationUrl: string | null
       pageTitle: string | null
