@@ -9,6 +9,7 @@
     "dev": "node ./scripts/run.mjs dev",
     "typecheck": "node ./scripts/run.mjs typecheck",
     "dist:win": "node ./scripts/run.mjs dist:win",
+    "acceptance:dg:win": "node ./scripts/windows-development-group-closeout.mjs",
     "reset": "node ./scripts/reset-upstream.mjs"
   }
 }
