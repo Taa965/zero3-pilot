@@ -56,11 +56,12 @@ export function Zero3GptWebHandoffActions({ entry }: HandoffActionsProps) {
   const [baseRef, setBaseRef] = useState('')
 
   const dispatch = async () => {
-    if (!control || busy) return
+    if (busy) return
     setBusy(true)
     setError(null)
     setResult(null)
     try {
+      if (!control) throw new Error('当前桌面构建尚未接入 Zero3 Control Plane Bridge。')
       const status = await control.status()
       if (!status.configured) throw new Error('Zero3 Control Plane 尚未配置，无法派发本地 Codex 任务。')
       const trimmedTaskId = taskId.trim()
@@ -118,7 +119,7 @@ export function Zero3GptWebHandoffActions({ entry }: HandoffActionsProps) {
 
   return (
     <>
-      <div className="flex items-center gap-1 px-2 pb-1" data-zero3-gpt-web-actions="">
+      <div className="flex items-center gap-1 px-2 pb-1" data-zero3-gpt-web-actions="" data-zero3-gpt-web-section="">
         <Button className="h-6 gap-1 px-2 text-[0.6875rem]" onClick={() => setOpen(true)} size="sm" variant="outline">
           <Codicon className="size-3.5" name="run-all" />
           交给 Codex
@@ -135,7 +136,7 @@ export function Zero3GptWebHandoffActions({ entry }: HandoffActionsProps) {
       </div>
 
       <Dialog onOpenChange={setOpen} open={open}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="max-w-xl" data-zero3-gpt-web-section="">
           <DialogHeader>
             <DialogTitle>交给 Codex 执行</DialogTitle>
             <DialogDescription>
