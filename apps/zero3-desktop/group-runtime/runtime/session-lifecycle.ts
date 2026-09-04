@@ -36,6 +36,26 @@ export async function reconcileInterruptedExecutorRuntime(store: DevelopmentGrou
   return next
 }
 
+export type OutcomeUnknownResolution = 'failed' | 'cancelled' | 'superseded'
+
+export async function resolveSessionOutcomeUnknown(
+  store: DevelopmentGroupStore,
+  groupId: string,
+  sessionId: string,
+  resolution: OutcomeUnknownResolution,
+  evidence: string
+): Promise<DevelopmentSessionRuntime> {
+  const detail = evidence.trim()
+  if (!detail) throw new Error('OutcomeUnknown recovery requires explicit evidence/reason')
+  const runtime = await store.loadSession(groupId, sessionId)
+  if (runtime.status !== 'outcome_unknown') throw new Error(`Session ${sessionId} is not OutcomeUnknown; got ${runtime.status}`)
+  const next = transition(runtime, resolution, {
+    blocker: `outcome_unknown_resolved:${resolution}:${detail}`
+  })
+  await store.writeSession(next)
+  return next
+}
+
 export async function markSessionBlocked(store: DevelopmentGroupStore, groupId: string, sessionId: string, blocker: string): Promise<DevelopmentSessionRuntime> {
   const runtime = await store.loadSession(groupId, sessionId)
   if (runtime.status === 'blocked' && runtime.blocker === blocker) return runtime
