@@ -25,10 +25,10 @@ async function fixture(): Promise<Fixture> {
   return { root, repo, store: new HandoffStore(path.join(root, 'checkpoints')) }
 }
 
-async function checkpoint(repo: string) {
+async function checkpoint(repo: string, taskId = 'task-1', executionId = 'execution-1') {
   const baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
   return buildHandoffCheckpoint({
-    taskId: 'task-1', executionId: 'execution-1', workspace: repo, repoId: 'Taa965/fixture', baseSha,
+    taskId, executionId, workspace: repo, repoId: 'Taa965/fixture', baseSha,
     objective: 'finish feature', constraints: ['no bypass'], acceptanceCriteria: ['tests pass'],
     completed: ['baseline'], inProgress: ['implementation'], remaining: ['acceptance'], testsRun: ['unit'],
     testResults: [{ name: 'unit', status: 'passed' }],
@@ -48,6 +48,23 @@ test('clean checkpoint persists, reloads and verifies after restart', async () =
     const state = await captureWorkspaceState(f.repo)
     assert.equal(verifyHandoff(loaded, { workspace: state.workspace, branch: state.branch, headSha: state.headSha, dirtyWorktreeFingerprint: state.dirtyWorktreeFingerprint }).decision, 'HANDOFF_ACCEPT')
     assert.match(HANDOFF_VERIFY_INSTRUCTION, /Do not modify code yet/)
+  } finally { await rm(f.root, { recursive: true, force: true }) }
+})
+
+test('unsafe-but-valid logical identities are hash-encoded for durable paths without changing checkpoint identity', async () => {
+  const f = await fixture()
+  try {
+    const taskId = 'G1:S01'
+    const executionId = 'G1:S01:attempt-1'
+    const cp = await checkpoint(f.repo, taskId, executionId)
+    const target = await f.store.save(cp)
+    const durableRelativePath = path.relative(path.join(f.root, 'checkpoints'), target)
+    assert.equal(durableRelativePath.includes(':'), false)
+    assert.equal(durableRelativePath.includes(taskId), false)
+    assert.equal(durableRelativePath.includes(executionId), false)
+    const loaded = await f.store.load(taskId, executionId, 2)
+    assert.equal(loaded.task_id, taskId)
+    assert.equal(loaded.execution_id, executionId)
   } finally { await rm(f.root, { recursive: true, force: true }) }
 })
 
