@@ -6,22 +6,17 @@ import { hermesDesktopDir, repoRoot } from './config.mjs'
 const uiSourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'gpt-web-ui')
 const uiTargetDir = path.join(hermesDesktopDir, 'src', 'app', 'chat', 'sidebar')
 
-function read(file) {
-  return fs.readFileSync(file, 'utf8')
-}
-
-function write(file, content) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, content)
-}
+function read(file) { return fs.readFileSync(file, 'utf8') }
+function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
 
 function copyUiSources() {
   for (const [sourceName, targetName] of [
     ['gpt-web-section.tsx', 'zero3-gpt-web-section.tsx'],
-    ['gpt-web-handoff-actions.tsx', 'gpt-web-handoff-actions.tsx']
+    ['gpt-web-handoff-actions.tsx', 'gpt-web-handoff-actions.tsx'],
+    ['gemini-session-section.tsx', 'gemini-session-section.tsx']
   ]) {
     const source = path.join(uiSourceDir, sourceName)
-    if (!fs.statSync(source).isFile()) throw new Error(`Zero3 GPT Web UI source template missing: ${source}`)
+    if (!fs.statSync(source).isFile()) throw new Error(`Zero3 provider UI source template missing: ${source}`)
     write(path.join(uiTargetDir, targetName), read(source))
   }
 }
@@ -31,12 +26,7 @@ function patchFile(relativePath, replacements) {
   let source = read(file)
   for (const replacement of replacements) {
     if (source.includes(replacement.to)) continue
-    if (!source.includes(replacement.from)) {
-      throw new Error(
-        `Zero3 GPT Web UI overlay drift in ${relativePath}: could not find ${replacement.label}. ` +
-          'Review the pinned Hermes chat/sidebar boundary before updating the upstream pin.'
-      )
-    }
+    if (!source.includes(replacement.from)) throw new Error(`Zero3 provider UI overlay drift in ${relativePath}: missing ${replacement.label}`)
     source = source.replace(replacement.from, replacement.to)
   }
   write(file, source)
@@ -47,11 +37,12 @@ export function applyZero3GptWebUi() {
 
   patchFile('src/app/chat/sidebar/index.tsx', [
     {
-      label: 'GPT Web sidebar section import',
+      label: 'provider sidebar imports',
       from: "import { SidebarSessionsSection, VIRTUALIZE_THRESHOLD } from './sessions-section'",
       to:
         "import { SidebarSessionsSection, VIRTUALIZE_THRESHOLD } from './sessions-section'\n" +
-        "import { ZERO3_NEW_SESSION_PROVIDER_EVENT, Zero3GptWebSection } from './zero3-gpt-web-section'"
+        "import { ZERO3_NEW_SESSION_PROVIDER_EVENT, Zero3GptWebSection } from './zero3-gpt-web-section'\n" +
+        "import { Zero3GeminiSessionSection } from './gemini-session-section'"
     },
     {
       label: 'new-session provider picker dispatch',
@@ -71,7 +62,7 @@ export function applyZero3GptWebUi() {
         "                      onNavigate(item)"
     },
     {
-      label: 'recents-header new-session provider picker dispatch',
+      label: 'recents-header provider picker dispatch',
       from:
         "                                if (agentsGrouped) {\n" +
         "                                  openProjectCreate()\n" +
@@ -88,7 +79,7 @@ export function applyZero3GptWebUi() {
         "                                }"
     },
     {
-      label: 'always-mounted GPT Web session rows and provider picker',
+      label: 'always-mounted provider session rows and picker',
       from:
         "        </SidebarGroup>\n\n" +
         "        {showSessionSections && (",
@@ -100,14 +91,15 @@ export function applyZero3GptWebUi() {
         "            const newSession = SIDEBAR_NAV.find(item => item.id === 'new-session')\n" +
         "            if (newSession) onNavigate(newSession)\n" +
         "          }}\n" +
-        "        />\n\n" +
+        "        />\n" +
+        "        <Zero3GeminiSessionSection />\n\n" +
         "        {showSessionSections && ("
     }
   ])
 
   patchFile('src/app/chat/index.tsx', [
     {
-      label: 'primary Chat surface native-view host marker',
+      label: 'primary provider native-view/portal host marker',
       from:
         "      data-chat-surface=\"\"\n" +
         "      data-chat-unfocused={surfaceFocused ? undefined : ''}",
