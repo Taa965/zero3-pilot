@@ -197,7 +197,7 @@ export class Zero3GptWebProvider {
     const live = await this.ensureLive(entry)
     await live.view.webContents.loadURL(url)
     live.lastUsedAt = Date.now()
-    this.bump(id)
+    this.bump(live.entryId)
     return { url: live.view.webContents.getURL() || url }
   }
 
@@ -207,7 +207,7 @@ export class Zero3GptWebProvider {
     const live = await this.ensureLive(entry)
     live.view.webContents.reload()
     live.lastUsedAt = Date.now()
-    this.bump(id)
+    this.bump(live.entryId)
     return { ok: true }
   }
 
@@ -293,7 +293,7 @@ export class Zero3GptWebProvider {
       if (!view.webContents.isDestroyed()) {
         this.emitEvent({
           kind: 'state',
-          entryId: entry.id,
+          entryId: live.entryId,
           state: 'error',
           detail: error instanceof Error ? error.message : String(error)
         })
@@ -353,7 +353,7 @@ export class Zero3GptWebProvider {
       // Zero3 workspace metadata store.
       const currentUrl = observedChatGptUrl(contents.getURL())
       if (!currentUrl) return
-      this.queueObservedState(live.entryId, currentUrl, contents.getTitle())
+      this.queueObservedState(live, currentUrl, contents.getTitle())
     }
 
     contents.on('did-navigate', observe)
@@ -392,29 +392,42 @@ export class Zero3GptWebProvider {
     })
   }
 
-  private queueObservedState(entryId: string, currentUrl: string, title: string): void {
+  private queueObservedState(live: LiveGptWebView, currentUrl: string, title: string): void {
     const conversationUrl = canonicalConversationUrl(currentUrl)
     const pageTitle = normalizedTitle(title)
     this.persistenceTail = this.persistenceTail
       .then(async () => {
-        const updated = await this.entries.updateGptWebNavigation({
-          id: entryId,
+        const sourceEntryId = live.entryId
+        const resolved = await this.entries.resolveGptWebNavigation({
+          id: sourceEntryId,
           currentUrl,
           ...(conversationUrl ? { conversationUrl } : {}),
           ...(pageTitle ? { pageTitle } : {})
         })
+
+        if (resolved.entry.id !== sourceEntryId) {
+          const existingTarget = this.live.get(resolved.entry.id)
+          if (existingTarget && existingTarget !== live) this.destroyLive(resolved.entry.id, 'suspended')
+          this.live.delete(sourceEntryId)
+          live.entryId = resolved.entry.id
+          live.lastUsedAt = Date.now()
+          this.live.set(live.entryId, live)
+          this.bump(live.entryId)
+        }
+
         this.emitEvent({
           kind: 'navigation',
-          entryId,
-          currentUrl: updated.currentUrl,
-          conversationUrl: updated.conversationUrl,
-          pageTitle: updated.pageTitle
+          entryId: resolved.entry.id,
+          previousEntryId: resolved.previousEntryId,
+          currentUrl: resolved.entry.currentUrl,
+          conversationUrl: resolved.entry.conversationUrl,
+          pageTitle: resolved.entry.pageTitle
         })
       })
       .catch(error => {
         this.emitEvent({
           kind: 'state',
-          entryId,
+          entryId: live.entryId,
           state: 'error',
           detail: error instanceof Error ? error.message : String(error)
         })
