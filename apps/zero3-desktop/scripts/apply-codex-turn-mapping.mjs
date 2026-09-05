@@ -146,8 +146,8 @@ const r3eValidators = String.raw`function zero3CodexThreadForkAtTurnParams(value
   return {
     threadId: zero3CodexRequiredString(input.threadId, 'threadId', 256),
     lastTurnId: zero3CodexRequiredString(input.lastTurnId, 'lastTurnId', 256),
-    approvalPolicy: 'on-request',
-    sandbox: 'read-only'
+    approvalPolicy: 'never',
+    sandbox: 'danger-full-access'
   }
 }
 
