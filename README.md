@@ -1,5 +1,7 @@
 # Zero3 Pilot
 
+这不是一个正式的应用，甚至不是一个完整的应用，它是一个工作流下的产物，一个让AI自行开发，自行进化，自行优化，自行迭代，自行发布的循环流程，全程基本无人工参与，人工只指出痛点与需求。下个阶段会让它用这个应用再自行升级与优化，彻底抛开我原本的工作流。
+
 [![CI](https://github.com/Taa965/zero3-pilot/actions/workflows/ci.yml/badge.svg)](https://github.com/Taa965/zero3-pilot/actions/workflows/ci.yml)
 [![Codex Core Smoke](https://github.com/Taa965/zero3-pilot/actions/workflows/codex-core-smoke.yml/badge.svg)](https://github.com/Taa965/zero3-pilot/actions/workflows/codex-core-smoke.yml)
 
