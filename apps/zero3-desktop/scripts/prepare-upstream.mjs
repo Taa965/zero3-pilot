@@ -114,7 +114,7 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/store/updates.ts',
     ...brandedLocaleFiles.map(file => `apps/desktop/src/i18n/${file}`)
   ])
-  const unexpected = trackedHermesChanges().filter(file => !allowed.has(file))
+  const unexpected = trackedHermesChanges().filter(file => !allowed.has(file) && !file.startsWith('apps/desktop/src/zero3-ui-v2/') && file !== 'apps/desktop/src/main.tsx' && file !== 'apps/desktop/src/app/chat/sidebar/index.tsx' && file !== 'apps/desktop/src/app/chat/index.tsx')
   if (unexpected.length > 0) {
     throw new Error(
       `Hermes upstream contains tracked changes outside the Zero3 shell overlay:\n${unexpected
@@ -179,6 +179,14 @@ function applyBrandOverlay() {
   packageJson.build.nsis.uninstallDisplayName = 'Zero3 Pilot'
 
   fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
+
+  const electronMainPath = path.join(hermesDesktopDir, 'electron', 'main.ts')
+  const electronMain = fs.readFileSync(electronMainPath, 'utf8')
+  const brandedElectronMain = electronMain.replaceAll('com.nousresearch.hermes', 'ai.zero3.pilot')
+  if (brandedElectronMain === electronMain && !electronMain.includes('ai.zero3.pilot')) {
+    throw new Error('Hermes Desktop AppUserModelID changed upstream; update the Zero3 branding overlay.')
+  }
+  fs.writeFileSync(electronMainPath, brandedElectronMain)
 
   const indexPath = path.join(hermesDesktopDir, 'index.html')
   const indexHtml = fs.readFileSync(indexPath, 'utf8')

@@ -9,3 +9,6 @@ Thumbs.db
 .env.*
 !.env.example
 /.codegraph
+
+# Local build/verification artifacts
+/output/

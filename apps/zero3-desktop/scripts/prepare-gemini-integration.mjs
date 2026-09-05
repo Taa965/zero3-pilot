@@ -8,6 +8,7 @@ import { applyZero3AgentIntegrationRuntime } from './apply-agent-integration-run
 import { applyZero3AgentReviewLoop } from './apply-agent-review-loop.mjs'
 import { applyZero3AgentWorktreeGuard } from './apply-agent-worktree-guard.mjs'
 import { applyZero3AgentMcpLifecycle } from './apply-agent-mcp-lifecycle.mjs'
+import { applyZero3UiV2 } from '../apply-zero3-ui-v2.mjs'
 
 // Ordering is intentional. P01-P06 land their narrow overlays first. The final
 // integration overlay restages the current authoritative runtime sources. The
@@ -24,6 +25,7 @@ applyZero3AgentIntegrationRuntime()
 applyZero3AgentReviewLoop()
 applyZero3AgentWorktreeGuard()
 applyZero3AgentMcpLifecycle()
+applyZero3UiV2()
 
 console.log('Zero3 Gemini/Antigravity integration overlays staged into the pinned desktop shell.')
 console.log('Static staging only: no Gemini login, Antigravity execution, Windows build, or acceptance PASS is implied.')

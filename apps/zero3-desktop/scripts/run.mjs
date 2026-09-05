@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { pathToFileURL } from 'node:url'
 
 import {
   codexRoot,
@@ -74,6 +76,56 @@ function ensureHermesDependencies(env) {
   ) {
     throw new Error('Zero3 project-context MCP dependencies were not installed into the Hermes desktop workspace.')
   }
+}
+
+async function ensureDevElectronIdentity() {
+  if (process.platform !== 'win32' || mode !== 'dev') return
+
+  const electronExe = path.join(hermesDesktopDir, 'node_modules', 'electron', 'dist', 'electron.exe')
+  const icon = path.join(hermesDesktopDir, 'assets', 'icon.ico')
+  const marker = path.join(path.dirname(electronExe), '.zero3-pilot-identity.json')
+  const rceditEntry = path.join(hermesRoot, 'node_modules', 'rcedit', 'lib', 'index.js')
+  if (!isFile(electronExe) || !isFile(icon) || !isFile(rceditEntry)) return
+
+  const iconSha256 = createHash('sha256').update(fs.readFileSync(icon)).digest('hex')
+  const executableStat = fs.statSync(electronExe)
+  try {
+    const saved = JSON.parse(fs.readFileSync(marker, 'utf8'))
+    if (
+      saved.iconSha256 === iconSha256 &&
+      saved.executableSize === executableStat.size &&
+      saved.executableMtimeMs === executableStat.mtimeMs
+    ) {
+      return
+    }
+  } catch {
+    // Missing or stale marker: stamp the development Electron executable below.
+  }
+
+  const { rcedit } = await import(pathToFileURL(rceditEntry).href)
+  await rcedit(electronExe, {
+    icon,
+    'version-string': {
+      ProductName: 'Zero3 Pilot',
+      FileDescription: 'Zero3 Pilot',
+      CompanyName: 'Zero3 Pilot'
+    }
+  })
+
+  const stampedStat = fs.statSync(electronExe)
+  fs.writeFileSync(
+    marker,
+    `${JSON.stringify(
+      {
+        iconSha256,
+        executableSize: stampedStat.size,
+        executableMtimeMs: stampedStat.mtimeMs
+      },
+      null,
+      2
+    )}\n`
+  )
+  console.log('[Zero3] Stamped the development Electron executable with the Zero3 Pilot icon.')
 }
 
 function ensurePinnedCodexBinary(env, profile = 'debug') {
@@ -259,6 +311,7 @@ const env = {
 }
 
 ensureHermesDependencies(env)
+await ensureDevElectronIdentity()
 
 // Hermes still boots its backend only so the unported UI can render. No Zero3
 // capability may depend on it. R1A Codex IPC is independent and talks directly
