@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zero3.pilot.development-group.v1",
+  "title": "Zero3 Development Group V1",
+  "type": "object",
+  "required": ["contract", "groupId", "repository", "masterGoal", "masterPrompt", "developmentPlan", "planHash", "baselineSha", "integrationRef", "requirementIds", "waveIds", "sessionIds", "policy", "createdAt"],
+  "properties": {
+    "contract": { "const": "zero3.pilot.development-group.v1" },
+    "groupId": { "type": "string", "minLength": 1 },
+    "repository": { "type": "string", "minLength": 1 },
+    "masterGoal": { "type": "string", "minLength": 1 },
+    "masterPrompt": { "type": "string", "minLength": 1 },
+    "developmentPlan": { "type": "string", "minLength": 1 },
+    "planHash": { "type": "string", "minLength": 1 },
+    "baselineSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "integrationRef": { "type": "string", "minLength": 1 },
+    "requirementIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "waveIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "sessionIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "createdAt": { "type": "string", "minLength": 1 },
+    "policy": {
+      "type": "object",
+      "required": ["maxParallelSessions", "maxSessionAttempts", "maxRepairSessions", "maxRepairWaves", "maxSameFailureAttempts", "maxSessionSubagents", "permissionProfile", "completionMode", "verificationPolicyRevision", "targetBranch", "protectedPaths", "mandatoryTests"],
+      "properties": {
+        "maxParallelSessions": { "type": "integer", "minimum": 1 },
+        "maxSessionAttempts": { "type": "integer", "minimum": 1 },
+        "maxRepairSessions": { "type": "integer", "minimum": 1 },
+        "maxRepairWaves": { "type": "integer", "minimum": 1 },
+        "maxSameFailureAttempts": { "type": "integer", "minimum": 1 },
+        "maxSessionSubagents": { "type": "integer", "minimum": 1 },
+        "permissionProfile": { "enum": ["read_only", "standard", "elevated", "full_control"] },
+        "completionMode": { "enum": ["strict", "allow_explicit_waiver"] },
+        "verificationPolicyRevision": { "type": "string", "minLength": 1 },
+        "targetBranch": { "type": "string", "minLength": 1 },
+        "protectedPaths": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "mandatoryTests": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

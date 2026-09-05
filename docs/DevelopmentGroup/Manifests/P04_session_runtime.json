@@ -1,0 +1,25 @@
+{
+  "session": "P04",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "5b6a062f84e79037ac2e48da79e235c423bf36ac",
+  "head_sha": "78bb18be32ba819d2eac52a4ba44db15573055b0",
+  "lane_commits": [
+    "163093654c614a77a07f8e30555b2ddbbc302791",
+    "a295977b9438a5b5dc5268ba879b5631918cc74c",
+    "f576525b052c3fb998a72bd07fdd99dcdf37ae48",
+    "78bb18be32ba819d2eac52a4ba44db15573055b0"
+  ],
+  "owned_paths": ["apps/zero3-desktop/group-runtime/session/**"],
+  "changed_paths": [
+    "apps/zero3-desktop/group-runtime/session/index.ts",
+    "apps/zero3-desktop/group-runtime/session/prompt-builder.ts",
+    "apps/zero3-desktop/group-runtime/session/session-runtime.ts",
+    "apps/zero3-desktop/group-runtime/session/session-runtime.test.ts"
+  ],
+  "tests_added": ["apps/zero3-desktop/group-runtime/session/session-runtime.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node session runtime tests", "real Codex Thread/subagent validation", "Windows acceptance"],
+  "icr": [],
+  "known_risks": ["P02 store adapter and P06 controller wiring are deferred to M1 consumers"],
+  "p99_wiring": ["wire SessionRuntimeStorePort to DevelopmentGroupStore without changing P04 public contracts"]
+}

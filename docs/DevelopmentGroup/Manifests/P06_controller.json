@@ -1,0 +1,15 @@
+{
+  "session": "P06",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "382c4ced5f9b765545e71776468de32fa6f4f237",
+  "branch": "parallel/dg-p06-controller",
+  "implementation_head": "bad47ce9bc05c9b6855d9c2d1a2f493911b9e5e5",
+  "owned_paths": ["apps/zero3-desktop/group-runtime/controller/**"],
+  "closeout_repairs": ["map frozen Session waiting_input to controller waiting_human signal without changing C1"],
+  "tests_added_or_updated": ["apps/zero3-desktop/group-runtime/controller/controller.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node controller tests", "real durable restart/concurrency", "real Codex integration", "Windows integrated acceptance"],
+  "c1_modified": false,
+  "known_risks": ["runtime/renderer wiring remains outside P06"],
+  "p99_wiring": ["P07 remains integration authority; preserve human gate for OutcomeUnknown"]
+}

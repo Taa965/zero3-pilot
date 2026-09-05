@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "zero3.pilot.development-delivery.v1",
+  "title": "Zero3 Development Delivery V1",
+  "type": "object",
+  "required": ["contract", "groupId", "sessionId", "executionId", "status", "baseSha", "headSha", "changedPaths", "requirements", "testsAdded", "testsExecuted", "artifacts", "knownIssues", "downstreamNotes", "deliveryHash", "createdAt"],
+  "properties": {
+    "contract": { "const": "zero3.pilot.development-delivery.v1" },
+    "groupId": { "type": "string", "minLength": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "executionId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["completed", "blocked", "failed", "cancelled", "outcome_unknown"] },
+    "baseSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "headSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "changedPaths": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "requirements": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "testsAdded": { "type": "array", "items": { "type": "string" } },
+    "testsExecuted": { "type": "array", "items": { "type": "string" } },
+    "artifacts": { "type": "array", "items": { "type": "string" } },
+    "knownIssues": { "type": "array", "items": { "type": "string" } },
+    "downstreamNotes": { "type": "array", "items": { "type": "string" } },
+    "handoffCheckpoint": { "type": "string", "minLength": 1 },
+    "deliveryHash": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

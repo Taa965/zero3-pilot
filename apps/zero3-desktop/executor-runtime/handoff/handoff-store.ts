@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -6,8 +6,10 @@ import { verifyCheckpointHash } from './handoff-hash.ts'
 import { ZERO3_HANDOFF_SCHEMA, type Zero3HandoffCheckpointV1 } from './handoff-types.ts'
 
 function safePart(value: string): string {
-  if (!/^[A-Za-z0-9._-]{1,128}$/.test(value)) throw new Error('handoff storage identity contains unsafe characters')
-  return value
+  const normalized = value.trim()
+  if (!normalized || /[\0\r\n]/u.test(normalized)) throw new Error('handoff storage identity is empty or contains control characters')
+  if (/^[A-Za-z0-9._-]{1,128}$/.test(normalized)) return normalized
+  return `id-${createHash('sha256').update(normalized).digest('hex')}`
 }
 
 async function syncParentDirectory(directory: string): Promise<void> {

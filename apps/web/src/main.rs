@@ -6,6 +6,7 @@
 //! fail closed with 503.
 
 mod control_admission;
+mod control_extensions;
 mod control_plane;
 
 use axum::extract::DefaultBodyLimit;
@@ -23,8 +24,12 @@ async fn health() -> Json<Value> {
     }))
 }
 
-fn app(remote_control: control_plane::RemoteControlRuntime) -> Router {
+fn app(
+    remote_control: control_plane::RemoteControlRuntime,
+    task_extensions: control_extensions::TaskExtensionRuntime,
+) -> Router {
     let remote = control_plane::router(remote_control)
+        .merge(control_extensions::router(task_extensions))
         .layer(DefaultBodyLimit::max(
             control_admission::MAX_REMOTE_CONTROL_BODY_BYTES,
         ))
@@ -38,7 +43,8 @@ fn app(remote_control: control_plane::RemoteControlRuntime) -> Router {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let remote_control = control_plane::RemoteControlRuntime::from_env()?;
-    let app = app(remote_control);
+    let task_extensions = control_extensions::TaskExtensionRuntime::from_env()?;
+    let app = app(remote_control, task_extensions);
 
     let port: u16 = std::env::var("ZERO3_WEB_PORT")
         .ok()
@@ -62,7 +68,8 @@ mod tests {
     #[tokio::test]
     async fn health_returns_ok_even_when_remote_control_is_disabled() {
         let remote_control = control_plane::RemoteControlRuntime::from_env().unwrap();
-        let response = app(remote_control)
+        let task_extensions = control_extensions::TaskExtensionRuntime::from_env().unwrap();
+        let response = app(remote_control, task_extensions)
             .oneshot(
                 Request::builder()
                     .uri("/health")

@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { pathToFileURL } from 'node:url'
 
 import {
   codexRoot,
@@ -52,12 +54,78 @@ function runSync(file, args, options = {}) {
   }
 }
 
+function hermesNodePackageExists(...segments) {
+  return (
+    isFile(path.join(hermesDesktopDir, 'node_modules', ...segments, 'package.json')) ||
+    isFile(path.join(hermesRoot, 'node_modules', ...segments, 'package.json'))
+  )
+}
+
 function ensureHermesDependencies(env) {
-  if (isDirectory(path.join(hermesRoot, 'node_modules'))) return
+  const nodeModulesPresent = isDirectory(path.join(hermesRoot, 'node_modules'))
+  const zero3McpDependenciesPresent =
+    hermesNodePackageExists('@modelcontextprotocol', 'server') && hermesNodePackageExists('zod')
+  if (nodeModulesPresent && zero3McpDependenciesPresent) return
   runSync(commandName('npm'), ['install', '--workspace', 'apps/desktop'], {
     cwd: hermesRoot,
     env
   })
+  if (
+    !hermesNodePackageExists('@modelcontextprotocol', 'server') ||
+    !hermesNodePackageExists('zod')
+  ) {
+    throw new Error('Zero3 project-context MCP dependencies were not installed into the Hermes desktop workspace.')
+  }
+}
+
+async function ensureDevElectronIdentity() {
+  if (process.platform !== 'win32' || mode !== 'dev') return
+
+  const electronExe = path.join(hermesDesktopDir, 'node_modules', 'electron', 'dist', 'electron.exe')
+  const icon = path.join(hermesDesktopDir, 'assets', 'icon.ico')
+  const marker = path.join(path.dirname(electronExe), '.zero3-pilot-identity.json')
+  const rceditEntry = path.join(hermesRoot, 'node_modules', 'rcedit', 'lib', 'index.js')
+  if (!isFile(electronExe) || !isFile(icon) || !isFile(rceditEntry)) return
+
+  const iconSha256 = createHash('sha256').update(fs.readFileSync(icon)).digest('hex')
+  const executableStat = fs.statSync(electronExe)
+  try {
+    const saved = JSON.parse(fs.readFileSync(marker, 'utf8'))
+    if (
+      saved.iconSha256 === iconSha256 &&
+      saved.executableSize === executableStat.size &&
+      saved.executableMtimeMs === executableStat.mtimeMs
+    ) {
+      return
+    }
+  } catch {
+    // Missing or stale marker: stamp the development Electron executable below.
+  }
+
+  const { rcedit } = await import(pathToFileURL(rceditEntry).href)
+  await rcedit(electronExe, {
+    icon,
+    'version-string': {
+      ProductName: 'Zero3 Pilot',
+      FileDescription: 'Zero3 Pilot',
+      CompanyName: 'Zero3 Pilot'
+    }
+  })
+
+  const stampedStat = fs.statSync(electronExe)
+  fs.writeFileSync(
+    marker,
+    `${JSON.stringify(
+      {
+        iconSha256,
+        executableSize: stampedStat.size,
+        executableMtimeMs: stampedStat.mtimeMs
+      },
+      null,
+      2
+    )}\n`
+  )
+  console.log('[Zero3] Stamped the development Electron executable with the Zero3 Pilot icon.')
 }
 
 function ensurePinnedCodexBinary(env, profile = 'debug') {
@@ -75,7 +143,11 @@ function ensurePinnedCodexBinary(env, profile = 'debug') {
     'codex'
   ]
   if (profile === 'release') args.push('--release')
-  runSync('cargo', args, { cwd: codexRoot, env })
+  // rustup resolves rust-toolchain.toml by walking up from the working
+  // directory, not from --manifest-path. The pinned Codex toolchain file lives
+  // in codex-rs/, so running from codexRoot silently falls back to whatever the
+  // machine's default toolchain is instead of the pinned compiler.
+  runSync('cargo', args, { cwd: path.join(codexRoot, 'codex-rs'), env })
 
   if (!isFile(binary)) {
     throw new Error(`Pinned Codex binary was not produced at ${binary}`)
@@ -194,8 +266,14 @@ function runHermesDesktop(script, env) {
   })
 }
 
-runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs')])
-runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])
+const externallyPrepared = ['1', 'true', 'yes', 'on'].includes(
+  (process.env.ZERO3_DESKTOP_ALREADY_PREPARED ?? '').trim().toLowerCase()
+)
+if (!externallyPrepared) {
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs')])
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-gemini-integration.mjs')])
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])
+}
 
 const hermesHome = resolveHermesHome()
 const codexHome = resolveCodexHome()
@@ -233,6 +311,7 @@ const env = {
 }
 
 ensureHermesDependencies(env)
+await ensureDevElectronIdentity()
 
 // Hermes still boots its backend only so the unported UI can render. No Zero3
 // capability may depend on it. R1A Codex IPC is independent and talks directly

@@ -1,0 +1,25 @@
+{
+  "schema": "zero3.pilot.development-group-baseline.v1",
+  "repository": "Taa965/zero3-pilot",
+  "integration_branch": "integration/development-group-v1",
+  "base_branch": "main",
+  "base_sha": "c93a3f1198e31e98b1e5caf6f72dd8a77f7b3733",
+  "codex_pin": "94311d447587411789533c47601fd8bc9d81eb48",
+  "hermes_agent_pin": "f7c79efbac19ae18e8dee7c79a4e4c0935299b5f",
+  "deepseek_harness_pin": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+  "executor_contract": "zero3.pilot.executor.v1",
+  "handoff_contract": "zero3.pilot.handoff.v1",
+  "group_contract": "zero3.pilot.development-group.v1",
+  "alpha_publication_status": "not_published",
+  "alpha_release_gate": "overridden_for_development_by_release_owner",
+  "owner_override": {
+    "at": "2026-09-03T01:38:08Z",
+    "instruction": "continue remaining feature development with 30 parallel lanes",
+    "scope": "development-start only; does not falsify tag/release or Windows acceptance state"
+  },
+  "validation_policy": {
+    "chatgpt_web": "static_review_only",
+    "linux_real_execution": "not_run",
+    "windows_integrated_acceptance": "deferred_to_final_user_local_run"
+  }
+}

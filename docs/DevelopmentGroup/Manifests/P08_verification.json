@@ -1,0 +1,15 @@
+{
+  "session": "P08",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "382c4ced5f9b765545e71776468de32fa6f4f237",
+  "branch": "parallel/dg-p08-verification",
+  "implementation_head": "d0da74a5e702e9b9fe94eb59f12b6bef1b355a18",
+  "owned_paths": ["apps/zero3-desktop/group-runtime/verification/**"],
+  "closeout_repairs": ["enforce policy-mandatory verification commands at verification-run entry and require them to be marked required"],
+  "tests_added_or_updated": ["apps/zero3-desktop/group-runtime/verification/verification.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node verification tests", "actual verification commands", "platform runners", "Windows integrated verification"],
+  "c1_modified": false,
+  "known_risks": ["M2 wiring must pass the frozen policy mandatory test IDs into executeVerification"],
+  "p99_wiring": ["never infer PASS from an omitted/not-run platform-mandatory command"]
+}

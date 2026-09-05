@@ -8,8 +8,21 @@ on:
       - '.github/workflows/windows-alpha-artifact.yml'
   workflow_dispatch: {}
   push:
+    branches:
+      - 'feature/gpt-web-gemini-antigravity-v1'
     tags:
       - 'v*'
+    paths:
+      - 'apps/zero3-desktop/**'
+      - 'scripts/check-architecture.mjs'
+      - 'scripts/check-gemini-antigravity-architecture.mjs'
+      - 'scripts/check-prepared-gemini-integration.mjs'
+      - 'scripts/acceptance/gemini-antigravity-windows.ps1'
+      - '.github/workflows/windows-alpha-artifact.yml'
+
+concurrency:
+  group: windows-alpha-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   package-windows-alpha:
@@ -72,6 +85,13 @@ jobs:
           node --check apps/zero3-desktop/scripts/config.mjs
           node --check apps/zero3-desktop/scripts/run.mjs
           node --check apps/zero3-desktop/scripts/prepare-windows-package.mjs
+
+      - name: Gemini/Antigravity exact-SHA Windows automated acceptance
+        if: github.ref == 'refs/heads/feature/gpt-web-gemini-antigravity-v1'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\scripts\acceptance\gemini-antigravity-windows.ps1 -CandidateSha $env:GITHUB_SHA
 
       - name: Build Codex-native Windows alpha package
         working-directory: apps/zero3-desktop

@@ -5,6 +5,7 @@ import type {
   Zero3RemoteHostStatus,
   Zero3RemoteLease,
   Zero3RemoteOutboxEnvelope,
+  Zero3RemoteTask,
   Zero3RemoteTaskState
 } from './remote-types'
 
@@ -35,6 +36,14 @@ async function responseJson(response: Response): Promise<unknown> {
   } catch {
     throw new Error(`Zero3 Remote Host control plane returned invalid JSON (HTTP ${response.status})`)
   }
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
 }
 
 export class Zero3RemoteControlPlaneError extends Error {
@@ -107,6 +116,30 @@ export class Zero3RemoteClient {
     }
   }
 
+  private async taskExtension(taskId: string, executionId: string): Promise<Partial<Zero3RemoteTask> | null> {
+    let payload: unknown
+    try {
+      payload = await this.request(`/api/host/v1/tasks/${encodeURIComponent(taskId)}/extensions`, { method: 'GET' })
+    } catch (error) {
+      // Backward compatibility while older H5 deployments roll forward: an
+      // absent extension route means legacy task semantics, not task failure.
+      if (error instanceof Zero3RemoteControlPlaneError && error.status === 404) return null
+      throw error
+    }
+    const extension = record(payload)
+    const version = Number(extension.version ?? 0)
+    if (!Number.isSafeInteger(version) || version < 0) throw new Error('remote task extension has an invalid version')
+    if (version === 0) return null
+    if (extension.schema !== 'zero3.pilot.task-extension.v1') throw new Error('unsupported remote task extension schema')
+    if (extension.task_id !== taskId) throw new Error('remote task extension task_id mismatch')
+    if (extension.execution_id !== executionId) throw new Error('remote task extension execution_id mismatch')
+
+    return {
+      ...(extension.project_context == null ? {} : { project_context: extension.project_context as Zero3RemoteTask['project_context'] }),
+      ...(extension.handoff == null ? {} : { handoff: extension.handoff as Zero3RemoteTask['handoff'] })
+    }
+  }
+
   async register(capabilities: string[]): Promise<void> {
     await this.request('/api/host/v1/nodes/register', {
       method: 'POST',
@@ -142,9 +175,24 @@ export class Zero3RemoteClient {
     )
     if (payload == null) return null
     if (typeof payload !== 'object') throw new Error('Remote lease response must be an object or null')
-    const record = payload as Record<string, unknown>
-    if (record.task == null) return null
-    return record as unknown as Zero3RemoteLease
+    const lease = payload as unknown as Zero3RemoteLease
+    if (!lease.task) return null
+
+    const extension = await this.taskExtension(lease.task.task_id, lease.task.execution_id)
+    if (!extension) return lease
+    if (extension.project_context && lease.task.project_context && !sameJson(extension.project_context, lease.task.project_context)) {
+      throw new Error('remote task project_context conflicts with the H5 task extension envelope')
+    }
+    if (extension.handoff && lease.task.handoff && !sameJson(extension.handoff, lease.task.handoff)) {
+      throw new Error('remote task handoff conflicts with the H5 task extension envelope')
+    }
+    return {
+      ...lease,
+      task: {
+        ...lease.task,
+        ...extension
+      }
+    }
   }
 
   async renew(taskId: string, lease: Zero3RemoteLease): Promise<void> {

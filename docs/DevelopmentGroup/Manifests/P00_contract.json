@@ -1,0 +1,35 @@
+{
+  "session": "P00",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "c912f17e109b1710fe56b94bb289df546af597f9",
+  "head_sha": "a1ea013a613803debd9731f2adfd04632702e1fa",
+  "owned_paths": [
+    "apps/zero3-desktop/group-runtime/contracts/**",
+    "docs/DevelopmentGroup/CONTRACT_FREEZE_C1.md",
+    "docs/DevelopmentGroup/schema/**"
+  ],
+  "changed_paths": [
+    "apps/zero3-desktop/group-runtime/contracts/contract-types.ts",
+    "apps/zero3-desktop/group-runtime/contracts/state-machine.ts",
+    "apps/zero3-desktop/group-runtime/contracts/validators.ts",
+    "apps/zero3-desktop/group-runtime/contracts/index.ts",
+    "apps/zero3-desktop/group-runtime/contracts/contracts.test.ts",
+    "docs/DevelopmentGroup/CONTRACT_FREEZE_C1.md",
+    "docs/DevelopmentGroup/schema/development-group.v1.schema.json",
+    "docs/DevelopmentGroup/schema/development-session.v1.schema.json",
+    "docs/DevelopmentGroup/schema/development-delivery.v1.schema.json",
+    "docs/DevelopmentGroup/schema/group-completion-proof.v1.schema.json",
+    "docs/DevelopmentGroup/Handoffs/P00_contract.md",
+    "docs/DevelopmentGroup/Manifests/P00_contract.json"
+  ],
+  "public_interfaces": [
+    "apps/zero3-desktop/group-runtime/contracts/index.ts"
+  ],
+  "dependencies": ["zero3.pilot.executor.v1", "zero3.pilot.handoff.v1"],
+  "tests_added": ["apps/zero3-desktop/group-runtime/contracts/contracts.test.ts"],
+  "tests_run": ["static code/contract review"],
+  "not_run": ["Node contract tests", "Windows product/runtime acceptance"],
+  "icr": [],
+  "known_risks": ["glob-aware ownership is delegated to P03", "runtime evidence binding is delegated to P09"],
+  "p99_wiring": ["freeze C1 into integration before any Wave 1 implementation consumes it"]
+}

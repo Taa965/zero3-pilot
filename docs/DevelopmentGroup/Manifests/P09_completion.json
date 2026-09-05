@@ -1,0 +1,18 @@
+{
+  "session": "P09",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "382c4ced5f9b765545e71776468de32fa6f4f237",
+  "branch": "parallel/dg-p09-completion",
+  "implementation_head": "7051f46f4972a19cefef311e98eb6e7eb18c444e",
+  "owned_paths": ["apps/zero3-desktop/group-runtime/completion/**"],
+  "closeout_repairs": [
+    "verify all Deliveries contained in the cumulative final IntegrationMilestone ancestry",
+    "bind completion verification to exact final SHA, active policy revision and complete mandatory test set"
+  ],
+  "tests_added_or_updated": ["apps/zero3-desktop/group-runtime/completion/completion.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node completion tests", "full M2 end-to-end completion flow", "Windows integrated acceptance"],
+  "c1_modified": false,
+  "known_risks": ["M2 wiring must persist/read the full ordered integration ancestry and active verification policy"],
+  "p99_wiring": ["never mark completion from the last merge alone; use final cumulative evidence"]
+}

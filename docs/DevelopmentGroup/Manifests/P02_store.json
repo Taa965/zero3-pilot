@@ -1,0 +1,25 @@
+{
+  "session": "P02",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "5b6a062f84e79037ac2e48da79e235c423bf36ac",
+  "head_sha": "8d115b5e0608b6748358b5559665c72d34fd6da6",
+  "lane_commits": [
+    "d213f8f5fb1c99e2be791f3aad7735c95ea41247",
+    "83b2ad8129319beb389b1d9209a17d43184efda8",
+    "8d115b5e0608b6748358b5559665c72d34fd6da6"
+  ],
+  "owned_paths": ["apps/zero3-desktop/group-runtime/store/**"],
+  "changed_paths": [
+    "apps/zero3-desktop/group-runtime/store/atomic-file.ts",
+    "apps/zero3-desktop/group-runtime/store/event-ledger.ts",
+    "apps/zero3-desktop/group-runtime/store/group-store.ts",
+    "apps/zero3-desktop/group-runtime/store/index.ts",
+    "apps/zero3-desktop/group-runtime/store/store.test.ts"
+  ],
+  "tests_added": ["apps/zero3-desktop/group-runtime/store/store.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node store tests", "Windows restart acceptance"],
+  "icr": [],
+  "known_risks": ["semantic replay reducer is owned by P06", "Windows directory fsync may be unsupported while file fsync remains enforced"],
+  "p99_wiring": ["adapt P04/P06 narrow persistence ports to DevelopmentGroupStore after M1"]
+}

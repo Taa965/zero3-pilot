@@ -1,0 +1,29 @@
+{
+  "session": "P01",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "5b6a062f84e79037ac2e48da79e235c423bf36ac",
+  "head_sha": "f4c07d9e378cf7e9fe3e28b8e4bf3bc622cf4141",
+  "lane_commits": [
+    "1e234d6242f5d4bfbdd03b2faabf3f38723d8ab5",
+    "b02eb3e7bcb0d058e91ce56265a3796e102af611",
+    "19fde49f9f7ae64f3228fefa7cd78307f06a3fd1",
+    "f4c07d9e378cf7e9fe3e28b8e4bf3bc622cf4141"
+  ],
+  "owned_paths": ["apps/zero3-desktop/group-runtime/planning/**"],
+  "changed_paths": [
+    "apps/zero3-desktop/group-runtime/planning/index.ts",
+    "apps/zero3-desktop/group-runtime/planning/ownership-planner.ts",
+    "apps/zero3-desktop/group-runtime/planning/planner.ts",
+    "apps/zero3-desktop/group-runtime/planning/planning-types.ts",
+    "apps/zero3-desktop/group-runtime/planning/planning.test.ts",
+    "apps/zero3-desktop/group-runtime/planning/requirement-normalizer.ts",
+    "apps/zero3-desktop/group-runtime/planning/session-partitioner.ts",
+    "apps/zero3-desktop/group-runtime/planning/wave-planner.ts"
+  ],
+  "tests_added": ["apps/zero3-desktop/group-runtime/planning/planning.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node planning tests", "Windows acceptance"],
+  "icr": [],
+  "known_risks": ["real Git ownership validation is delegated to P03", "LLM controller invocation is delegated to P06"],
+  "p99_wiring": ["wire planner output to durable Store and Workspace only after M1"]
+}

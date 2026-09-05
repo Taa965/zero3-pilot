@@ -1,0 +1,26 @@
+{
+  "session": "P03",
+  "status": "READY_FOR_INTEGRATION_REVIEW",
+  "base_sha": "5b6a062f84e79037ac2e48da79e235c423bf36ac",
+  "head_sha": "da872d9e9d0542a27247399fc4b9859b9dbdc1a8",
+  "lane_commits": [
+    "14fa650a75c9b023a5d9b887c0a7e5902e30e6ed",
+    "b9f6ffed83cc531c4e18a83fb275393c9c42c7df",
+    "da872d9e9d0542a27247399fc4b9859b9dbdc1a8"
+  ],
+  "owned_paths": ["apps/zero3-desktop/group-runtime/workspace/**"],
+  "changed_paths": [
+    "apps/zero3-desktop/group-runtime/workspace/delivery-gate.ts",
+    "apps/zero3-desktop/group-runtime/workspace/git-workspace.ts",
+    "apps/zero3-desktop/group-runtime/workspace/index.ts",
+    "apps/zero3-desktop/group-runtime/workspace/ownership.ts",
+    "apps/zero3-desktop/group-runtime/workspace/workspace-fingerprint.ts",
+    "apps/zero3-desktop/group-runtime/workspace/workspace.test.ts"
+  ],
+  "tests_added": ["apps/zero3-desktop/group-runtime/workspace/workspace.test.ts"],
+  "tests_run": ["static code review"],
+  "not_run": ["Node workspace tests", "real Git/worktree Windows checks"],
+  "icr": [],
+  "known_risks": ["integration exceptions must remain Integration Controller/P99 authority"],
+  "p99_wiring": ["P07 consumes DELIVERY_ACCEPT records; workers never self-merge"]
+}
