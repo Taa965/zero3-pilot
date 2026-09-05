@@ -826,6 +826,13 @@ import { selectZero3Model, selectZero3OllamaModel, selectedZero3Model, selectedZ
 const DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp'] as const
 const GLM_MODELS = ['glm-5.3-flash', 'glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-5', 'glm-4.7', 'glm-4.6', 'glm-4.5-air', 'glm-4.5'] as const
 
+type Zero3OllamaModelSummary = {
+  aliasCount: number
+  name: string
+  sizeBytes: number | null
+  modifiedAt: string | null
+}
+
 function sizeLabel(sizeBytes: number | null): string {
   if (sizeBytes == null) return ''
   const gib = sizeBytes / 1024 / 1024 / 1024
@@ -833,7 +840,7 @@ function sizeLabel(sizeBytes: number | null): string {
 }
 
 export function Zero3OllamaModelMenu() {
-  const [models, setModels] = useState<Zero3OllamaModel[]>([])
+  const [models, setModels] = useState<Zero3OllamaModelSummary[]>([])
   const [selectedModel, setSelectedModel] = useState<string>(() => selectedZero3OllamaModel() ?? '')
   const [selectedDeepSeekModel, setSelectedDeepSeekModel] = useState<string>(
     () => (selectedZero3Model()?.provider === 'deepseek' ? selectedZero3Model()?.model ?? '' : '')
