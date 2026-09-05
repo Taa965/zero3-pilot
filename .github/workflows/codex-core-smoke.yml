@@ -1,0 +1,33 @@
+name: Codex Core Smoke
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  pinned-codex-app-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Initialize pinned Codex source
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 -- upstream/codex
+          test "$(git -C upstream/codex rev-parse HEAD)" = "94311d447587411789533c47601fd8bc9d81eb48"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build pinned open-source Codex core
+        run: |
+          cargo build \
+            --manifest-path upstream/codex/codex-rs/Cargo.toml \
+            -p codex-cli \
+            --bin codex
+
+      - name: Real app-server JSONL handshake
+        run: |
+          node apps/zero3-desktop/scripts/smoke-codex-app-server.mjs \
+            upstream/codex/codex-rs/target/debug/codex

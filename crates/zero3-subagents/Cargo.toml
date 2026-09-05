@@ -3,13 +3,15 @@ name = "zero3-subagents"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Subagent registry: a unified provider contract over Codex/Claude/Hermes workers."
+description = "Subagent registry and real Codex/Claude/Hermes CLI workers."
 
 [dependencies]
 zero3-core = { path = "../zero3-core" }
+serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 anyhow.workspace = true
+tokio = { workspace = true, features = ["process", "time", "io-util", "macros", "rt-multi-thread"] }
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "time", "macros", "rt-multi-thread"] }

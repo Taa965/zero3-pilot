@@ -1,0 +1,53 @@
+name: R4A Executor Contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/executor-runtime/**'
+      - 'scripts/check-executor-runtime-architecture.mjs'
+      - '.github/workflows/r4a-executor-contract.yml'
+
+jobs:
+  executor-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Diff hygiene
+        run: git diff --check origin/main...HEAD
+
+      - name: Architecture guards
+        run: |
+          node scripts/check-architecture.mjs
+          node scripts/check-executor-runtime-architecture.mjs
+
+      - name: Strict TypeScript contract check
+        run: >-
+          npx --yes --package typescript@5.9.2 -- tsc
+          --noEmit
+          --strict
+          --target ES2022
+          --module NodeNext
+          --moduleResolution NodeNext
+          --allowImportingTsExtensions
+          --skipLibCheck
+          apps/zero3-desktop/executor-runtime/executor-types.ts
+          apps/zero3-desktop/executor-runtime/failure-normalizer.ts
+          apps/zero3-desktop/executor-runtime/executor-registry.ts
+          apps/zero3-desktop/executor-runtime/executor-router.ts
+          apps/zero3-desktop/executor-runtime/executor-manager.ts
+
+      - name: Executor Core behavior tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/executor-runtime/executor-runtime.test.ts

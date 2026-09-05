@@ -25,6 +25,8 @@
 //! from a physically crash-torn tail is a separate, explicit opt-in via
 //! `RecoveryMode::RecoverCrashTail` / `recover_with_mode` — the normal
 //! `recover()` path never silently tolerates one.
+//!
+pub mod persistent;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

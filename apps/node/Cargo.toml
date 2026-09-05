@@ -1,0 +1,29 @@
+[package]
+name = "zero3-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Zero3 Pilot local-first runtime node and control API."
+
+[[bin]]
+name = "zero3-pilot-node"
+path = "src/main.rs"
+
+[dependencies]
+zero3-core = { path = "../../crates/zero3-core" }
+zero3-store = { path = "../../crates/zero3-store" }
+zero3-scheduler = { path = "../../crates/zero3-scheduler" }
+zero3-providers = { path = "../../crates/zero3-providers" }
+zero3-subagents = { path = "../../crates/zero3-subagents" }
+zero3-memory = { path = "../../crates/zero3-memory" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+axum = "0.7"
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.4", features = ["util"] }

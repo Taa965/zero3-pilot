@@ -1,210 +1,371 @@
-# Architecture (Phase 1 + Phase 2 in progress)
+# Zero3 Pilot Architecture
 
-Zero3 Pilot is a personal computer agent platform built on the open-source
-Codex runtime — not "a Codex fork with some extra tools." See
-[`docs/UPSTREAM.md`](UPSTREAM.md) for how it stays syncable with
-`openai/codex`.
+This document describes the **current `main` architecture** of Zero3 Pilot. Historical phase-specific details remain in the linked R2/R3/H/D documents and in merged PRs, but this file is the public summary of what currently owns runtime authority and what has actually been merged.
 
-```
-zero3-pilot/
-├─ upstream/codex/      # git submodule, pinned to openai/codex — untouched
-├─ crates/               # Rust workspace: the actual extension code
-│  ├─ zero3-core/        # event schema, job/subagent/plugin traits, permission seam
-│  ├─ zero3-store/       # Event Store v1: append-only JSONL, replay, session/job correlation
-│  ├─ zero3-scheduler/   # Job Manager v1: queued/running/succeeded/failed/cancelled
-│  ├─ zero3-providers/   # ProviderRegistry + ComputerProvider/BrowserProvider + OpenComputerUseAdapter
-│  ├─ zero3-subagents/   # SubagentRegistry over Codex/Claude/Hermes (all placeholder workers so far)
-│  └─ zero3-memory/      # MemoryStore trait (placeholder)
-├─ apps/
-│  ├─ web/               # control server; ships GET /health
-│  └─ desktop/           # desktop shell — not started
-├─ zero3/                # conceptual module map -> crate locations (README)
-├─ mcp/                  # Zero3's own MCP servers (none yet)
-├─ skills/                # packaged task instructions (none yet)
-├─ scripts/               # dev tooling (dev-check.sh mirrors CI)
-├─ deployment/            # systemd/nginx templates + atomic deploy.sh (not wired to a host yet)
-└─ docs/
-```
+The non-negotiable rules live in [`ARCHITECTURE_CONSTITUTION.md`](ARCHITECTURE_CONSTITUTION.md).
 
-## Provider model
+## 1. Runtime authority
 
-`ComputerProvider` and `BrowserProvider` (in `crates/zero3-providers`) both
-extend a shared `Provider` supertrait (`name`, `capabilities`,
-`health_check`), so `ProviderRegistry<T>` works identically for either
-kind: register, list, `select(capability)` (first match by name, `None` if
-nobody qualifies), `health_check`/`health_check_all`. Each trait still has
-its own `Unimplemented*` placeholder that fails loudly (never a silent
-`Ok`) so the seam is exercised before a real backend is registered.
+Zero3 Pilot is a Codex-core desktop application.
 
-First real Computer Use backend: `OpenComputerUseAdapter`, integrating with
-[`iFurySt/open-codex-computer-use`](https://github.com/iFurySt/open-codex-computer-use)
-rather than reimplementing Windows UI Automation from scratch. **Verified
-against upstream source, not assumed** (see
-`crates/zero3-providers/src/open_computer_use.rs`'s module docs for the
-exact files checked): every platform runtime is invoked as `<binary> mcp`
-and speaks **standard MCP over stdio** — JSON-RPC 2.0, one message per
-line, `initialize` -> `notifications/initialized` -> `tools/list` /
-`tools/call`. An earlier version of this adapter assumed a custom
-line-delimited action/result protocol instead; that was wrong and has
-been replaced. The real tool surface requires an `app` argument (app name
-or bundle id) on every action-performing tool, which is why
-`ComputerAction`'s variants all carry `app: String` now.
+**OpenAI's open-source Codex is the authoritative native Agent Kernel/runtime** for:
 
-Because a JSON-RPC session is stateful (the handshake happens once), the
-adapter keeps a **persistent child process** across calls — spawned
-lazily, matched request/response by JSON-RPC `id`, and torn down cleanly
-by `shutdown()` (closes stdin, waits briefly, force-kills as a fallback —
-`Child::wait()` on Windows was observed *not* reacting promptly to a
-closed stdin pipe even though the same binary exits in ~200ms given the
-same EOF over a plain shell pipe, hence the short bounded grace period
-rather than trusting a graceful exit indefinitely) or `kill_on_drop` if
-the adapter itself is dropped. Tested end-to-end against a compiled
-protocol-compliant test double (`src/bin/fake_ocu.rs`/`fake_ocu_hang.rs`,
-exercised in `tests/open_computer_use.rs`): process starts, handshake
-succeeds, capabilities enumerate via a real `tools/list` round-trip, each
-`ComputerAction` maps to the correct real tool + arguments, shutdown is
-clean, and a hung backend times out rather than blocking forever.
+- Thread / Turn / Item conversation state;
+- the primary agent loop and context;
+- model/tool execution semantics;
+- shell/files and related tool activity;
+- approvals and user-input requests;
+- MCP and Codex-native execution surfaces;
+- interruption/resume and authoritative conversation history.
 
-```
-Codex
-  ↓ MCP / plugin
-OpenComputerUseAdapter   <-- crates/zero3-providers::ComputerProvider impl
-  ↓ MCP over stdio (JSON-RPC 2.0)
-open-computer-use <binary> mcp
-  ↓
-Windows UI Automation
+Zero3 may extend, present or orchestrate that runtime through reviewed boundaries, but it must not silently introduce a second hidden primary agent loop.
+
+## 2. Product topology
+
+```text
+                         Zero3 Pilot
+                              |
+                  Hermes-derived Desktop UI
+                   (Electron + React shell)
+                              |
+                       Zero3 UI Adapter
+                              |
+                       codex app-server
+                              |
+               open-source Codex Agent Kernel
+                              |
+          +-------------------+-------------------+
+          |                   |                   |
+   Codex-native          Executor/Handoff      Remote Host
+    extensions              orchestration       integration
+          |                   |                   |
+  output/context        Native Codex +       durable host /
+    retention          external providers     control plane
+          |
+  donor-derived ideas
+  re-expressed through
+  reviewed Zero3 seams
 ```
 
-Still to come: a native `WindowsUiaProvider` and a vision-model fallback
-provider, registered alongside `OpenComputerUseAdapter` in the same
-registry so callers can `select()` by capability without caring which one
-answers.
+### Upstream roles
 
-## Event Store + Job Manager
+- `upstream/codex/` — **CORE**, authoritative native Agent Kernel/app-server source.
+- `upstream/hermes-agent/` — **UI SHELL SOURCE**, Electron/React desktop UX donor. Remaining Hermes runtime use is compatibility scaffolding only.
+- `upstream/deepseek-harness/` — **CAPABILITY DONOR/REFERENCE**, never the default parallel native runtime.
 
-`zero3-store::EventStore` is the append-only, persistent, replayable log:
-every write goes to the end of a JSONL file and is `fsync`'d before the
-call returns, so a crash can only ever lose the last unflushed record. A
-fresh `EventStore::open` on the same path sees everything a previous
-process wrote — `replay()`, `replay_session(id)`, and `replay_job(id)`
-reconstruct history in original order.
+Installed Codex/Claude/Hermes applications may participate as external collaborators/executors. They do not become the native Zero3 kernel.
 
-`zero3-scheduler::JobManager` is the state machine on top of it:
-`queued -> running -> {succeeded, failed}`, or `{queued, running} ->
-cancelled`. **Durable-first, enforced under one lock hold**: every
-mutating call (`create`/`start`/`complete`/`fail`/`cancel`) validates the
-transition, appends the event, and *only after `EventLog::append`
-returns `Ok`* mutates the in-memory `JobRecord` — all under the same
-`jobs` mutex acquisition, so there's no window where a concurrent reader
-could observe a state change that later turns out not to have been
-logged. If the log write fails, `status`/`output`/`error`/`updated_at`
-are left exactly as they were; see the `*_does_not_advance_*_when_the_log_write_fails`
-failure-injection tests (`crates/zero3-scheduler/src/lib.rs`) that
-inject a log that always errors and assert nothing in the record moved.
-An invalid transition (e.g. cancelling a job that already succeeded) is
-rejected with `JobManagerError::InvalidTransition` rather than silently
-accepted — see the `cannot_cancel_a_terminal_job` test.
+## 3. Pinned upstream and managed Codex overlay
 
-`EventKind::JobQueued` carries `kind`/`payload`, and `JobCompleted`
-carries `output`, so the event stream is a complete source of truth, not
-just a count of transitions. `created_at`/`updated_at` are copied from
-each event's own `Event.at`, not a second independent `Utc::now()` call,
-so a record built live and one rebuilt from the log agree to the
-nanosecond rather than merely being close (a real bug caught by a
-failure-injection test during the first hardening pass).
+The reviewed pins currently recorded by `codex-overlays/manifest.json` are:
 
-**Recovery is strict by default, and "strict" means semantic, not just
-physical.** `JobManager::from_events`/`recover` replay every event through
-the exact same state-machine rules the live methods enforce — an orphan
-transition (no prior `JobQueued`), a duplicate `JobQueued`, or an event
-illegal for the job's current status (e.g. `JobCompleted` without a prior
-`JobStarted`, `JobCancelled` from a terminal state) is
-`Err(JobManagerError::CorruptHistory(..))`, never silently skipped or
-ignored — see `crates/zero3-scheduler/src/lib.rs`'s
-`*_is_corrupt_history` tests. When the log genuinely is intact,
-`from_events`/`recover` rebuild every field of every job —
-`id`/`kind`/`payload`/`status`/`output`/`error`/`session_id`/
-`created_at`/`updated_at` — purely from it;
-`crates/zero3-scheduler/tests/event_store_integration.rs` proves this
-against a real `EventStore` file: manager A creates jobs across every
-terminal outcome, is dropped, and manager B recovers from the reopened
-file with every `JobRecord` field matching manager A's original.
+```text
+Codex            94311d447587411789533c47601fd8bc9d81eb48
+Hermes Agent     f7c79efbac19ae18e8dee7c79a4e4c0935299b5f
+DeepSeek-Harness cd5ef8148158c3a752a658978873241fdf8e2bbc
+```
 
-The event log distinguishes a physically crash-torn tail from real
-corruption, and the distinction is **physical, not positional**:
-`EventStore::replay_recoverable()` only treats the very last record as a
-possible crash tail when the *file itself* doesn't end in `\n` — a
-newline-terminated last line that fails to parse is a complete write of
-bad content, not a crash tail, and is still fatal (an earlier version of
-this got that wrong, treating any invalid last non-empty line as
-salvageable regardless of termination; fixed and covered by
-`recoverable_replay_treats_a_terminated_invalid_last_line_as_fatal_not_a_tail`).
-Corruption anywhere before the last line is always fatal in both
-`replay()` and `replay_recoverable()`; nothing is silently skipped.
+The upstream Codex gitlink remains pinned. Zero3-specific Codex work is represented by the managed `codex-overlays/` system:
 
-That tolerance is wired into `JobManager` as an explicit opt-in, never a
-default: `RecoveryMode::Strict` (what plain `recover()` uses) rejects any
-log that isn't physically intact to the last byte;
-`RecoveryMode::RecoverCrashTail`
-(`JobManager::recover_with_mode(log, RecoveryMode::RecoverCrashTail)`)
-tolerates a physically torn tail and recovers everything before it — but
-always returns the `Option<TruncatedTail>` diagnostic alongside the
-manager, and still runs the exact same semantic state-machine validation
-described above (a physically-salvageable log with a semantically illegal
-prefix is still rejected).
-`crash_tail_recovery_salvages_durable_jobs_and_reports_exactly_one_torn_tail`
-exercises this end to end against a real `EventStore` file: durable jobs
-survive a simulated crash mid-write, strict recovery rejects the file
-outright, and crash-tail recovery salvages every durable job
-field-for-field while surfacing exactly one tail diagnostic.
+1. verify the exact Codex base SHA;
+2. reject unmanaged Codex worktree changes;
+3. install explicitly listed Zero3 extensions;
+4. apply explicitly listed patches in deterministic manifest order;
+5. reject unlisted/missing/unreplayable patches;
+6. replay the overlay in a detached candidate Codex worktree to detect upstream drift;
+7. run Codex format/build/app-server and architecture gates.
 
-## Subagent registry
+The active merged overlay features are currently:
 
-`zero3-subagents::SubagentRegistry` registers `Arc<dyn SubagentWorker>` by
-`worker.name()` and dispatches by name (`registry.dispatch("codex",
-task)`), so a caller never depends on which concrete backend runs a task.
-`CodexWorker`/`ClaudeWorker`/`HermesWorker` are registered under the
-contract today as `Unimplemented`-style placeholders (return a clear "not
-wired up" error, never a silent no-op) — the contract is uniform now, the
-backends land later.
+- **D1 / `zero3-output-retention`** — lossless oversized plain-text tool-result spill/recovery with bounded model projection;
+- **D2 / `zero3-context-retention`** — recoverable pruning of oversized historical tool results only in private compaction input.
 
-## Permission model
+Those features reuse Codex execution/compaction authority; they do not introduce a second tool or history authority.
 
-`crates/zero3-core::permission` defines four levels — `ReadOnly`,
-`Standard`, `Elevated`, `FullControl` — and a `PolicyEngine` trait every
-provider must route side-effecting actions through
-(`DefaultPolicy`: allow if granted ≥ required, else require approval if
-reversible, else deny). No provider is permitted to self-approve; this is
-the seam that later becomes the "统一 approval / policy 层" from the project
-brief.
+See [`UPSTREAM.md`](UPSTREAM.md) for the full overlay/pin policy.
 
-## What's a placeholder vs. real
+## 4. Target desktop path
 
-| Piece | State |
-|---|---|
-| Event schema, job/subagent/plugin traits, permission model | Real, tested (incl. security-boundary tests for permission escalation and job-state rejection) |
-| Event Store | Real: append-only JSONL, `fsync`'d, replay + session/job filtering, survives a restart |
-| Job Manager | Real: full state machine, durable-first (failure-injection tested), strict-by-default recovery with an explicit crash-tail opt-in (`RecoveryMode`) — semantic corruption in the log is always rejected, never salvaged silently |
-| Provider Registry | Real: register/list/select-by-capability/health-check for any `Provider` |
-| Computer provider | `OpenComputerUseAdapter` real, verified-real MCP/JSON-RPC protocol (not assumed — checked against upstream source), tested against a protocol-compliant fake binary; a genuine real-binary smoke test and `WindowsUiaProvider`/vision fallback not yet built |
-| Browser provider | Trait + `Unimplemented*` stub only |
-| Subagent registry | Real (register/list/dispatch by name); Codex/Claude/Hermes workers are placeholders |
-| Memory | Trait only, no backend |
-| `apps/web` `/health` | Real, verified by deployment (exact-SHA match, not just 200) |
-| `apps/desktop` | Not started |
-| `mcp/`, `skills/` | Empty, directories reserved |
-| Deployment | Live on the shared AWS Lightsail host, isolated as `zero3pilot` — see `docs/DEPLOYMENT.md` |
+The target desktop shell is prepared under `apps/zero3-desktop/` from the pinned Hermes Electron/React source and wired to Codex through a Zero3-owned typed boundary.
 
-## Ideas absorbed from prior art (not yet implemented)
+### R1A — Codex app-server transport — merged
 
-- **DeepSeek Harness**: capability-seam plugin lifecycle, event log,
-  background jobs, subagent provider, profiles — re-expressed as Rust
-  traits in `zero3-core` rather than embedding its Node/Cordis runtime.
-- **xCodex**: hooks, background terminals, subagent roadmap, MCP loading —
-  reference for how `mcp/` and a future `hooks/` should be shaped.
-- **OpenCodex** (verify license before reusing any code — flagged AGPL,
-  unconfirmed): app server / web gateway / desktop shell / remote access
-  layering informs `apps/web` + `apps/desktop` split.
-- **iPolloWork**: multi-engine workspace, unified plugin/skill/scheduler
-  boundaries — informs keeping `zero3-scheduler` and plugin loading decoupled
-  from any one backend (Codex/DSH/Claude/Hermes).
+Electron main owns a `codex app-server --stdio` child and handles:
+
+- explicit pinned Codex executable selection;
+- `initialize` / `initialized` lifecycle;
+- JSONL framing and request-id correlation;
+- notification forwarding;
+- bounded server-originated request forwarding;
+- child lifecycle and cleanup.
+
+Renderer access is purpose-specific. There is no supported arbitrary Renderer-controlled `method + params` Codex RPC tunnel.
+
+### R2A — primary chat -> Codex Thread/Turn/Item — merged
+
+The visible primary conversation path maps the Hermes-derived presentation shell onto Codex semantics:
+
+- new conversation -> `thread/start`;
+- recents/restore -> Codex Thread list/read/resume;
+- send -> `turn/start`;
+- streaming -> Codex Item notifications/deltas;
+- Stop/Esc -> `turn/interrupt`.
+
+Hermes-derived stores are presentation adapters on this path, not runtime authority.
+
+See [`CODEX_PRIMARY_CHAT_R2.md`](CODEX_PRIMARY_CHAT_R2.md).
+
+### R2B — native approval and input — merged
+
+Selected server-originated Codex requests are presented through Zero3-owned UI and answered through the typed server-response surface:
+
+- command execution approval;
+- file-change approval;
+- user-input requests.
+
+Prompt state is correlated/queued per Thread and unresolved callbacks are cleared/rejected on terminal/interruption/error paths.
+
+Unsupported request classes remain fail-closed until they receive dedicated reviewed UX.
+
+The current conservative baseline keeps `approvalPolicy=on-request` and does not make `workspace-write` the unconditional default sandbox.
+
+### R3A/R3B — native Item presentation — merged
+
+The presentation adapter covers Codex-native Item families including:
+
+- reasoning;
+- command execution;
+- file change;
+- MCP tool calls;
+- dynamic tool-call presentation;
+- plans;
+- web search.
+
+Presentation does not move execution authority into Hermes.
+
+See [`CODEX_MORE_ITEMS_R3B.md`](CODEX_MORE_ITEMS_R3B.md).
+
+### R3C — structured user input — merged
+
+The primary composer supports a validated Codex `UserInput[]` bridge, including supported local-image inputs. Renderer input is reconstructed/validated by the reviewed Electron boundary rather than used as an arbitrary protocol passthrough.
+
+See [`CODEX_STRUCTURED_INPUT_R3C.md`](CODEX_STRUCTURED_INPUT_R3C.md).
+
+### R3D — native Thread actions — merged
+
+Migrated actions include Codex-native:
+
+- archive / unarchive;
+- permanent delete;
+- rename;
+- whole-Thread fork;
+- active-Turn steer.
+
+See [`CODEX_THREAD_ACTIONS_R3D.md`](CODEX_THREAD_ACTIONS_R3D.md).
+
+### R3E — authoritative message/Turn mapping — merged
+
+Message-level history operations resolve presentation messages against authoritative Codex Thread/Turn/Item history rather than guessing by index/timestamp.
+
+This provides reviewed boundaries for exact fork/revert/regenerate flows while keeping unsupported ambiguous cases fail-closed.
+
+See [`CODEX_TURN_MAPPING_R3E.md`](CODEX_TURN_MAPPING_R3E.md).
+
+### R3F — authoritative paginated history — merged
+
+Destructive/history-sensitive flows use authoritative paginated Codex history and fail closed on incomplete/invalid pagination conditions.
+
+See [`CODEX_AUTHORITATIVE_HISTORY_R3F.md`](CODEX_AUTHORITATIVE_HISTORY_R3F.md).
+
+## 5. Context/output resilience
+
+### D0 — managed overlay foundation — merged
+
+D0 establishes deterministic extension/patch installation, exact pin checks and detached replay/drift detection.
+
+### D1 — output retention — merged
+
+Oversized plain-text tool results can be stored losslessly outside model context and represented to the model through a bounded projection with an opaque recovery reference.
+
+Recovery tools operate through the installed spill-store contract. Storage/projection behavior is designed not to become tool-execution authority.
+
+### D2 — context retention — merged
+
+D2 prunes only recoverable oversized historical tool results in the **private cloned history used for compaction/model input**.
+
+It does not mutate authoritative persisted Thread/Turn/Item history. D2 reuses D1's spill/recovery authority rather than creating a second persistence system.
+
+## 6. Remote Host architecture
+
+Remote Host allows remotely admitted development tasks to reach a local Zero3/Codex execution host through narrow reviewed boundaries while preserving Codex as execution authority.
+
+### H0-H3 — local host runtime — merged
+
+Key invariants include:
+
+- exact task/execution identity binding;
+- local workspace allow-listing;
+- durable task -> Codex mapping;
+- deterministic user-message identity for crash recovery;
+- durable pending-Turn intent;
+- authoritative restart recovery;
+- fail-closed handling of ambiguous side effects and unsupported Git preconditions.
+
+The Remote Host adapter is intentionally narrow and does not expose a generic remote Codex RPC/shell path.
+
+See [`REMOTE_HOST_RUNTIME.md`](REMOTE_HOST_RUNTIME.md).
+
+### H4/H4.1 — durable ordered outbox — merged
+
+Remote evidence/terminal publication follows a crash-safe rule:
+
+```text
+persist committed envelope
+        -> drain older committed envelopes in order
+        -> publish
+        -> durable acceptance/ack
+        -> delete local pending envelope
+```
+
+Stale lease/fencing outcomes quarantine identity rather than mutating it into a new authority.
+
+See [`H4_REMOTE_OUTBOX_DESIGN.md`](H4_REMOTE_OUTBOX_DESIGN.md).
+
+### H5 — durable control plane — merged
+
+The control plane owns remote task/node admission state, sticky leases, fencing generations, durable accepted mirrors and replay/terminal validation.
+
+It does **not** become Codex execution authority and must not expose shell/files/MCP/Codex generic RPC as a control-plane shortcut.
+
+See [`H5_REMOTE_CONTROL_PLANE.md`](H5_REMOTE_CONTROL_PLANE.md).
+
+## 7. Executor, Handoff and Failover
+
+Zero3 now has a provider-neutral execution orchestration layer outside the Codex native Agent Kernel.
+
+The distinction is important:
+
+- **Codex native kernel** defines native agent execution semantics;
+- **Zero3 Executor/Router/Handoff** decides which approved executor/provider is assigned to a Zero3 Task/Execution and how durable work authority moves between providers;
+- an external provider never becomes the native kernel merely by being selectable.
+
+### R4A — `zero3.pilot.executor.v1` — merged
+
+The frozen provider-neutral contract carries:
+
+- Task / Execution identity;
+- workspace and optional lease/fencing identity;
+- executor session/probe/event/failure contracts;
+- normalized Zero3-owned failure taxonomy/policy;
+- Registry/Manager authority with one active binding per task/execution;
+- provider-neutral routing surfaces.
+
+Raw provider-private exceptions/types are not supposed to become shared policy authority.
+
+### R4E — durable Handoff — merged
+
+The Handoff layer records deterministic Git/workspace checkpoint evidence, uses crash-safe persistent state and enforces an exclusive writer/generation transfer.
+
+A new executor cannot become workspace writer merely by starting a process; it must satisfy the Handoff acceptance/verification contract.
+
+### R4F — failover controller — merged
+
+The Zero3-owned failover controller implements:
+
+- ordered candidates;
+- bounded retry;
+- provider cooldown/circuit-breaker state;
+- recovery-first decisions;
+- context-loss handoff requirements;
+- manual/automatic switching controls;
+- return-to-primary at defined boundaries;
+- duplicate-event idempotency and restart-serializable state.
+
+User stop and policy/permission/budget/bad-request classes are not converted into automatic provider switching just to keep work running.
+
+### R4C — Native Codex executor — merged
+
+A real Native Codex `Zero3Executor` uses the same pinned open-source `codex app-server --stdio` kernel through a controller-owned child process.
+
+Important boundaries include:
+
+- explicit per-executor Codex home selection;
+- supported `account/read` / rate-limit probing rather than credential-file parsing;
+- no `auth.json` token extraction/copy/serialization;
+- explicit permission decision forwarding;
+- resume failure -> typed context loss rather than silently starting a replacement Thread.
+
+### R4B — ACP/external executor — open, not merged
+
+[PR #48](https://github.com/Taa965/zero3-pilot/pull/48) is the formal ACP external-executor implementation and is **not part of the merged `main` capability until merged**.
+
+Older audit/POC PRs for R4B/R4C are historical exploration and must not be treated as the authoritative implementation when a formal merged path exists.
+
+## 8. First-alpha closeout and remaining reliability work
+
+[PR #49](https://github.com/Taa965/zero3-pilot/pull/49) is merged. Zero3 now explicitly launches pinned Codex with `--session-source app-server`, lists the matching `sourceKinds: ['appServer']` namespace, and carries a real first-Turn cold-restart persistence smoke for two durable Threads.
+
+[PR #51](https://github.com/Taa965/zero3-pilot/pull/51) is merged. The Windows alpha packaging path builds the exact reviewed Codex pin, bundles `resources/zero3-codex/codex.exe`, carries required legal notices, fails closed against arbitrary packaged-runtime substitution, builds an NSIS candidate and verifies the packaged binary with a real app-server smoke plus installer SHA-256 generation.
+
+[PR #52](https://github.com/Taa965/zero3-pilot/pull/52) merged the public release-document closeout. The #51 pull-request merge candidate already contained merged #49 and passed the integrated Windows Alpha Artifact gate; that is pre-tag evidence, not a substitute for final exact-release-SHA validation.
+
+The remaining open [PR #48](https://github.com/Taa965/zero3-pilot/pull/48) is explicitly deferred from `v0.1.0-alpha` because its ACP behavior semantics remain red; it is not a first-alpha blocker.
+
+Remote Host -> Executor Manager/Handoff/Failover integration remains follow-up work; H5 remote-control authority and the R4 execution contracts must be connected without weakening either set of invariants.
+
+## 9. Legacy / compatibility components
+
+The repository still contains older components that remain useful as compatibility evidence or future extension sources.
+
+### `apps/node`
+
+Legacy/extension host for older jobs/schedule/memory/provider paths. It is not the target desktop native runtime authority.
+
+### legacy Rust/Wry desktop
+
+Retained for migration/installer history and compatibility tests. New target UI/runtime work belongs in the Hermes-derived Codex-core desktop path.
+
+### Hermes compatibility backend
+
+Some unported UI surfaces may still require Hermes backend scaffolding during development. No new target core capability should be implemented by expanding Hermes Runtime authority.
+
+### old `zero3-subagents` naming
+
+Historical naming may remain in compatibility crates. External agent work belongs under the Executor/Collaboration model and must preserve Codex native-kernel authority.
+
+## 10. CI invariants
+
+The repository uses multiple independent gates rather than one “everything passed” script.
+
+Core/public evidence includes:
+
+- architecture guard;
+- Rust format/Clippy/build/tests;
+- Windows target-shell prepare/typecheck/build;
+- real pinned-Codex CLI/app-server JSONL smoke;
+- Codex overlay verify/replay;
+- R3 structured-input/thread/history gates;
+- D1/D2 retention gates;
+- Remote Host H-series reliability/control-plane gates;
+- R4 Executor/Handoff/Failover/Native Codex gates;
+- Windows Alpha Artifact package/bundled-Codex smoke and checksum evidence for the release candidate.
+
+Legacy/provider smokes may remain green while the target architecture evolves. Their success proves compatibility of those components, not ownership of the native Agent Kernel.
+
+The local `scripts/dev-check.sh` covers the practical repository-level core checks; specialized Windows/Codex/feature gates remain authoritative in GitHub Actions.
+
+## 11. Current release status
+
+Zero3 Pilot has **no published GitHub Release yet** and remains pre-release.
+
+The first planned release is `v0.1.0-alpha`. PRs #49, #51 and #52 are merged, but the exact final `main` candidate still requires the release evidence defined by the release process, including final Windows artifact/checksum verification and matching tag/GitHub pre-release publication.
+
+Release criteria are tracked in:
+
+- [`../ROADMAP.md`](../ROADMAP.md);
+- [`../CHANGELOG.md`](../CHANGELOG.md);
+- [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md);
+- [`releases/v0.1.0-alpha.md`](releases/v0.1.0-alpha.md);
+- public release-readiness Issue #50.
+
+Public documentation should describe merged `main` capability and clearly label open PR/POC work as unmerged. Evidence not actually executed on the exact release candidate must remain `NOT_RUN` rather than being inferred from older PR artifacts.

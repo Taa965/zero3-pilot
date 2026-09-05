@@ -8,6 +8,9 @@ members = [
     "crates/zero3-subagents",
     "crates/zero3-memory",
     "apps/web",
+    "apps/node",
+    "apps/desktop",
+    "apps/weixin",
 ]
 
 [workspace.package]

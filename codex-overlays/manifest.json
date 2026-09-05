@@ -1,0 +1,199 @@
+{
+  "$schema": "./manifest.schema.json",
+  "schema_version": 1,
+  "runtime_authority": "openai-codex",
+  "pins": {
+    "codex": "94311d447587411789533c47601fd8bc9d81eb48",
+    "hermes": "f7c79efbac19ae18e8dee7c79a4e4c0935299b5f",
+    "deepseek_harness": "cd5ef8148158c3a752a658978873241fdf8e2bbc"
+  },
+  "patch_order": [
+    "foundation",
+    "output-retention",
+    "context-pruning",
+    "lsp",
+    "external-agent",
+    "team",
+    "jobs",
+    "workflow"
+  ],
+  "features": {
+    "foundation": {
+      "owner": "S1",
+      "extension_id": null,
+      "extension_source": null,
+      "patch_dir": "codex-overlays/patches/foundation/"
+    },
+    "output-retention": {
+      "owner": "S2",
+      "extension_id": "zero3-output-retention",
+      "extension_source": "codex-overlays/ext/zero3-output-retention/",
+      "patch_dir": "codex-overlays/patches/output-retention/"
+    },
+    "context-pruning": {
+      "owner": "S3",
+      "extension_id": "zero3-context-retention",
+      "extension_source": "codex-overlays/ext/zero3-context-retention/",
+      "patch_dir": "codex-overlays/patches/context-pruning/"
+    },
+    "lsp": {
+      "owner": "S4",
+      "extension_id": "zero3-lsp",
+      "extension_source": "codex-overlays/ext/zero3-lsp/",
+      "patch_dir": "codex-overlays/patches/lsp/"
+    },
+    "external-agent": {
+      "owner": "S2",
+      "extension_id": "zero3-external-agent",
+      "extension_source": "codex-overlays/ext/zero3-external-agent/",
+      "patch_dir": "codex-overlays/patches/external-agent/"
+    },
+    "team": {
+      "owner": "S4",
+      "extension_id": "zero3-durable-team",
+      "extension_source": "codex-overlays/ext/zero3-durable-team/",
+      "patch_dir": "codex-overlays/patches/team/"
+    },
+    "jobs": {
+      "owner": "S3",
+      "extension_id": "zero3-background-jobs",
+      "extension_source": "codex-overlays/ext/zero3-background-jobs/",
+      "patch_dir": "codex-overlays/patches/jobs/"
+    },
+    "workflow": {
+      "owner": "S2",
+      "extension_id": "zero3-dynamic-workflow",
+      "extension_source": "codex-overlays/ext/zero3-dynamic-workflow/",
+      "patch_dir": "codex-overlays/patches/workflow/"
+    }
+  },
+  "extensions": [
+    {
+      "id": "zero3-output-retention",
+      "feature": "output-retention",
+      "source": "codex-overlays/ext/zero3-output-retention/",
+      "destination": "codex-rs/ext/zero3/output-retention/",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "algorithm-derived",
+        "source_files": [
+          "packages/spill/spill/src/index.ts",
+          "packages/spill/spill-policy/README.md",
+          "packages/spill/spill-local/README.md"
+        ],
+        "license": "MIT",
+        "notes": "Native Rust reimplementation against Codex extension seams; DeepSeek-Harness is never launched."
+      }
+    },
+    {
+      "id": "zero3-context-retention",
+      "feature": "context-pruning",
+      "source": "codex-overlays/ext/zero3-context-retention/",
+      "destination": "codex-rs/ext/zero3/context-retention/",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "algorithm-derived",
+        "source_files": [
+          "packages/compaction/compaction-tool-result-pruner/src/index.ts",
+          "packages/compaction/compaction-tool-result-pruner/src/config.ts",
+          "packages/compaction/compaction-tool-result-pruner/tests/tool-result-pruner.spec.ts"
+        ],
+        "license": "MIT",
+        "notes": "Deterministic pruning ideas are rewritten in Rust; Codex remains compaction authority and D1 remains spill/recovery authority."
+      }
+    }
+  ],
+  "patches": [
+    {
+      "id": "010-foundation-app-server-session-source",
+      "feature": "foundation",
+      "path": "codex-overlays/patches/foundation/010-foundation-app-server-session-source.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex CLI's codex app-server wrapper hardcodes SessionSource::VSCode and does not expose the standalone app-server's existing --session-source startup contract, so Zero3 cannot claim an explicit durable AppServer/Mcp namespace through the packaged codex binary.",
+      "donor": {
+        "repo": "https://github.com/openai/codex.git",
+        "sha": "94311d447587411789533c47601fd8bc9d81eb48",
+        "mode": "design-derived",
+        "source_files": [
+          "codex-rs/app-server/src/main.rs",
+          "codex-rs/cli/src/main.rs"
+        ],
+        "license": "Apache-2.0",
+        "notes": "Zero3 exposes on the pinned CLI wrapper the same session-source parser already present in pinned Codex's standalone app-server; the default remains vscode and Codex remains runtime authority."
+      }
+    },
+    {
+      "id": "010-output-retention-tool-result-projection",
+      "feature": "output-retention",
+      "path": "codex-overlays/patches/output-retention/010-output-retention-tool-result-projection.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex has no post-tool model-projection hook that preserves the original ToolOutput as execution authority.",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "algorithm-derived",
+        "source_files": [
+          "packages/spill/spill/src/index.ts",
+          "packages/spill/spill-policy/README.md"
+        ],
+        "license": "MIT",
+        "notes": "Only retention/projection behavior is derived; Codex remains tool execution, Approval and Sandbox authority."
+      }
+    },
+    {
+      "id": "020-output-retention-app-server-install",
+      "feature": "output-retention",
+      "path": "codex-overlays/patches/output-retention/020-output-retention-app-server-install.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex app-server does not know how to install the Zero3 output-retention extension or provide its persistent host-owned spill root.",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "design-derived",
+        "source_files": [
+          "docs/subsystems/spill.md"
+        ],
+        "license": "MIT",
+        "notes": "Host integration is Zero3-authored against Codex ExtensionRegistryBuilder; donor informs persistence semantics only."
+      }
+    },
+    {
+      "id": "010-context-retention-compaction-projection",
+      "feature": "context-pruning",
+      "path": "codex-overlays/patches/context-pruning/010-context-retention-compaction-projection.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex exposes no typed hook for transforming only the private cloned history used to construct local, remote, and remote-v2 compaction model input.",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "algorithm-derived",
+        "source_files": [
+          "packages/compaction/compaction-tool-result-pruner/src/index.ts",
+          "packages/compaction/compaction-tool-result-pruner/src/config.ts",
+          "packages/compaction/compaction-tool-result-pruner/tests/tool-result-pruner.spec.ts"
+        ],
+        "license": "MIT",
+        "notes": "Only deterministic pruning behavior is derived; authoritative history and Codex compaction implementations remain unchanged."
+      }
+    },
+    {
+      "id": "020-context-retention-app-server-install",
+      "feature": "context-pruning",
+      "path": "codex-overlays/patches/context-pruning/020-context-retention-app-server-install.patch",
+      "core_patch": true,
+      "extension_gap": "Pinned Codex app-server does not install the Zero3 context-retention contributor or expose D1's installed SpillStore handle to it.",
+      "donor": {
+        "repo": "https://github.com/deepseek-ai/deepseek-harness.git",
+        "sha": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+        "mode": "design-derived",
+        "source_files": [
+          "packages/compaction/compaction-tool-result-pruner/src/index.ts"
+        ],
+        "license": "MIT",
+        "notes": "Zero3-authored host wiring reuses the exact D1 SpillStore; no second persistence or compaction authority is introduced."
+      }
+    }
+  ]
+}

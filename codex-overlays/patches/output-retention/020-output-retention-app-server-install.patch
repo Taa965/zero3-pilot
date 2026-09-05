@@ -1,0 +1,86 @@
+diff --git a/codex-rs/Cargo.toml b/codex-rs/Cargo.toml
+--- a/codex-rs/Cargo.toml
++++ b/codex-rs/Cargo.toml
+@@ -68,4 +68,5 @@ members = [
+     "ext/queue",
+     "ext/skills",
+     "ext/web-search",
++    "ext/zero3/output-retention",
+     "external-agent-migration",
+@@ -221,4 +222,5 @@ codex-login = { path = "login" }
+ codex-message-history = { path = "message-history" }
+ codex-memories-extension = { path = "ext/memories" }
+ codex-web-search-extension = { path = "ext/web-search" }
++codex-zero3-output-retention = { path = "ext/zero3/output-retention" }
+ codex-memories-read = { path = "memories/read" }
+diff --git a/codex-rs/app-server/Cargo.toml b/codex-rs/app-server/Cargo.toml
+--- a/codex-rs/app-server/Cargo.toml
++++ b/codex-rs/app-server/Cargo.toml
+@@ -70,5 +70,6 @@ codex-chatgpt = { workspace = true }
+ codex-login = { workspace = true }
+ codex-image-generation-extension = { workspace = true }
+ codex-memories-extension = { workspace = true }
+ codex-web-search-extension = { workspace = true }
++codex-zero3-output-retention = { workspace = true }
+ codex-memories-write = { workspace = true }
+diff --git a/codex-rs/app-server/src/extensions.rs b/codex-rs/app-server/src/extensions.rs
+--- a/codex-rs/app-server/src/extensions.rs
++++ b/codex-rs/app-server/src/extensions.rs
+@@ -1,3 +1,4 @@
++use std::path::PathBuf;
+ use std::sync::Arc;
+ use std::sync::Weak;
+ use std::time::Duration;
+@@ -40,7 +41,8 @@ use crate::thread_state::ThreadStateManager;
+ pub(crate) struct ThreadExtensionDependencies {
+     pub(crate) event_sink: Arc<dyn ExtensionEventSink>,
+     pub(crate) auth_manager: Arc<AuthManager>,
++    pub(crate) codex_home: PathBuf,
+     pub(crate) state_db: Option<StateDbHandle>,
+     pub(crate) analytics_events_client: AnalyticsEventsClient,
+     pub(crate) thread_manager: Weak<ThreadManager>,
+     pub(crate) goal_service: Arc<GoalService>,
+@@ -62,8 +64,9 @@ where
+     let ThreadExtensionDependencies {
+         event_sink,
+         auth_manager,
++        codex_home,
+         state_db,
+         analytics_events_client,
+         thread_manager,
+         goal_service,
+         environment_manager,
+@@ -110,5 +113,13 @@ where
+     codex_web_search_extension::install(&mut builder, auth_manager.clone());
+     codex_image_generation_extension::install(&mut builder, auth_manager, |config: &Config| {
+         Some(config.codex_home.clone())
+     });
++    let spill_store = Arc::new(codex_zero3_output_retention::LocalSpillStore::new(
++        codex_home.join("zero3").join("spills"),
++    ));
++    let _output_retention = codex_zero3_output_retention::install(
++        &mut builder,
++        spill_store,
++        codex_zero3_output_retention::OutputRetentionConfig::default(),
++    );
+     let skill_providers = codex_skills_extension::SkillProviders::new()
+diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
+--- a/codex-rs/app-server/src/message_processor.rs
++++ b/codex-rs/app-server/src/message_processor.rs
+@@ -330,5 +330,6 @@ impl MessageProcessor {
+                     ThreadExtensionDependencies {
+                         event_sink: Arc::clone(&extension_event_sink),
+                         auth_manager: auth_manager.clone(),
++                        codex_home: config.codex_home.to_path_buf(),
+                         state_db: state_db.clone(),
+                         analytics_events_client: analytics_events_client.clone(),
+diff --git a/codex-rs/app-server/src/mcp_refresh.rs b/codex-rs/app-server/src/mcp_refresh.rs
+--- a/codex-rs/app-server/src/mcp_refresh.rs
++++ b/codex-rs/app-server/src/mcp_refresh.rs
+@@ -330,5 +330,6 @@ async fn setup_thread_manager_for_refresh_test(
+                     ThreadExtensionDependencies {
+                         event_sink: Arc::new(NoopExtensionEventSink),
+                         auth_manager: auth_manager.clone(),
++                        codex_home: good_config.codex_home.to_path_buf(),
+                         state_db: Some(state_db.clone()),
+                         analytics_events_client: codex_analytics::AnalyticsEventsClient::disabled(),

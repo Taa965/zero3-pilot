@@ -1,0 +1,33 @@
+name: R4F Executor Failover
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/executor-runtime/router/**'
+      - 'scripts/check-r4f-failover-architecture.mjs'
+      - '.github/workflows/r4f-executor-failover.yml'
+
+jobs:
+  failover:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: '24.11.0' }
+      - name: Diff hygiene
+        run: git diff --check origin/main...HEAD
+      - name: Architecture guards
+        run: |
+          node scripts/check-architecture.mjs
+          node scripts/check-r4f-failover-architecture.mjs
+      - name: Strict TypeScript check
+        run: >-
+          npx --yes --package typescript@5.9.2 -- tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions --skipLibCheck apps/zero3-desktop/executor-runtime/router/failover-controller.ts
+      - name: Failover behavior tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/executor-runtime/router/failover-controller.test.ts

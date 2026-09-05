@@ -3,13 +3,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::provider::Provider;
 
-/// `app` (a running app's name or bundle identifier) is required on every
-/// variant because it's a required argument on every corresponding real
-/// `iFurySt/open-codex-computer-use` MCP tool
-/// (`click`/`type_text`/`press_key`/`get_app_state` all require it) — see
-/// `OpenComputerUseAdapter` and `docs/ARCHITECTURE.md` §Computer Use.
+/// `app` (a running app's name or bundle identifier) is required by the
+/// app-scoped upstream tools. `ListApps` intentionally has no app argument.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
 pub enum ComputerAction {
+    /// Maps to the real `list_apps` MCP tool and provides a cheap native
+    /// runtime/session probe before app-scoped UI Automation operations.
+    ListApps,
     /// Maps to the real `get_app_state` tool (there is no separate
     /// "screenshot" tool upstream) — closest analog to "what does the
     /// screen look like right now."
@@ -72,6 +73,20 @@ impl ComputerProvider for UnimplementedComputerProvider {
 mod tests {
     use super::*;
 
+    #[test]
+    fn computer_action_uses_stable_tagged_snake_case_json() {
+        assert_eq!(
+            serde_json::to_value(ComputerAction::ListApps).unwrap(),
+            serde_json::json!({"action": "list_apps"})
+        );
+        let parsed: ComputerAction = serde_json::from_value(serde_json::json!({
+            "action": "screenshot",
+            "app": "Notepad"
+        }))
+        .unwrap();
+        assert!(matches!(parsed, ComputerAction::Screenshot { app } if app == "Notepad"));
+    }
+
     /// Security boundary: an unwired provider must never report a
     /// side-effecting action as having succeeded. A silent `Ok` here
     /// would look, to a caller, indistinguishable from a click that
@@ -85,6 +100,7 @@ mod tests {
             })
             .await
             .is_err());
+        assert!(provider.execute(ComputerAction::ListApps).await.is_err());
         assert!(provider
             .execute(ComputerAction::Click {
                 app: "Finder".into(),

@@ -1,0 +1,18 @@
+[package]
+name = "zero3-weixin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Weixin ClawBot channel bridge for Zero3 Pilot."
+
+[[bin]]
+name = "zero3-pilot-weixin"
+path = "src/main.rs"
+
+[dependencies]
+zero3-providers = { path = "../../crates/zero3-providers" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

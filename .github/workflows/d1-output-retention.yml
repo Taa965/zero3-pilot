@@ -1,0 +1,84 @@
+name: D1 Output Retention
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'codex-overlays/ext/zero3-output-retention/**'
+      - 'codex-overlays/patches/output-retention/**'
+      - 'codex-overlays/tests/output-retention/**'
+      - 'codex-overlays/manifest.json'
+      - 'scripts/codex-overlay.mjs'
+      - 'apps/zero3-desktop/**'
+      - '.github/workflows/d1-output-retention.yml'
+
+jobs:
+  output-retention:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Initialize reviewed upstream pins
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive -- upstream/codex upstream/hermes-agent upstream/deepseek-harness
+          test "$(git -C upstream/codex rev-parse HEAD)" = "94311d447587411789533c47601fd8bc9d81eb48"
+          test "$(git -C upstream/hermes-agent rev-parse HEAD)" = "f7c79efbac19ae18e8dee7c79a4e4c0935299b5f"
+          test "$(git -C upstream/deepseek-harness rev-parse HEAD)" = "cd5ef8148158c3a752a658978873241fdf8e2bbc"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Verify reviewed D1 seams and desktop projection contract
+        run: |
+          node codex-overlays/tests/output-retention/verify-output-retention.mjs
+          git -C upstream/codex apply --check --verbose "$GITHUB_WORKSPACE/codex-overlays/patches/output-retention/020-output-retention-app-server-install.patch"
+          node codex-overlays/tests/output-retention/verify-desktop-projection.mjs
+
+      - name: Prepare combined Codex overlay
+        run: npm --prefix apps/zero3-desktop run prepare
+
+      - name: Verify managed overlay and replay
+        run: |
+          node scripts/codex-overlay.mjs verify
+          node scripts/codex-overlay.mjs replay
+
+      - name: Codex format check
+        run: cargo fmt --manifest-path upstream/codex/codex-rs/Cargo.toml --all -- --check
+
+      - name: App-server integration check
+        run: |
+          set -o pipefail
+          cargo check --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-app-server 2>&1 | tee app-server-check.log
+
+      - name: Upload app-server integration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-app-server-check
+          path: app-server-check.log
+          if-no-files-found: warn
+          retention-days: 1
+
+      - name: D1 extension tests
+        run: cargo test --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-zero3-output-retention
+
+      - name: Build pinned Codex CLI
+        run: cargo build --manifest-path upstream/codex/codex-rs/Cargo.toml -p codex-cli --bin codex
+
+      - name: Real app-server JSONL smoke
+        run: |
+          node apps/zero3-desktop/scripts/smoke-codex-app-server.mjs upstream/codex/codex-rs/target/debug/codex
+
+      - name: Architecture guards
+        run: |
+          node scripts/check-codex-overlay.mjs
+          node scripts/check-architecture.mjs
