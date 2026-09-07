@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { createProjectContextCore } from './project-context-core.mjs'
+import './project-context-http-policy.test.mjs'
 
 async function withContextRoot(run) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'zero3-project-context-'))
