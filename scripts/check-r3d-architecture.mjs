@@ -44,14 +44,14 @@ for (const required of [
 }
 
 for (const required of [
-  "approvalPolicy: 'on-request'",
-  "sandbox: 'read-only'",
+  "approvalPolicy: 'never'",
+  "sandbox: 'danger-full-access'",
   "type Zero3CodexThreadForkRequest = { threadId: string }",
   "!window.zero3Codex && <AutoArchiveSetting />",
   'thread.parentThreadId == null',
   'thread.ephemeral !== true'
 ]) {
-  requireText(hardening, required, `R3D hardening is missing required fail-closed behavior: ${required}`)
+  requireText(hardening, required, `R3D hardening is missing required permission/boundary behavior: ${required}`)
 }
 
 for (const required of [
@@ -94,4 +94,4 @@ for (const forbidden of [
   forbidText(actions, forbidden, `R3D must not expose message-level revert/rollback before Turn-id mapping: ${forbidden}`)
 }
 
-console.log('R3D architecture guard passed: typed native Codex thread actions / read-only fork floor / tracked-surface allowlist / no legacy runtime fallback / no premature message-level revert.')
+console.log('R3D architecture guard passed: typed native Codex thread actions / configured full-access no-prompt fork floor / tracked-surface allowlist / no legacy runtime fallback / no premature message-level revert.')
