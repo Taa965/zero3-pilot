@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { applyZero3ProjectStore } from './apply-project-store.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'workspace-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'workspace')
@@ -134,4 +135,5 @@ export function applyZero3WorkspaceEntryRuntime() {
     { label: 'workspace renderer type definitions', from: 'type Zero3CodexStatus = {', to: globalTypeDefinitions + '\ntype Zero3CodexStatus = {' },
     { label: 'workspace renderer window surface', from: '    zero3Codex: {', to: globalWindowSurface }
   ])
+  applyZero3ProjectStore()
 }
