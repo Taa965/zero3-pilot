@@ -70,7 +70,7 @@ function zero3McpHttpToken() {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   const token = crypto.randomBytes(32).toString('hex')
-  zero3McpHttpAtomicWrite(file, token + '\\n')
+  zero3McpHttpAtomicWrite(file, token + '\n')
   return token
 }
 function zero3McpHttpReadPolicy(): Zero3McpHttpPolicyFile {
@@ -93,7 +93,7 @@ function zero3McpHttpSetAccess(projectId: string, enabled: boolean) {
   const policy = zero3McpHttpReadPolicy()
   if (enabled) policy.projects[projectId] = true
   else delete policy.projects[projectId]
-  zero3McpHttpAtomicWrite(zero3McpHttpPolicyFile(), JSON.stringify(policy, null, 2) + '\\n')
+  zero3McpHttpAtomicWrite(zero3McpHttpPolicyFile(), JSON.stringify(policy, null, 2) + '\n')
   return { projectId, enabled }
 }
 function zero3McpHttpStatus() {
@@ -141,7 +141,7 @@ ipcMain.handle('zero3:mcp-http:set-project-access', (_event, request: unknown) =
 })
 ipcMain.handle('zero3:mcp-http:rotate-token', () => {
   const token = crypto.randomBytes(32).toString('hex')
-  zero3McpHttpAtomicWrite(zero3McpHttpTokenFile(), token + '\\n')
+  zero3McpHttpAtomicWrite(zero3McpHttpTokenFile(), token + '\n')
   return { bearerToken: token }
 })
 app.on('before-quit', zero3StopProjectContextHttp)
