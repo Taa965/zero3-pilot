@@ -24,8 +24,8 @@ for (const required of [
   "zero3:codex:thread:revert-before-turn",
   "zero3CodexAppServer.request('thread/fork'",
   "zero3CodexAppServer.request('thread/revert'",
-  "approvalPolicy: 'on-request'",
-  "sandbox: 'read-only'",
+  "approvalPolicy: 'never'",
+  "sandbox: 'danger-full-access'",
   'findCodexMessageBoundary',
   'findCodexTurnUserBoundary',
   'findLatestCodexTurnUserBoundary',
@@ -73,4 +73,4 @@ requireText(
   'R3E must reject assistant-message boundaries that are not the final visible message of their Turn.'
 )
 
-console.log('R3E architecture guard passed: authoritative Thread/Turn/Item mapping / dedicated typed fork+revert / partial-Turn fail-closed behavior.')
+console.log('R3E architecture guard passed: authoritative Thread/Turn/Item mapping / dedicated typed fork+revert / configured full-access no-prompt fork-at-turn policy / partial-Turn fail-closed behavior.')
