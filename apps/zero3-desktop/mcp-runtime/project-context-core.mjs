@@ -86,7 +86,13 @@ export function createProjectContextCore(options = {}) {
     serialized(payload)
     return mutate(async () => {
       const current = await getProject(projectId)
-      if (expectedVersion != null && expectedVersion !== current.version) {
+      // Required, not optional: a caller that omits it would silently bypass the
+      // concurrency check and overwrite whatever another writer just stored.
+      // Read the project first -- an absent one reports version 0.
+      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+        throw new Error('expectedVersion is required; read the project context first')
+      }
+      if (expectedVersion !== current.version) {
         throw new Error(`project context version conflict: expected ${expectedVersion}, current ${current.version}`)
       }
       const next = {
@@ -119,7 +125,10 @@ export function createProjectContextCore(options = {}) {
     serialized(result)
     return mutate(async () => {
       const current = await getHandoff(taskId)
-      if (expectedVersion != null && expectedVersion !== current.version) {
+      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+        throw new Error('expectedVersion is required; read the handoff first')
+      }
+      if (expectedVersion !== current.version) {
         throw new Error(`handoff version conflict: expected ${expectedVersion}, current ${current.version}`)
       }
       const next = {
