@@ -24,6 +24,8 @@ type LiveGptWebView = {
   view: WebContentsView
   parentWindowId: number | null
   lastUsedAt: number
+  chromeHidden: boolean
+  chromeCssKey: string | null
 }
 
 type EventSink = (event: Zero3GptWebEvent) => void
@@ -32,6 +34,14 @@ const MAX_URL = 8_192
 const MAX_ENTRY_ID = 256
 const MAX_BOUND = 16_384
 const CHATGPT_HOST = 'chatgpt.com'
+// ChatGPT ships its own conversation rail. Zero3's second column already lists
+// these sessions, so leaving it visible puts two navigation surfaces side by
+// side. The tiny collapsed rail is a descendant of the same element, so one
+// selector covers both states. These ids belong to chatgpt.com and can vanish
+// on any redeploy: insertCSS does not fail on a selector that matches nothing,
+// so a rename makes the rail reappear rather than breaking the view -- which is
+// why the renderer keeps a toggle for reaching ChatGPT's own history.
+const CHATGPT_CHROME_CSS = '#stage-slideover-sidebar{display:none !important}'
 const GENERIC_TITLES = new Set(['ChatGPT', 'New chat', '新聊天', '新对话'])
 
 function requiredText(value: unknown, label: string, max: number): string {
@@ -180,6 +190,39 @@ export class Zero3GptWebProvider {
     return { hidden: true }
   }
 
+  private async applyChromeSuppression(live: LiveGptWebView): Promise<void> {
+    const contents = live.view.webContents
+    if (contents.isDestroyed() || live.chromeCssKey) return
+    try {
+      live.chromeCssKey = await contents.insertCSS(CHATGPT_CHROME_CSS)
+    } catch {
+      // A destroyed or navigating view is the only realistic failure here, and
+      // the rail staying visible is not worth surfacing as a session error.
+      live.chromeCssKey = null
+    }
+  }
+
+  // Hiding ChatGPT's own rail costs access to the history it lists, so the
+  // renderer can bring it back on demand for the session's lifetime.
+  async setChromeVisible(idValue: unknown, visibleValue: unknown): Promise<{ visible: boolean }> {
+    const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
+    if (typeof visibleValue !== 'boolean') throw new Error('visible must be a boolean')
+    const live = this.live.get(id)
+    if (!live) throw new Error('GPT Web view is not live')
+
+    live.chromeHidden = !visibleValue
+    const contents = live.view.webContents
+    if (visibleValue) {
+      if (live.chromeCssKey && !contents.isDestroyed()) {
+        await contents.removeInsertedCSS(live.chromeCssKey).catch(() => {})
+      }
+      live.chromeCssKey = null
+    } else {
+      await this.applyChromeSuppression(live)
+    }
+    return { visible: visibleValue }
+  }
+
   async setBounds(idValue: unknown, boundsValue: unknown): Promise<{ ok: true }> {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     const live = this.live.get(id)
@@ -279,7 +322,9 @@ export class Zero3GptWebProvider {
       entryId: entry.id,
       view,
       parentWindowId: null,
-      lastUsedAt: Date.now()
+      lastUsedAt: Date.now(),
+      chromeHidden: true,
+      chromeCssKey: null
     }
     this.live.set(entry.id, live)
     this.installViewGuards(live)
@@ -355,6 +400,14 @@ export class Zero3GptWebProvider {
       if (!currentUrl) return
       this.queueObservedState(live, currentUrl, contents.getTitle())
     }
+
+    // A full document load drops inserted stylesheets, so the suppression has to
+    // be reapplied per document. In-page SPA routing keeps the same document and
+    // therefore the existing sheet.
+    contents.on('dom-ready', () => {
+      live.chromeCssKey = null
+      if (live.chromeHidden) void this.applyChromeSuppression(live)
+    })
 
     contents.on('did-navigate', observe)
     contents.on('did-navigate-in-page', observe)

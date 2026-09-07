@@ -84,6 +84,10 @@ ipcMain.handle('zero3:gpt-web:show', (event, request: unknown) => {
   })
 })
 ipcMain.handle('zero3:gpt-web:hide', (_event, request: unknown) => zero3GptWeb.hide(zero3GptWebId(request)))
+ipcMain.handle('zero3:gpt-web:set-chrome-visible', (_event, request: unknown) => {
+  const input = zero3GptWebRecord(request)
+  return zero3GptWeb.setChromeVisible(zero3GptWebId(input), input.visible)
+})
 ipcMain.handle('zero3:gpt-web:set-bounds', (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.setBounds(zero3GptWebId(input), input.bounds)
@@ -105,6 +109,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3GptWeb', 
   create: request => ipcRenderer.invoke('zero3:gpt-web:create', request),
   show: request => ipcRenderer.invoke('zero3:gpt-web:show', request),
   hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),
+  setChromeVisible: request => ipcRenderer.invoke('zero3:gpt-web:set-chrome-visible', request),
   setBounds: request => ipcRenderer.invoke('zero3:gpt-web:set-bounds', request),
   navigate: request => ipcRenderer.invoke('zero3:gpt-web:navigate', request),
   reload: request => ipcRenderer.invoke('zero3:gpt-web:reload', request),
@@ -143,6 +148,7 @@ const globalWindowSurface = String.raw`    zero3GptWeb: {
       create: (request?: { projectId?: string | null }) => Promise<Zero3WorkspaceEntry>
       show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>
       hide: (request: { id: string }) => Promise<{ hidden: boolean }>
+      setChromeVisible: (request: { id: string; visible: boolean }) => Promise<{ visible: boolean }>
       setBounds: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<{ ok: true }>
       navigate: (request: { id: string; url: string }) => Promise<{ url: string }>
       reload: (request: { id: string }) => Promise<{ ok: true }>

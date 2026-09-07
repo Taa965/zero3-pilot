@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { CodexConversationSurface } from '../conversations/CodexConversationSurface'
 import { GptWebSurface } from '../conversations/GptWebSurface'
 import { GeminiWorkspaceSurface } from '../conversations/GeminiWorkspaceSurface'
@@ -9,13 +8,19 @@ import { RuntimeWorkspace } from '../runtime/RuntimeWorkspace'
 
 interface WorkspaceRouterProps {
   activeModule: string
+  provider: 'codex' | 'gpt' | 'gemini'
+  onProviderChange: (provider: 'codex' | 'gpt' | 'gemini') => void
+  activeSessionId: string | null
   onToggleInspector: () => void
 }
 
-export function WorkspaceRouter({ activeModule, onToggleInspector }: WorkspaceRouterProps) {
-  // Mock state to toggle between surfaces for demonstration
-  const [activeProvider, setActiveProvider] = useState<'codex' | 'gpt' | 'gemini'>('codex')
-
+export function WorkspaceRouter({
+  activeModule,
+  provider,
+  onProviderChange,
+  activeSessionId,
+  onToggleInspector
+}: WorkspaceRouterProps) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-background">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-(--ui-border) px-4">
@@ -26,8 +31,8 @@ export function WorkspaceRouter({ activeModule, onToggleInspector }: WorkspaceRo
               {(['codex', 'gpt', 'gemini'] as const).map(p => (
                 <button 
                   key={p} 
-                  onClick={() => setActiveProvider(p)}
-                  className={`px-2 py-1 rounded ${activeProvider === p ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'}`}
+                  onClick={() => onProviderChange(p)}
+                  className={`px-2 py-1 rounded ${provider === p ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'}`}
                 >
                   {p}
                 </button>
@@ -41,8 +46,8 @@ export function WorkspaceRouter({ activeModule, onToggleInspector }: WorkspaceRo
       </div>
       <div className="flex-1 overflow-hidden min-h-0">
         {activeModule === 'conversations' ? (
-          activeProvider === 'codex' ? <CodexConversationSurface /> :
-          activeProvider === 'gpt' ? <GptWebSurface /> :
+          provider === 'codex' ? <CodexConversationSurface /> :
+          provider === 'gpt' ? <GptWebSurface entryId={activeSessionId} /> :
           <GeminiWorkspaceSurface />
         ) : activeModule === 'tasks' ? (
           <TaskWorkspace />
