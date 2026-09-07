@@ -11,6 +11,8 @@ import { InspectorDrawer } from './InspectorDrawer'
 export type ActiveModule = 'conversations' | 'tasks' | 'groups' | 'projects' | 'runtime'
 export type WorkspaceProvider = 'codex' | 'gpt' | 'gemini'
 
+const ACTIVE_PROJECT_STORAGE_KEY = 'zero3.active-project-id'
+
 export function Zero3AppShell() {
   const [activeModule, setActiveModule] = useState<ActiveModule>('conversations')
   const [inspectorOpen, setInspectorOpen] = useState(false)
@@ -35,7 +37,17 @@ export function Zero3AppShell() {
     try {
       const next = await ProjectAdapter.list()
       setProjects(next)
-      setActiveProjectId(current => current && next.some(project => project.id === current) ? current : (next[0]?.id ?? null))
+      setActiveProjectId(current => {
+        const stored = (() => {
+          try {
+            return window.localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY)?.trim() || null
+          } catch {
+            return null
+          }
+        })()
+        const candidate = current ?? stored
+        return candidate && next.some(project => project.id === candidate) ? candidate : (next[0]?.id ?? null)
+      })
       setProjectError(null)
     } catch (error) {
       setProjectError(error instanceof Error ? error.message : String(error))
@@ -50,6 +62,13 @@ export function Zero3AppShell() {
   useEffect(() => {
     void refreshProjects()
   }, [refreshProjects])
+
+  useEffect(() => {
+    try {
+      if (activeProjectId) window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, activeProjectId)
+      else window.localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY)
+    } catch {}
+  }, [activeProjectId])
 
   const selectSession = useCallback((session: WebSession) => {
     setActiveSessionId(session.id)
