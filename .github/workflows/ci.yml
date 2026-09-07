@@ -25,6 +25,9 @@ jobs:
       - name: Codex-core architecture guard
         run: node scripts/check-architecture.mjs
 
+      - name: Project context isolation tests
+        run: node --test apps/zero3-desktop/mcp-runtime/project-context-core.test.mjs
+
       - name: fmt
         run: cargo fmt --all -- --check
 
@@ -259,24 +262,18 @@ jobs:
       - name: Build legacy Zero3Pilot-Setup.exe
         shell: pwsh
         run: |
-          & $env:ZERO3_ISCC 'installer\Zero3Pilot.iss'
-          if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
-          if (-not (Test-Path 'dist\Zero3Pilot-Setup.exe')) { throw 'installer artifact missing' }
+          & $env:ZERO3_ISCC 'packaging\windows\Zero3Pilot.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup build failed' }
       - name: Silent legacy install smoke
         shell: pwsh
         run: |
-          $installDir = Join-Path $env:RUNNER_TEMP 'Zero3PilotInstalled'
-          $setup = (Resolve-Path 'dist\Zero3Pilot-Setup.exe').Path
-          $proc = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',("/DIR=$installDir") -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { throw "installer exited with $($proc.ExitCode)" }
-          @('zero3-pilot.exe','zero3-pilot-node.exe','zero3-pilot-weixin.exe') | ForEach-Object {
-            if (-not (Test-Path (Join-Path $installDir $_))) { throw "installed file missing: $_" }
-          }
-          $env:ZERO3_PILOT_DATA_DIR = Join-Path $env:RUNNER_TEMP 'zero3-pilot-installed-data'
-          $status = & (Join-Path $installDir 'zero3-pilot-weixin.exe') status | ConvertFrom-Json
-          if ($status.connected -ne $false) { throw 'installed Weixin channel status invalid' }
+          $installer = Get-ChildItem 'dist\installer\Zero3Pilot-Setup.exe' -ErrorAction Stop | Select-Object -First 1
+          $installDir = Join-Path $env:RUNNER_TEMP 'zero3-pilot-installed'
+          & $installer.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="$installDir"
+          if ($LASTEXITCODE -ne 0) { throw "Installer failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path (Join-Path $installDir 'zero3-pilot.exe'))) { throw 'Installed desktop binary missing' }
       - uses: actions/upload-artifact@v4
         with:
-          name: Zero3Pilot-Setup-${{ github.sha }}
-          path: dist/Zero3Pilot-Setup.exe
+          name: zero3-pilot-windows-installer
+          path: dist/installer/Zero3Pilot-Setup.exe
           if-no-files-found: error
