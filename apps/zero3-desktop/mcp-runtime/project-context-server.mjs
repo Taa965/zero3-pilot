@@ -7,7 +7,7 @@ import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import * as z from 'zod/v4'
 
 const SERVER_NAME = 'zero3-project-context'
-const SERVER_VERSION = '0.1.0'
+const SERVER_VERSION = '0.2.0'
 const PROJECT_SCHEMA_VERSION = 1
 const HANDOFF_SCHEMA_VERSION = 1
 const EXECUTION_RESULT_PROTOCOL = 'zero3.pilot.execution-result.v1'
@@ -20,6 +20,21 @@ function rootDir() {
     throw new Error('ZERO3_PROJECT_CONTEXT_DIR must be an absolute directory')
   }
   return path.resolve(configured)
+}
+
+function activeProjectId() {
+  const configured = process.env.ZERO3_ACTIVE_PROJECT_ID?.trim()
+  if (!configured) return null
+  const parsed = ID.safeParse(configured)
+  if (!parsed.success) throw new Error('ZERO3_ACTIVE_PROJECT_ID is invalid')
+  return parsed.data
+}
+
+function assertProjectScope(projectId) {
+  const active = activeProjectId()
+  if (active && active !== projectId) {
+    throw new Error('project context access denied for inactive project')
+  }
 }
 
 function storageName(logicalId) {
@@ -64,6 +79,7 @@ function mutate(operation) {
 }
 
 async function getProject(projectId) {
+  assertProjectScope(projectId)
   const value = await readJson(fileFor('projects', projectId))
   if (!value) return { projectId, version: 0, payload: null }
   if (value.schemaVersion !== PROJECT_SCHEMA_VERSION || value.projectId !== projectId || !Number.isSafeInteger(value.version) || value.version < 1) {
@@ -73,6 +89,7 @@ async function getProject(projectId) {
 }
 
 async function putProject(projectId, expectedVersion, payload) {
+  assertProjectScope(projectId)
   serialized(payload)
   return mutate(async () => {
     const current = await getProject(projectId)
@@ -145,7 +162,7 @@ function serverFactory() {
     'project_put_context',
     {
       title: 'Update Zero3 Project Context',
-      description: 'Replace canonical project context with optimistic version control.',
+      description: 'Replace canonical project context with optimistic version control. Re-read and merge after a version conflict; never overwrite it blindly.',
       inputSchema: z.object({
         projectId: ID,
         expectedVersion: z.number().int().nonnegative().optional(),
@@ -184,6 +201,7 @@ function serverFactory() {
 
 try {
   rootDir()
+  activeProjectId()
   await serveStdio(serverFactory)
 } catch (error) {
   console.error(`[${SERVER_NAME}] ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
