@@ -79,7 +79,7 @@ export function Zero3AppShell() {
     setActiveProjectId(project.id)
     setActiveSessionId(current => {
       const active = sessions.find(session => session.id === current)
-      return active && active.projectId !== null && active.projectId !== project.id ? null : current
+      return active && active.projectId !== project.id ? null : current
     })
   }, [sessions])
 
