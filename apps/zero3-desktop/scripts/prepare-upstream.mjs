@@ -22,6 +22,7 @@ import { applyZero3CodexStructuredInput } from './apply-codex-structured-input.m
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3ControlRuntime } from './apply-control-runtime.mjs'
 import { applyZero3GptWebProvider } from './apply-gpt-web-provider.mjs'
+import { applyZero3ProjectContextHttp } from './apply-project-context-http.mjs'
 import { applyZero3RemoteHostRuntime } from './apply-remote-host-runtime.mjs'
 import { applyZero3ShellPolicy } from './apply-shell-policy.mjs'
 import { applyZero3WorkspaceEntryRuntime } from './apply-workspace-entry-runtime.mjs'
@@ -73,11 +74,6 @@ function trackedHermesChanges() {
 }
 
 function assertOnlyOverlayChanges() {
-  // R3D permits only the reviewed shell transformations plus the typed Codex
-  // app-server boundary, primary-chat adapter, native prompt/item presentation,
-  // structured UserInput mapping and native Thread lifecycle surfaces. Retired
-  // Zero3 Node bridges stay disabled. H0-H3 Remote Host adds only untracked
-  // Zero3-owned Electron-main source templates plus reviewed main.ts wiring.
   const allowed = new Set([
     'apps/desktop/package.json',
     'apps/desktop/index.html',
@@ -164,9 +160,7 @@ function applyBrandOverlay() {
   packageJson.build.mac.extendInfo.CFBundleExecutable = 'Zero3Pilot'
   packageJson.build.mac.extendInfo.CFBundleName = 'Zero3 Pilot'
   for (const [key, value] of Object.entries(packageJson.build.mac.extendInfo)) {
-    if (typeof value === 'string') {
-      packageJson.build.mac.extendInfo[key] = value.replaceAll('Hermes', 'Zero3 Pilot')
-    }
+    if (typeof value === 'string') packageJson.build.mac.extendInfo[key] = value.replaceAll('Hermes', 'Zero3 Pilot')
   }
   packageJson.build.dmg = packageJson.build.dmg ?? {}
   packageJson.build.dmg.title = 'Install Zero3 Pilot'
@@ -183,17 +177,13 @@ function applyBrandOverlay() {
   const electronMainPath = path.join(hermesDesktopDir, 'electron', 'main.ts')
   const electronMain = fs.readFileSync(electronMainPath, 'utf8')
   const brandedElectronMain = electronMain.replaceAll('com.nousresearch.hermes', 'ai.zero3.pilot')
-  if (brandedElectronMain === electronMain && !electronMain.includes('ai.zero3.pilot')) {
-    throw new Error('Hermes Desktop AppUserModelID changed upstream; update the Zero3 branding overlay.')
-  }
+  if (brandedElectronMain === electronMain && !electronMain.includes('ai.zero3.pilot')) throw new Error('Hermes Desktop AppUserModelID changed upstream; update the Zero3 branding overlay.')
   fs.writeFileSync(electronMainPath, brandedElectronMain)
 
   const indexPath = path.join(hermesDesktopDir, 'index.html')
   const indexHtml = fs.readFileSync(indexPath, 'utf8')
   const branded = indexHtml.replace('<title>Hermes</title>', '<title>Zero3 Pilot</title>')
-  if (branded === indexHtml && !indexHtml.includes('<title>Zero3 Pilot</title>')) {
-    throw new Error('Hermes Desktop index title changed upstream; update the Zero3 branding overlay.')
-  }
+  if (branded === indexHtml && !indexHtml.includes('<title>Zero3 Pilot</title>')) throw new Error('Hermes Desktop index title changed upstream; update the Zero3 branding overlay.')
   fs.writeFileSync(indexPath, branded)
 
   for (const file of brandedLocaleFiles) {
@@ -205,9 +195,7 @@ function applyBrandOverlay() {
   const introPath = path.join(hermesDesktopDir, 'src', 'components', 'chat', 'intro.tsx')
   const intro = fs.readFileSync(introPath, 'utf8')
   const brandedIntro = intro.replace("const WORDMARK = 'HERMES AGENT'", "const WORDMARK = 'ZERO3 PILOT'")
-  if (brandedIntro === intro && !intro.includes("const WORDMARK = 'ZERO3 PILOT'")) {
-    throw new Error('Hermes chat wordmark changed upstream; update the Zero3 branding overlay.')
-  }
+  if (brandedIntro === intro && !intro.includes("const WORDMARK = 'ZERO3 PILOT'")) throw new Error('Hermes chat wordmark changed upstream; update the Zero3 branding overlay.')
   fs.writeFileSync(introPath, brandedIntro)
 
   const publicDir = path.join(hermesDesktopDir, 'public')
@@ -250,16 +238,7 @@ function applyBrandOverlay() {
 fs.mkdirSync(upstreamRoot, { recursive: true })
 exec(
   'git',
-  [
-    'submodule',
-    'update',
-    '--init',
-    '--recursive',
-    '--',
-    'upstream/codex',
-    'upstream/hermes-agent',
-    'upstream/deepseek-harness'
-  ],
+  ['submodule', 'update', '--init', '--recursive', '--', 'upstream/codex', 'upstream/hermes-agent', 'upstream/deepseek-harness'],
   { stdio: 'inherit' }
 )
 
@@ -273,6 +252,7 @@ applyZero3ChineseUi()
 applyZero3CodexTransport()
 applyZero3WorkspaceEntryRuntime()
 applyZero3GptWebProvider()
+applyZero3ProjectContextHttp()
 applyZero3ControlRuntime()
 applyZero3CodexPrimaryChat()
 applyZero3CodexPrompts()
