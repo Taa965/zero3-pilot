@@ -33,6 +33,7 @@ const paths = {
   verification: 'apps/zero3-desktop/artifact-runtime/verification.ts',
   taskMcp: 'apps/zero3-desktop/mcp-runtime/task-mcp-server.mjs',
   projectMcp: 'apps/zero3-desktop/mcp-runtime/project-context-server.mjs',
+  projectMcpCore: 'apps/zero3-desktop/mcp-runtime/project-context-core.mjs',
   ui: 'apps/zero3-desktop/gpt-web-ui/gemini-session-section.tsx',
   integrationApply: 'apps/zero3-desktop/scripts/apply-agent-integration-runtime.mjs',
   reviewApply: 'apps/zero3-desktop/scripts/apply-agent-review-loop.mjs',
@@ -112,7 +113,10 @@ requireAll(taskMcp, paths.taskMcp, ['cannot mutate review decisions','Zero3 Comp
 forbid(taskMcp, paths.taskMcp, ['review_set', 'review_decision', 'completion_gate_set', 'shell_exec', 'run_command'])
 
 const projectMcp = read(paths.projectMcp)
-requireAll(projectMcp, paths.projectMcp, ["createHash('sha256')",'storageName(id)','invalid persisted project context','invalid persisted handoff'])
+requireAll(projectMcp, paths.projectMcp, ['createProjectContextCore','core.getProject(projectId)','core.putProject(projectId, expectedVersion, payload)','core.getHandoff(taskId)','core.putHandoff(taskId, expectedVersion, executionResult)'])
+
+const projectMcpCore = read(paths.projectMcpCore)
+requireAll(projectMcpCore, paths.projectMcpCore, ["createHash('sha256')",'storageName(logicalId)','MAX_JSON_BYTES','mode: 0o600','await fs.rename(temporary, file)','invalid persisted project context','invalid persisted handoff','project context version conflict','handoff version conflict'])
 
 const ui = read(paths.ui)
 forbid(ui, paths.ui, ['executeJavaScript(', 'querySelector(', 'sendInputEvent('])
