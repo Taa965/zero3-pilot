@@ -42,6 +42,8 @@ export interface ClaudeExecutorOptions {
   label?: string
   command?: string
   model?: string
+  mcpConfig?: string
+  strictMcpConfig?: boolean
   now?: () => string
   runner?: ClaudeCliRunner
 }
@@ -200,6 +202,7 @@ export class ClaudeExecutor implements Zero3Executor {
     }
     this.#runner = options.runner ?? new NodeClaudeCliRunner()
     this.#command = requireNonEmpty(options.command ?? 'claude', 'Claude CLI command')
+    if (options.mcpConfig != null) requireNonEmpty(options.mcpConfig, 'Claude MCP config')
     this.#now = options.now ?? (() => new Date().toISOString())
   }
 
@@ -263,6 +266,11 @@ export class ClaudeExecutor implements Zero3Executor {
     let sequence = 0
     try {
       const args = ['-p', input.text, '--output-format', 'json', '--permission-mode', state.permissionMode]
+      const mcpConfig = this.options.mcpConfig?.trim()
+      if (mcpConfig) {
+        if (this.options.strictMcpConfig !== false) args.push('--strict-mcp-config')
+        args.push('--mcp-config', mcpConfig)
+      }
       if (state.cliSessionId) args.push('--resume', state.cliSessionId)
       if (this.options.model?.trim()) args.push('--model', this.options.model.trim())
       const run = await this.#runner.run({ command: this.#command, args, cwd: state.workspace, signal: controller.signal })
