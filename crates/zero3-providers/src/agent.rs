@@ -97,7 +97,9 @@ impl AgentProviderDescriptor {
                     anyhow::bail!("Gemini logical agent cannot bind ChatGPT Web");
                 }
                 if matches!(self.runtime_provider, Some(SessionProvider::CodexLocal)) {
-                    anyhow::bail!("Gemini logical agent cannot bind Codex Local as its runtime identity");
+                    anyhow::bail!(
+                        "Gemini logical agent cannot bind Codex Local as its runtime identity"
+                    );
                 }
             }
             LogicalAgent::Codex => {
