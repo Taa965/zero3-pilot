@@ -30,18 +30,14 @@ export function UnifiedSessionList({
   const [filter, setFilter] = useState<'all' | 'codex' | 'gpt' | 'gemini'>('all')
   const [query, setQuery] = useState('')
 
-  const { projectSessions, unassignedSessions } = useMemo(() => {
+  const projectSessions = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const matches = (session: WebSession) => {
       if (filter !== 'all' && session.provider !== filter) return false
       if (!needle) return true
       return session.title.toLowerCase().includes(needle) || session.subtitle.toLowerCase().includes(needle)
     }
-    return {
-      projectSessions: sessions.filter(session => session.projectId === activeProjectId && matches(session)),
-      unassignedSessions:
-        activeProjectId === null ? [] : sessions.filter(session => session.projectId === null && matches(session))
-    }
+    return sessions.filter(session => session.projectId === activeProjectId && matches(session))
   }, [sessions, activeProjectId, filter, query])
 
   const renderSession = (session: WebSession) => {
@@ -69,8 +65,6 @@ export function UnifiedSessionList({
       </button>
     )
   }
-
-  const visibleCount = projectSessions.length + unassignedSessions.length
 
   return (
     <div className="flex h-full flex-col">
@@ -114,16 +108,7 @@ export function UnifiedSessionList({
 
         {projectSessions.map(renderSession)}
 
-        {unassignedSessions.length > 0 && (
-          <>
-            <div className="mb-1 mt-3 border-t border-(--ui-border) px-2 pt-3 text-[11px] font-medium text-(--ui-text-tertiary)">
-              未归属会话
-            </div>
-            {unassignedSessions.map(renderSession)}
-          </>
-        )}
-
-        {!error && visibleCount === 0 && (
+        {!error && projectSessions.length === 0 && (
           <div className="px-2 py-6 text-center text-xs text-(--ui-text-tertiary)">
             {filter === 'codex' ? (
               <>Codex 会话尚未接入此列表</>
