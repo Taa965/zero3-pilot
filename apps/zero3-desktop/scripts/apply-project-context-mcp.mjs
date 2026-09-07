@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { applyZero3ProjectContextHttp } from './apply-project-context-http.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'mcp-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp')
@@ -67,4 +68,5 @@ export function applyZero3ProjectContextMcp() {
     from: "      const selection = selectedZero3Model()\n      const response = await window.zero3Codex.thread.start({\n        ...(cwd ? { cwd } : {}),",
     to: "      const selection = selectedZero3Model()\n      const projectId = (() => {\n        try { return window.localStorage.getItem('zero3.active-project-id')?.trim() ?? '' } catch { return '' }\n      })()\n      const response = await window.zero3Codex.thread.start({\n        ...(cwd ? { cwd } : {}),\n        ...(projectId ? { projectId } : {}),"
   }])
+  applyZero3ProjectContextHttp()
 }
