@@ -101,6 +101,37 @@ const zero3LocalCodexRunner = {
 }
 const zero3CodexTaskAdapter = new Zero3CodexTaskAdapter(zero3LocalCodexRunner)
 
+const zero3ClaudeExecutor = new ClaudeExecutor()
+// probe() spawns the Claude CLI auth check, far heavier than the in-memory
+// checks the other two providers do. Routing asks for availability on every
+// AUTO decision, so the result is cached briefly rather than spawning a process
+// per decision.
+const ZERO3_CLAUDE_PROBE_TTL_MS = 30_000
+let zero3ClaudeProbeCache: { at: number; value: { available: boolean; authenticated: boolean | null } } | null = null
+
+async function zero3ClaudeAvailability(): Promise<{ available: boolean; authenticated: boolean | null }> {
+  const now = Date.now()
+  if (zero3ClaudeProbeCache && now - zero3ClaudeProbeCache.at < ZERO3_CLAUDE_PROBE_TTL_MS) {
+    return zero3ClaudeProbeCache.value
+  }
+  let value: { available: boolean; authenticated: boolean | null }
+  try {
+    const probe = await zero3ClaudeExecutor.probe()
+    // auth_required means the CLI is installed but not signed in: reachable,
+    // not usable. Anything else is treated as absent rather than guessed at.
+    value =
+      probe.status === 'ready'
+        ? { available: true, authenticated: true }
+        : probe.status === 'auth_required'
+          ? { available: true, authenticated: false }
+          : { available: false, authenticated: null }
+  } catch {
+    value = { available: false, authenticated: null }
+  }
+  zero3ClaudeProbeCache = { at: now, value }
+  return value
+}
+
 async function zero3ProviderAvailability() {
   let codexAvailable = false
   try {
@@ -127,7 +158,8 @@ async function zero3ProviderAvailability() {
 
   return {
     codex: { available: codexAvailable, authenticated: codexAvailable ? true : false },
-    gemini: { available: geminiStatus.available, authenticated: geminiAuthenticated }
+    gemini: { available: geminiStatus.available, authenticated: geminiAuthenticated },
+    claude: await zero3ClaudeAvailability()
   }
 }
 
@@ -270,7 +302,8 @@ export function applyZero3AgentIntegrationRuntime() {
       from: "import { Zero3ReviewLoopStore } from './zero3/agent-routing/index'",
       to:
         "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, zero3GitEvidence } from './zero3/agent-routing/index'\n" +
-        "import { createZero3AgentDesktopHandlers, ZERO3_AGENT_DESKTOP_CHANNELS } from './zero3/agent-desktop-bridge/index'"
+        "import { createZero3AgentDesktopHandlers, ZERO3_AGENT_DESKTOP_CHANNELS } from './zero3/agent-desktop-bridge/index'\n" +
+        "import { ClaudeExecutor } from './zero3/executor-runtime/external/claude-executor'"
     },
     {
       label: 'existing remote-host import',
