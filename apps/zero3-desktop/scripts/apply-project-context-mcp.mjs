@@ -3,8 +3,10 @@ import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
 
-const source = path.join(repoRoot, 'apps', 'zero3-desktop', 'mcp-runtime', 'project-context-server.mjs')
-const target = path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp', 'project-context-server.mjs')
+const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'mcp-runtime')
+const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp')
+const source = path.join(sourceDir, 'project-context-server.mjs')
+const target = path.join(targetDir, 'project-context-server.mjs')
 
 function read(file) {
   return fs.readFileSync(file, 'utf8')
@@ -19,13 +21,6 @@ function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let content = read(file)
   for (const replacement of replacements) {
-    // The default "already applied" test is the replacement text itself, but that
-    // only holds while the inserted block stays adjacent to its anchor. This
-    // overlay runs twice (applyZero3GptWebProvider during prepare-upstream, then
-    // prepare-gemini-integration), and the overlays in between insert their own
-    // code at the same "const zero3CodexAppServer = ..." anchor, which pushes the
-    // helper away from it. Replacements that can drift apart from their anchor
-    // therefore declare a stable marker instead.
     if (content.includes(replacement.appliedMarker ?? replacement.to)) continue
     if (!content.includes(replacement.from)) {
       throw new Error(`Zero3 project-context MCP overlay drift in ${relativePath}: missing ${replacement.label}`)
@@ -84,7 +79,11 @@ function zero3WithProjectContextMcp(method: string, params: unknown): unknown {
 
 export function applyZero3ProjectContextMcp() {
   if (!fs.statSync(source).isFile()) throw new Error(`Zero3 project-context MCP source is missing: ${source}`)
-  write(target, read(source))
+  for (const file of ['project-context-server.mjs', 'project-context-core.mjs']) {
+    const candidate = path.join(sourceDir, file)
+    if (!fs.statSync(candidate).isFile()) throw new Error(`Zero3 project-context MCP source is missing: ${candidate}`)
+    write(path.join(targetDir, file), read(candidate))
+  }
   addDesktopDependencies()
 
   patchFile('electron/main.ts', [
