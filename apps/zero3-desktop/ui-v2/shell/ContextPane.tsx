@@ -1,3 +1,4 @@
+import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import type { WebSession } from '../adapters/WebWorkspaceAdapter'
 import { UnifiedSessionList } from '../conversations/UnifiedSessionList'
 import { TaskList } from '../tasks/TaskList'
@@ -9,18 +10,28 @@ interface ContextPaneProps {
   activeModule: string
   sessions: WebSession[]
   activeSessionId: string | null
+  activeProjectId: string | null
   sessionError: string | null
+  projects: Zero3ProjectRecord[]
+  projectError: string | null
   onSelectSession: (session: WebSession) => void
   onCreateGptSession: () => void
+  onSelectProject: (project: Zero3ProjectRecord) => void
+  onCreateProject: () => void
 }
 
 export function ContextPane({
   activeModule,
   sessions,
   activeSessionId,
+  activeProjectId,
   sessionError,
+  projects,
+  projectError,
   onSelectSession,
-  onCreateGptSession
+  onCreateGptSession,
+  onSelectProject,
+  onCreateProject
 }: ContextPaneProps) {
   const titles: Record<string, string> = {
     conversations: '工作台',
@@ -40,6 +51,7 @@ export function ContextPane({
           <UnifiedSessionList
             sessions={sessions}
             activeId={activeSessionId}
+            activeProjectId={activeProjectId}
             onSelect={onSelectSession}
             onCreateGpt={onCreateGptSession}
             error={sessionError}
@@ -49,7 +61,13 @@ export function ContextPane({
         ) : activeModule === 'groups' ? (
           <DevelopmentGroupList />
         ) : activeModule === 'projects' ? (
-          <ProjectList />
+          <ProjectList
+            projects={projects}
+            activeProjectId={activeProjectId}
+            error={projectError}
+            onSelect={onSelectProject}
+            onCreate={onCreateProject}
+          />
         ) : activeModule === 'runtime' ? (
           <RuntimeList />
         ) : (
