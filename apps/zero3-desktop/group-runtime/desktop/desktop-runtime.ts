@@ -340,7 +340,7 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
       executorManager: this.executorManager,
       integrationGit: new IntegrationGitAdapter(repositoryRoot),
       deliveryVerifier: new WorkspaceRuntimeDeliveryVerifier(handoffResolver),
-      deliveryMaterializer: new WorkspaceDeliveryMaterializer(this.#handoffStore),
+      deliveryMaterializer: new WorkspaceDeliveryMaterializer(this.#handoffStore, { materializeDirtyExecutorIds: ['claude'] }),
       verificationCommands: { commands: loadVerificationCommands },
       verificationExecutor: new ShelllessVerificationExecutor(repositoryRoot)
     })

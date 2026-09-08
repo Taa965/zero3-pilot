@@ -9,6 +9,7 @@ const SHA_RE = /^[0-9a-f]{40}$/i
 export interface GitStatusEntry {
   status: string
   path: string
+  originalPath?: string
 }
 
 export interface GitWorkspacePort {
@@ -34,6 +35,17 @@ function assertBranch(value: string): string {
 
 function parseNulList(text: string): string[] {
   return text.split('\0').map(value => value.trim()).filter(Boolean)
+}
+
+function safeRelativePaths(paths: readonly string[]): string[] {
+  const values = [...new Set(paths.map(value => value.replaceAll('\\', '/')))]
+  if (values.length === 0) throw new Error('at least one Git path is required')
+  for (const normalized of values) {
+    if (!normalized || /[\0\r\n]/u.test(normalized) || normalized.startsWith('/') || /^[A-Za-z]:\//u.test(normalized) || normalized.split('/').includes('..')) {
+      throw new Error(`unsafe Git path: ${JSON.stringify(normalized)}`)
+    }
+  }
+  return values
 }
 
 export class GitWorkspaceAdapter implements GitWorkspacePort {
@@ -89,14 +101,38 @@ export class GitWorkspaceAdapter implements GitWorkspacePort {
     for (let index = 0; index < tokens.length; index += 1) {
       const token = tokens[index]
       const status = token.slice(0, 2)
-      let path = token.slice(3)
+      const path = token.slice(3).replaceAll('\\', '/')
       if ((status.startsWith('R') || status.startsWith('C')) && index + 1 < tokens.length) {
-        path = tokens[index + 1]
+        const originalPath = tokens[index + 1].replaceAll('\\', '/')
         index += 1
+        entries.push({ status, path, originalPath })
+        continue
       }
-      entries.push({ status, path: path.replaceAll('\\', '/') })
+      entries.push({ status, path })
     }
     return entries.sort((left, right) => left.path.localeCompare(right.path))
+  }
+
+  async stagePaths(paths: readonly string[]): Promise<void> {
+    const pathspecs = safeRelativePaths(paths).map(path => `:(literal)${path}`)
+    await this.git(['add', '--all', '--', ...pathspecs])
+  }
+
+  async stagedPaths(): Promise<readonly string[]> {
+    const result = await this.git(['diff', '--cached', '--name-only', '-z', '--no-renames', 'HEAD'])
+    return [...new Set(parseNulList(result.stdout).map(path => path.replaceAll('\\', '/')))].sort()
+  }
+
+  async unstagePaths(paths: readonly string[]): Promise<void> {
+    const pathspecs = safeRelativePaths(paths).map(path => `:(literal)${path}`)
+    await this.git(['reset', '--mixed', 'HEAD', '--', ...pathspecs])
+  }
+
+  async commit(message: string): Promise<string> {
+    const subject = message.trim()
+    if (!subject || subject.length > 512 || /[\0\r\n]/u.test(subject)) throw new Error('Git commit message is invalid')
+    await this.git(['commit', '-m', subject])
+    return this.resolveHead()
   }
 
   async handoffWorkspaceFingerprint(): Promise<string> {

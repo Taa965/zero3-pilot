@@ -62,6 +62,7 @@ jobs:
           apps/zero3-desktop/group-runtime/ui/groups-view-model.test.ts
           apps/zero3-desktop/group-runtime/runtime/runtime-facade.test.ts
           apps/zero3-desktop/group-runtime/runtime/closeout.test.ts
+          apps/zero3-desktop/group-runtime/runtime/delivery-materializer.test.ts
           apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts
           apps/zero3-desktop/executor-runtime/router/failover-runtime.test.ts
 
