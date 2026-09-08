@@ -1,0 +1,31 @@
+[Unit]
+Description=Zero3 Memory Authority V2.1
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zero3memory
+Group=zero3memory
+WorkingDirectory=/opt/zero3-memory/current
+ExecStart=/opt/zero3-memory/current/bin/zero3-memory-server
+Environment=ZERO3_MEMORY_BIND=127.0.0.1:8790
+EnvironmentFile=/etc/zero3-memory/authority.env
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/zero3-memory /var/log/zero3-memory
+
+[Install]
+WantedBy=multi-user.target
