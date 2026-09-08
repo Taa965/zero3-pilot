@@ -83,6 +83,18 @@ export function Zero3AppShell() {
     })
   }, [sessions])
 
+  // Scope changes come from the switcher in the session pane. Clearing the scope
+  // keeps the current session selected -- the unscoped view lists it too, so
+  // there is nothing to deselect.
+  const selectProjectScope = useCallback((projectId: string | null) => {
+    setActiveProjectId(projectId)
+    if (projectId === null) return
+    setActiveSessionId(current => {
+      const active = sessions.find(session => session.id === current)
+      return active && active.projectId !== projectId ? null : current
+    })
+  }, [sessions])
+
   const createGptSession = useCallback(async () => {
     try {
       const id = await WebWorkspaceAdapter.createGptWeb(activeProjectId)
@@ -128,6 +140,7 @@ export function Zero3AppShell() {
           projectError={projectError}
           onSelectSession={selectSession}
           onCreateGptSession={() => void createGptSession()}
+          onSelectProjectScope={selectProjectScope}
           onSelectProject={selectProject}
           onCreateProject={() => void createProject()}
         />

@@ -2,12 +2,14 @@ import { useMemo, useState } from 'react'
 
 import { Codicon } from '@/components/ui/codicon'
 import { cn } from '@/lib/utils'
+import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import type { WebSession } from '../adapters/WebWorkspaceAdapter'
 
 interface UnifiedSessionListProps {
   sessions: WebSession[]
   activeId: string | null
   activeProjectId: string | null
+  projects: Zero3ProjectRecord[]
   onSelect: (session: WebSession) => void
   onCreateGpt: () => void
   error: string | null
@@ -23,6 +25,7 @@ export function UnifiedSessionList({
   sessions,
   activeId,
   activeProjectId,
+  projects,
   onSelect,
   onCreateGpt,
   error
@@ -37,12 +40,20 @@ export function UnifiedSessionList({
       if (!needle) return true
       return session.title.toLowerCase().includes(needle) || session.subtitle.toLowerCase().includes(needle)
     }
-    return sessions.filter(session => session.projectId === activeProjectId && matches(session))
+    return sessions.filter(
+      session => (activeProjectId === null || session.projectId === activeProjectId) && matches(session)
+    )
   }, [sessions, activeProjectId, filter, query])
 
   const renderSession = (session: WebSession) => {
     const active = session.id === activeId
     const mark = PROVIDER_MARKS[session.provider]
+    // Only in the unscoped view: inside a project every row would repeat the
+    // same name, and the switcher above already says which project that is.
+    const ownerLabel =
+      activeProjectId !== null
+        ? null
+        : (projects.find(project => project.id === session.projectId)?.name ?? '未归属')
     return (
       <button
         key={session.id}
@@ -61,7 +72,14 @@ export function UnifiedSessionList({
           </div>
           <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
         </div>
-        <div className="w-full truncate text-xs text-(--ui-text-secondary)">{session.subtitle}</div>
+        <div className="flex w-full items-center gap-1.5 text-xs text-(--ui-text-secondary)">
+          {ownerLabel && (
+            <span className="shrink-0 rounded bg-(--ui-control-background) px-1.5 py-0.5 text-(--ui-text-tertiary)">
+              {ownerLabel}
+            </span>
+          )}
+          <span className="truncate">{session.subtitle}</span>
+        </div>
       </button>
     )
   }
@@ -117,7 +135,7 @@ export function UnifiedSessionList({
             ) : activeProjectId ? (
               <>当前项目没有匹配的会话</>
             ) : (
-              <>没有未归属的匹配会话</>
+              <>没有匹配的会话</>
             )}
           </div>
         )}

@@ -4,6 +4,7 @@ import { UnifiedSessionList } from '../conversations/UnifiedSessionList'
 import { TaskList } from '../tasks/TaskList'
 import { DevelopmentGroupList } from '../development-groups/DevelopmentGroupList'
 import { ProjectList } from '../projects/ProjectList'
+import { ProjectScopeSwitcher } from './ProjectScopeSwitcher'
 import { RuntimeList } from '../runtime/RuntimeList'
 
 interface ContextPaneProps {
@@ -17,6 +18,7 @@ interface ContextPaneProps {
   onSelectSession: (session: WebSession) => void
   onCreateGptSession: () => void
   onSelectProject: (project: Zero3ProjectRecord) => void
+  onSelectProjectScope: (projectId: string | null) => void
   onCreateProject: () => void
 }
 
@@ -31,6 +33,7 @@ export function ContextPane({
   onSelectSession,
   onCreateGptSession,
   onSelectProject,
+  onSelectProjectScope,
   onCreateProject
 }: ContextPaneProps) {
   const titles: Record<string, string> = {
@@ -43,8 +46,16 @@ export function ContextPane({
 
   return (
     <div className="flex w-72 shrink-0 flex-col border-r border-(--ui-border) bg-(--ui-pane-background)">
-      <div className="flex h-12 items-center border-b border-(--ui-border) px-4 font-medium">
-        {titles[activeModule] || activeModule}
+      <div className="flex h-12 shrink-0 items-center border-b border-(--ui-border)">
+        {activeModule === 'conversations' ? (
+          <ProjectScopeSwitcher
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSelectScope={onSelectProjectScope}
+          />
+        ) : (
+          <div className="px-4 font-medium">{titles[activeModule] || activeModule}</div>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {activeModule === 'conversations' ? (
@@ -52,6 +63,7 @@ export function ContextPane({
             sessions={sessions}
             activeId={activeSessionId}
             activeProjectId={activeProjectId}
+            projects={projects}
             onSelect={onSelectSession}
             onCreateGpt={onCreateGptSession}
             error={sessionError}
