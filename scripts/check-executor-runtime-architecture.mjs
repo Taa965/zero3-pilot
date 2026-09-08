@@ -29,6 +29,11 @@ requireText(types, 'executionId: string', 'Execution identity must remain owned 
 requireText(types, 'fencingToken: number', 'Executor contract must be able to preserve Remote Host fencing identity.')
 requireText(types, 'respondPermission', 'Executor contract must provide a Zero3-owned permission response path.')
 requireText(manager, 'startFromHandoff', 'Executor Manager must expose an explicit fresh-session cross-provider handoff entrance.')
+requireText(manager, 'failoverAfterFailure', 'R4F Executor Manager must expose the narrow failure-driven failover entrance.')
+requireText(manager, "failurePolicyFor(failure.code).failover !== 'eligible'", 'Automatic switching must be derived from the frozen failure policy.')
+requireText(manager, 'captureFailoverHandoff', 'R4F switching must require an injected durable handoff capture boundary.')
+requireText(manager, 'await previousExecutor.close(binding.session)', 'The old writer must positively close before a replacement writer starts.')
+requireText(manager, 'this.#bindings.delete(key)', 'Old task/execution authority must be released before the fresh handoff session starts.')
 requireText(failures, 'EXECUTOR_FAILURE_CODES', 'Runtime failure validation must be owned by the Zero3 Pilot failure taxonomy.')
 for (const event of [
   'message',
@@ -82,7 +87,7 @@ requireText(failures, "'bad_request'", 'bad_request fail-closed policy guard is 
 requireText(failures, "'budget_exhausted'", 'task budget exhaustion must not be bypassed by automatic executor switching.')
 requireText(failures, "'user_stopped'", 'user cancellation must not be converted into automatic executor switching.')
 requireText(failures, "'provider_error'", 'generic provider failures must have a frozen provider-neutral failure code.')
-requireText(failures, "const IMMEDIATE_FAILOVER_FAILURES = new Set<ExecutorFailureCode>(['quota_exhausted'])", 'Only quota exhaustion may be marked as an immediate failover class in R4A.')
+requireText(failures, "const IMMEDIATE_FAILOVER_FAILURES = new Set<ExecutorFailureCode>(['quota_exhausted'])", 'Only quota exhaustion may be marked as an immediate failover class.')
 requireText(failures, "return createExecutorFailure('internal_error', message, source)", 'Unknown provider errors must be normalized without retaining raw exception objects.')
 forbidText(types, 'cause?: unknown', 'ExecutorFailure must not expose raw provider exception objects across the shared Core boundary.')
 forbidText(failures, 'source, cause', 'Failure normalization must not retain raw provider exception objects.')
@@ -114,13 +119,15 @@ for (const [name, source] of [
     'http://',
     'https://'
   ]) {
-    forbidText(source.toLowerCase(), forbidden.toLowerCase(), `${name} violates the R4A Executor Core boundary: ${forbidden}`)
+    forbidText(source.toLowerCase(), forbidden.toLowerCase(), `${name} violates the Executor Core boundary: ${forbidden}`)
   }
 }
 
+// R4F deliberately enables only the narrow quota_exhausted handoff path. General
+// autonomous retry/circuit-breaker/cooldown policy still belongs to a later routing layer.
 for (const premature of ['retryBudget', 'circuitBreaker', 'cooldownUntil', 'automaticSwitch']) {
-  forbidText(router, premature, `R4A must not implement R4F automatic routing policy yet: ${premature}`)
-  forbidText(manager, premature, `R4A must not implement R4F automatic routing policy yet: ${premature}`)
+  forbidText(router, premature, `Executor Core must not grow general automatic routing policy yet: ${premature}`)
+  forbidText(manager, premature, `Executor Core must not grow general automatic routing policy yet: ${premature}`)
 }
 
-console.log('Zero3 Pilot R4A Executor Core architecture guard passed: stable Zero3-owned contract, explicit handoff and approval boundaries, one task/execution authority, complete provider-neutral failure taxonomy, sanitized and provenance-bound failure boundary, fail-closed provider event validation, and no premature R4F auto-failover runtime.')
+console.log('Zero3 Pilot Executor Core architecture guard passed: stable Zero3-owned contract, explicit approval boundaries, one task/execution writer, provider-neutral failures, injected durable handoff capture, and narrow policy-governed quota failover with old-writer close-before-switch.')
