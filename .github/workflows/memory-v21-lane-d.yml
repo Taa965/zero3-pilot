@@ -1,4 +1,5 @@
 name: Memory V2.1 Lane D
+# Main-controller retrigger after sync queue and lockfile fixes.
 
 on:
   pull_request:
