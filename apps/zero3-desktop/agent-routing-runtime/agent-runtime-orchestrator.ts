@@ -3,6 +3,7 @@ import {
   type Zero3ArtifactRef,
   type Zero3CrossAgentBinding,
   type Zero3ExecutionResultV2,
+  type Zero3ResolvedAgentTarget,
   type Zero3ReviewDecision,
   type Zero3TaskSpecV2,
   type Zero3VerificationResult
@@ -12,6 +13,10 @@ import { Zero3AgentTaskStore, type Zero3AgentTaskRecord, type Zero3AgentTaskStat
 import { Zero3ReviewLoopStore } from './review-loop-store'
 
 export type Zero3CodexTaskDispatcher = {
+  dispatchTask(task: Zero3TaskSpecV2): Promise<Zero3ExecutionResultV2>
+}
+
+export type Zero3ClaudeTaskDispatcher = {
   dispatchTask(task: Zero3TaskSpecV2): Promise<Zero3ExecutionResultV2>
 }
 
@@ -50,6 +55,7 @@ export type Zero3AgentRuntimeDependencies = {
   reviewStore: Zero3ReviewLoopStore
   antigravity: Zero3AntigravityTaskRuntime
   codex: Zero3CodexTaskDispatcher
+  claude?: Zero3ClaudeTaskDispatcher
   availability: () => Promise<Zero3ProviderAvailability> | Zero3ProviderAvailability
   finalizeResult: (task: Zero3TaskSpecV2, candidate: Zero3ExecutionResultV2) => Promise<Zero3ExecutionResultV2>
 }
@@ -184,7 +190,7 @@ function mapGeminiTurn(task: Zero3TaskSpecV2, turn: Zero3AntigravityTurnResultLi
   }
 }
 
-function assertResultIdentity(task: Zero3TaskSpecV2, target: 'CODEX' | 'GEMINI', result: Zero3ExecutionResultV2): void {
+function assertResultIdentity(task: Zero3TaskSpecV2, target: Zero3ResolvedAgentTarget, result: Zero3ExecutionResultV2): void {
   if (result.protocol !== ZERO3_EXECUTION_RESULT_V2) throw new Error('execution result protocol is invalid')
   if (result.taskId !== task.taskId || result.executionId !== task.executionId || result.projectId !== task.projectId) {
     throw new Error('execution result identity mismatch')
@@ -193,6 +199,7 @@ function assertResultIdentity(task: Zero3TaskSpecV2, target: 'CODEX' | 'GEMINI',
   if (result.provider !== target) throw new Error(`execution result provider ${result.provider} does not match resolved target ${target}`)
   if (target === 'CODEX' && result.providerRuntime !== 'CODEX_LOCAL') throw new Error('CODEX result must use CODEX_LOCAL runtime')
   if (target === 'GEMINI' && result.providerRuntime !== 'GEMINI_AGENT') throw new Error('GEMINI result must use GEMINI_AGENT runtime')
+  if (target === 'CLAUDE' && result.providerRuntime !== 'CLAUDE_CODE') throw new Error('CLAUDE result must use CLAUDE_CODE runtime')
 }
 
 function stateForResult(result: Zero3ExecutionResultV2, reviewRequired: boolean): Zero3AgentTaskState {
@@ -249,6 +256,9 @@ export class Zero3AgentRuntimeOrchestrator {
           await this.deps.taskStore.setBinding(task.taskId, binding)
         }
         candidate = mapGeminiTurn(task, turn)
+      } else if (route.target === 'CLAUDE') {
+        if (!this.deps.claude) throw new Error('Claude task dispatcher is not configured')
+        candidate = await this.deps.claude.dispatchTask(task)
       } else {
         candidate = await this.deps.codex.dispatchTask(task)
       }

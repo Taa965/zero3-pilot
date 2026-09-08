@@ -63,14 +63,21 @@ function hermesNodePackageExists(...segments) {
 
 function ensureHermesDependencies(env) {
   const nodeModulesPresent = isDirectory(path.join(hermesRoot, 'node_modules'))
+  // Every package an overlay adds to the desktop package.json has to be listed
+  // here too. This check is what decides whether npm install runs at all, so a
+  // dependency missing from it is never installed on a machine that already has
+  // node_modules -- and a clean clone will not reproduce the failure.
   const zero3McpDependenciesPresent =
-    hermesNodePackageExists('@modelcontextprotocol', 'server') && hermesNodePackageExists('zod')
+    hermesNodePackageExists('@modelcontextprotocol', 'server') &&
+    hermesNodePackageExists('@modelcontextprotocol', 'node') &&
+    hermesNodePackageExists('zod')
   if (nodeModulesPresent && zero3McpDependenciesPresent) return
   runSync(commandName('npm'), ['install', '--workspace', 'apps/desktop'], {
     cwd: hermesRoot,
     env
   })
   if (
+    !hermesNodePackageExists('@modelcontextprotocol', 'node') ||
     !hermesNodePackageExists('@modelcontextprotocol', 'server') ||
     !hermesNodePackageExists('zod')
   ) {

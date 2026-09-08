@@ -119,8 +119,8 @@ export function applyZero3AgentMcpLifecycle() {
   patchFile('electron/main.ts', [
     {
       label: 'task MCP candidate store import',
-      from: "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, zero3GitEvidence, assertZero3GitPreflight, renderZero3AgentTaskPrompt, type Zero3TaskSpecV2 } from './zero3/agent-routing/index'",
-      to: "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, Zero3TaskMcpCandidateStore, zero3ResultCandidatesEqual, zero3GitEvidence, assertZero3GitPreflight, renderZero3AgentTaskPrompt, type Zero3TaskSpecV2 } from './zero3/agent-routing/index'"
+      from: " } from './zero3/agent-routing/index'",
+      to: ", Zero3TaskMcpCandidateStore, zero3ResultCandidatesEqual } from './zero3/agent-routing/index'"
     },
     {
       label: 'task-scoped MCP lifecycle helpers',

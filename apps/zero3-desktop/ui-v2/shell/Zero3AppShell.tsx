@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { WebWorkspaceAdapter, type WebSession } from '../adapters/WebWorkspaceAdapter'
 import { AppTitleBar } from './AppTitleBar'
 import { GlobalRail } from './GlobalRail'
@@ -10,6 +11,8 @@ import { InspectorDrawer } from './InspectorDrawer'
 export type ActiveModule = 'conversations' | 'tasks' | 'groups' | 'projects' | 'runtime'
 export type WorkspaceProvider = 'codex' | 'gpt' | 'gemini'
 
+const ACTIVE_PROJECT_STORAGE_KEY = 'zero3.active-project-id'
+
 export function Zero3AppShell() {
   const [activeModule, setActiveModule] = useState<ActiveModule>('conversations')
   const [inspectorOpen, setInspectorOpen] = useState(false)
@@ -17,8 +20,11 @@ export function Zero3AppShell() {
   const [sessions, setSessions] = useState<WebSession[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  const [projects, setProjects] = useState<Zero3ProjectRecord[]>([])
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
+  const [projectError, setProjectError] = useState<string | null>(null)
 
-  const refresh = useCallback(async () => {
+  const refreshSessions = useCallback(async () => {
     try {
       setSessions(await WebWorkspaceAdapter.list())
       setSessionError(null)
@@ -27,30 +33,97 @@ export function Zero3AppShell() {
     }
   }, [])
 
+  const refreshProjects = useCallback(async () => {
+    try {
+      const next = await ProjectAdapter.list()
+      setProjects(next)
+      setActiveProjectId(current => {
+        const stored = (() => {
+          try {
+            return window.localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY)?.trim() || null
+          } catch {
+            return null
+          }
+        })()
+        const candidate = current ?? stored
+        return candidate && next.some(project => project.id === candidate) ? candidate : (next[0]?.id ?? null)
+      })
+      setProjectError(null)
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error))
+    }
+  }, [])
+
   useEffect(() => {
-    void refresh()
-    // Titles and conversation URLs are filled in by main as the page navigates,
-    // so a session listed right after creation is unnamed until then.
-    return WebWorkspaceAdapter.subscribe(() => void refresh())
-  }, [refresh])
+    void refreshSessions()
+    return WebWorkspaceAdapter.subscribe(() => void refreshSessions())
+  }, [refreshSessions])
+
+  useEffect(() => {
+    void refreshProjects()
+  }, [refreshProjects])
+
+  useEffect(() => {
+    try {
+      if (activeProjectId) window.localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, activeProjectId)
+      else window.localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY)
+    } catch {}
+  }, [activeProjectId])
 
   const selectSession = useCallback((session: WebSession) => {
     setActiveSessionId(session.id)
     setProvider(session.provider)
   }, [])
 
+  const selectProject = useCallback((project: Zero3ProjectRecord) => {
+    setActiveProjectId(project.id)
+    setActiveSessionId(current => {
+      const active = sessions.find(session => session.id === current)
+      return active && active.projectId !== project.id ? null : current
+    })
+  }, [sessions])
+
+  // Scope changes come from the switcher in the session pane. Clearing the scope
+  // keeps the current session selected -- the unscoped view lists it too, so
+  // there is nothing to deselect.
+  const selectProjectScope = useCallback((projectId: string | null) => {
+    setActiveProjectId(projectId)
+    if (projectId === null) return
+    setActiveSessionId(current => {
+      const active = sessions.find(session => session.id === current)
+      return active && active.projectId !== projectId ? null : current
+    })
+  }, [sessions])
+
   const createGptSession = useCallback(async () => {
     try {
-      const id = await WebWorkspaceAdapter.createGptWeb()
+      const id = await WebWorkspaceAdapter.createGptWeb(activeProjectId)
       setActiveSessionId(id)
       setProvider('gpt')
-      await refresh()
+      await refreshSessions()
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
-  }, [refresh])
+  }, [activeProjectId, refreshSessions])
+
+  const createProject = useCallback(async () => {
+    try {
+      const project = await ProjectAdapter.createFromDirectory()
+      if (!project) return
+      setProjects(current => [project, ...current.filter(item => item.id !== project.id)])
+      setActiveProjectId(project.id)
+      setProjectError(null)
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error))
+    }
+  }, [])
 
   const activeSession = sessions.find(session => session.id === activeSessionId) ?? null
+  const activeProject = projects.find(project => project.id === activeProjectId) ?? null
+  const activeProjectSessionCount = useMemo(
+    () => activeProjectId ? sessions.filter(session => session.projectId === activeProjectId).length : 0,
+    [sessions, activeProjectId]
+  )
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -61,15 +134,23 @@ export function Zero3AppShell() {
           activeModule={activeModule}
           sessions={sessions}
           activeSessionId={activeSessionId}
+          activeProjectId={activeProjectId}
           sessionError={sessionError}
+          projects={projects}
+          projectError={projectError}
           onSelectSession={selectSession}
           onCreateGptSession={() => void createGptSession()}
+          onSelectProjectScope={selectProjectScope}
+          onSelectProject={selectProject}
+          onCreateProject={() => void createProject()}
         />
         <WorkspaceRouter
           activeModule={activeModule}
           provider={provider}
           onProviderChange={setProvider}
           activeSessionId={activeSession?.provider === 'gpt' ? activeSession.id : null}
+          activeProject={activeProject}
+          activeProjectSessionCount={activeProjectSessionCount}
           onToggleInspector={() => setInspectorOpen(!inspectorOpen)}
         />
         {inspectorOpen && <InspectorDrawer onClose={() => setInspectorOpen(false)} />}

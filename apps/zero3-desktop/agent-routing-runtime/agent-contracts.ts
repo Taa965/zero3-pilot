@@ -3,7 +3,8 @@ export const ZERO3_EXECUTION_RESULT_V2 = 'zero3.pilot.execution-result.v2' as co
 export const ZERO3_REVIEW_PACKET_V1 = 'zero3.pilot.review-packet.v1' as const
 export const ZERO3_REVIEW_DECISION_V1 = 'zero3.pilot.review-decision.v1' as const
 
-export type Zero3AgentTarget = 'CODEX' | 'GEMINI' | 'AUTO'
+export type Zero3AgentTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'AUTO'
+export type Zero3ResolvedAgentTarget = Exclude<Zero3AgentTarget, 'AUTO'>
 export type Zero3TaskType = 'DESIGN' | 'IMPLEMENT' | 'VERIFY' | 'FIX' | 'REVIEW' | 'INTEGRATE' | 'RESEARCH'
 export type Zero3ReviewDecisionKind = 'APPROVED' | 'CHANGES_REQUESTED' | 'BLOCKED' | 'ESCALATE_HUMAN'
 export type Zero3ReviewState = 'DRAFT' | 'DISPATCHED' | 'RUNNING' | 'RESULT_READY' | 'REVIEW_PENDING' | 'REVIEWING' | 'FIX_DISPATCHED' | 'COMPLETE' | 'BLOCKED' | 'ESCALATE_HUMAN'
@@ -14,7 +15,7 @@ export type Zero3ArtifactRef = {
   kind: string
   pathOrUri: string
   hash: string
-  sourceProvider: 'CODEX' | 'GEMINI'
+  sourceProvider: Zero3ResolvedAgentTarget
   sourceCycle: number
   createdAt: string
 }
@@ -62,8 +63,8 @@ export type Zero3ExecutionResultV2 = {
   taskId: string
   executionId: string
   projectId: string
-  provider: 'CODEX' | 'GEMINI'
-  providerRuntime: 'CODEX_LOCAL' | 'GEMINI_AGENT'
+  provider: Zero3ResolvedAgentTarget
+  providerRuntime: 'CODEX_LOCAL' | 'GEMINI_AGENT' | 'CLAUDE_CODE'
   status: 'COMPLETE' | 'PARTIAL' | 'BLOCKED' | 'FAILED' | 'OUTCOME_UNKNOWN'
   contextVersion: number
   conversationId?: string | null
@@ -92,7 +93,7 @@ export type Zero3ReviewPacket = {
   originalGoal: string
   requirements: string[]
   constraints: string[]
-  provider: 'CODEX' | 'GEMINI'
+  provider: Zero3ResolvedAgentTarget
   resultSummary: string
   baseSha?: string | null
   headSha?: string | null
@@ -122,7 +123,7 @@ export type Zero3FixRequest = {
   taskId: string
   reviewId: string
   cycle: number
-  target: 'GEMINI' | 'CODEX'
+  target: Zero3ResolvedAgentTarget
   logicalSessionId: string
   runtimeConversationId?: string | null
   requiredFixes: string[]

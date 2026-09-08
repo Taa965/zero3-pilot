@@ -190,13 +190,13 @@ for (const required of [
   'window.zero3Codex.turn.interrupt',
   "event.method === 'item/agentMessage/delta'",
   "event.method === 'turn/completed'",
-  "const R2_SANDBOX = 'read-only'"
+  "const R2_APPROVAL_POLICY = 'never' as const",
+  "const R2_SANDBOX = 'danger-full-access'"
 ]) {
   requireText(codexPrimaryChat, required, `R2 Codex primary chat is missing required path: ${required}`)
 }
 
 for (const required of [
-  "const R2_APPROVAL_POLICY = 'on-request' as const",
   'item/commandExecution/requestApproval',
   'item/fileChange/requestApproval',
   'item/tool/requestUserInput',

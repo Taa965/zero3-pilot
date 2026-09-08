@@ -5,6 +5,7 @@ import path from 'node:path'
 import type {
   Zero3CrossAgentBinding,
   Zero3ExecutionResultV2,
+  Zero3ResolvedAgentTarget,
   Zero3ReviewState,
   Zero3TaskSpecV2
 } from './agent-contracts'
@@ -16,7 +17,7 @@ export type Zero3AgentTaskState =
 
 export type Zero3AgentTaskRecord = {
   task: Zero3TaskSpecV2
-  resolvedTarget: 'CODEX' | 'GEMINI'
+  resolvedTarget: Zero3ResolvedAgentTarget
   state: Zero3AgentTaskState
   binding: Zero3CrossAgentBinding | null
   result: Zero3ExecutionResultV2 | null
@@ -61,7 +62,7 @@ export class Zero3AgentTaskStore {
     }
   }
 
-  create(task: Zero3TaskSpecV2, resolvedTarget: 'CODEX' | 'GEMINI'): Promise<Zero3AgentTaskRecord> {
+  create(task: Zero3TaskSpecV2, resolvedTarget: Zero3ResolvedAgentTarget): Promise<Zero3AgentTaskRecord> {
     return this.mutate(async () => {
       const existing = await this.get(task.taskId)
       if (existing) {

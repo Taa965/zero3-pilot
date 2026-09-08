@@ -2,11 +2,14 @@ import { useMemo, useState } from 'react'
 
 import { Codicon } from '@/components/ui/codicon'
 import { cn } from '@/lib/utils'
+import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import type { WebSession } from '../adapters/WebWorkspaceAdapter'
 
 interface UnifiedSessionListProps {
   sessions: WebSession[]
   activeId: string | null
+  activeProjectId: string | null
+  projects: Zero3ProjectRecord[]
   onSelect: (session: WebSession) => void
   onCreateGpt: () => void
   error: string | null
@@ -18,18 +21,68 @@ const PROVIDER_MARKS = {
   gemini: { symbol: '✦', color: 'text-violet-500' }
 } as const
 
-export function UnifiedSessionList({ sessions, activeId, onSelect, onCreateGpt, error }: UnifiedSessionListProps) {
+export function UnifiedSessionList({
+  sessions,
+  activeId,
+  activeProjectId,
+  projects,
+  onSelect,
+  onCreateGpt,
+  error
+}: UnifiedSessionListProps) {
   const [filter, setFilter] = useState<'all' | 'codex' | 'gpt' | 'gemini'>('all')
   const [query, setQuery] = useState('')
 
-  const filtered = useMemo(() => {
+  const projectSessions = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    return sessions.filter(session => {
+    const matches = (session: WebSession) => {
       if (filter !== 'all' && session.provider !== filter) return false
       if (!needle) return true
       return session.title.toLowerCase().includes(needle) || session.subtitle.toLowerCase().includes(needle)
-    })
-  }, [sessions, filter, query])
+    }
+    return sessions.filter(
+      session => (activeProjectId === null || session.projectId === activeProjectId) && matches(session)
+    )
+  }, [sessions, activeProjectId, filter, query])
+
+  const renderSession = (session: WebSession) => {
+    const active = session.id === activeId
+    const mark = PROVIDER_MARKS[session.provider]
+    // Only in the unscoped view: inside a project every row would repeat the
+    // same name, and the switcher above already says which project that is.
+    const ownerLabel =
+      activeProjectId !== null
+        ? null
+        : (projects.find(project => project.id === session.projectId)?.name ?? '未归属')
+    return (
+      <button
+        key={session.id}
+        onClick={() => onSelect(session)}
+        className={cn(
+          'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
+          active
+            ? 'border-(--ui-border) bg-(--ui-control-active-background)'
+            : 'hover:bg-(--ui-control-hover-background)'
+        )}
+      >
+        <div className="flex w-full items-center justify-between">
+          <div className="flex min-w-0 items-center gap-1.5 font-medium">
+            <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
+            <span className="truncate">{session.title}</span>
+          </div>
+          <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
+        </div>
+        <div className="flex w-full items-center gap-1.5 text-xs text-(--ui-text-secondary)">
+          {ownerLabel && (
+            <span className="shrink-0 rounded bg-(--ui-control-background) px-1.5 py-0.5 text-(--ui-text-tertiary)">
+              {ownerLabel}
+            </span>
+          )}
+          <span className="truncate">{session.subtitle}</span>
+        </div>
+      </button>
+    )
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -46,7 +99,7 @@ export function UnifiedSessionList({ sessions, activeId, onSelect, onCreateGpt, 
           </div>
           <button
             onClick={onCreateGpt}
-            title="新建 GPT 网页会话"
+            title={activeProjectId ? '在当前项目中新建 GPT 网页会话' : '新建未归属 GPT 网页会话'}
             className="flex size-7 items-center justify-center rounded-md border border-(--ui-border) hover:bg-(--ui-control-hover-background)"
           >
             <Codicon name="plus" className="size-4" />
@@ -71,40 +124,16 @@ export function UnifiedSessionList({ sessions, activeId, onSelect, onCreateGpt, 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {error && <div className="px-2 py-3 text-xs text-red-600">{error}</div>}
 
-        {filtered.map(session => {
-          const active = session.id === activeId
-          const mark = PROVIDER_MARKS[session.provider]
-          return (
-            <button
-              key={session.id}
-              onClick={() => onSelect(session)}
-              className={cn(
-                'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
-                active
-                  ? 'border-(--ui-border) bg-(--ui-control-active-background)'
-                  : 'hover:bg-(--ui-control-hover-background)'
-              )}
-            >
-              <div className="flex w-full items-center justify-between">
-                <div className="flex min-w-0 items-center gap-1.5 font-medium">
-                  <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
-                  <span className="truncate">{session.title}</span>
-                </div>
-                <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
-              </div>
-              <div className="w-full truncate text-xs text-(--ui-text-secondary)">{session.subtitle}</div>
-            </button>
-          )
-        })}
+        {projectSessions.map(renderSession)}
 
-        {!error && filtered.length === 0 && (
+        {!error && projectSessions.length === 0 && (
           <div className="px-2 py-6 text-center text-xs text-(--ui-text-tertiary)">
             {filter === 'codex' ? (
-              // Codex threads come from the app-server, not the workspace store,
-              // and that path is not wired into this list yet.
               <>Codex 会话尚未接入此列表</>
             ) : sessions.length === 0 ? (
               <>还没有会话，点击 ＋ 新建 GPT 网页会话</>
+            ) : activeProjectId ? (
+              <>当前项目没有匹配的会话</>
             ) : (
               <>没有匹配的会话</>
             )}

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ pub struct TaskExtensionRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct PutTaskExtensionBody {
     schema: String,
     execution_id: String,
@@ -167,10 +167,14 @@ impl TaskExtensionStore {
             }
             let bytes = fs::read(&path)?;
             if bytes.len() > MAX_EXTENSION_BYTES {
-                anyhow::bail!("persisted task extension exceeds maximum size: {}", path.display());
+                anyhow::bail!(
+                    "persisted task extension exceeds maximum size: {}",
+                    path.display()
+                );
             }
             let record: TaskExtensionRecord = serde_json::from_slice(&bytes)?;
-            validate_id("persisted task_id", &record.task_id).map_err(|e| anyhow::anyhow!(e.message))?;
+            validate_id("persisted task_id", &record.task_id)
+                .map_err(|e| anyhow::anyhow!(e.message))?;
             validate_id("persisted execution_id", &record.execution_id)
                 .map_err(|e| anyhow::anyhow!(e.message))?;
             if record.schema != TASK_EXTENSION_SCHEMA || record.version == 0 {
@@ -213,9 +217,7 @@ impl TaskExtensionStore {
             ));
         }
 
-        let candidate_size = serde_json::to_vec(&body)
-            .map_err(ApiError::internal)?
-            .len();
+        let candidate_size = serde_json::to_vec(&body).map_err(ApiError::internal)?.len();
         if candidate_size > MAX_EXTENSION_BYTES {
             return Err(ApiError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -250,14 +252,17 @@ impl TaskExtensionStore {
             schema: TASK_EXTENSION_SCHEMA.to_string(),
             task_id: task_id.to_string(),
             execution_id: body.execution_id,
-            version: current_version
-                .checked_add(1)
-                .ok_or_else(|| ApiError::new(StatusCode::CONFLICT, "task extension version exhausted"))?,
+            version: current_version.checked_add(1).ok_or_else(|| {
+                ApiError::new(StatusCode::CONFLICT, "task extension version exhausted")
+            })?,
             project_context: body.project_context,
             handoff: body.handoff,
             provider: body.provider,
             review: body.review,
-            created_at: existing.as_ref().map(|value| value.created_at).unwrap_or(now),
+            created_at: existing
+                .as_ref()
+                .map(|value| value.created_at)
+                .unwrap_or(now),
             updated_at: now,
         };
         self.persist(&record).map_err(ApiError::internal)?;
@@ -310,7 +315,10 @@ fn require_store(
     let supplied = bearer_token(headers)
         .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "missing bearer token"))?;
     if supplied != expected {
-        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "invalid bearer token"));
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "invalid bearer token",
+        ));
     }
     Ok(store)
 }
@@ -322,7 +330,9 @@ async fn control_get_extension(
 ) -> Result<Json<Value>, ApiError> {
     let store = require_store(&runtime, &headers, AuthRole::Control)?;
     match store.get(&task_id)? {
-        Some(record) => Ok(Json(serde_json::to_value(record).map_err(ApiError::internal)?)),
+        Some(record) => Ok(Json(
+            serde_json::to_value(record).map_err(ApiError::internal)?,
+        )),
         None => Ok(Json(json!({
             "schema": TASK_EXTENSION_SCHEMA,
             "task_id": task_id,
@@ -338,7 +348,9 @@ async fn host_get_extension(
 ) -> Result<Json<Value>, ApiError> {
     let store = require_store(&runtime, &headers, AuthRole::Host)?;
     match store.get(&task_id)? {
-        Some(record) => Ok(Json(serde_json::to_value(record).map_err(ApiError::internal)?)),
+        Some(record) => Ok(Json(
+            serde_json::to_value(record).map_err(ApiError::internal)?,
+        )),
         None => Ok(Json(json!({
             "schema": TASK_EXTENSION_SCHEMA,
             "task_id": task_id,
@@ -368,7 +380,10 @@ async fn control_put_extension(
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get("authorization")?.to_str().ok()?;
-    value.strip_prefix("Bearer ").map(str::trim).filter(|value| !value.is_empty())
+    value
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn validate_id(label: &str, value: &str) -> Result<(), ApiError> {
@@ -405,7 +420,8 @@ mod tests {
     #[tokio::test]
     async fn extension_store_is_versioned_and_host_readable() {
         let dir = tempdir().unwrap();
-        let runtime = TaskExtensionRuntime::test(dir.path().to_path_buf(), "host", "control").unwrap();
+        let runtime =
+            TaskExtensionRuntime::test(dir.path().to_path_buf(), "host", "control").unwrap();
         let app = router(runtime);
         let body = json!({
             "schema": TASK_EXTENSION_SCHEMA,

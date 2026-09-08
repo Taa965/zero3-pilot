@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { Zero3ExecutorManager } from '../../executor-runtime/executor-manager.ts'
 import { Zero3ExecutorRegistry } from '../../executor-runtime/executor-registry.ts'
 import type { ExecutorPermissionResponse } from '../../executor-runtime/executor-types.ts'
+import { ClaudeExecutor } from '../../executor-runtime/external/claude-executor.ts'
 import { HandoffStore } from '../../executor-runtime/handoff/handoff-store.ts'
 import { NativeCodexAppServerDriver, type NativeCodexAppServerTransport } from '../../executor-runtime/native/native-app-server-driver.ts'
 import { NativeCodexExecutor } from '../../executor-runtime/native/native-codex-executor.ts'
@@ -204,6 +205,7 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     this.#handoffStore = new HandoffStore(`${root}-handoffs`)
     const registry = new Zero3ExecutorRegistry()
     registry.register(new NativeCodexExecutor(new NativeCodexAppServerDriver({ transport: codexTransport })))
+    registry.register(new ClaudeExecutor())
     this.executorManager = new Zero3ExecutorManager(registry)
   }
 

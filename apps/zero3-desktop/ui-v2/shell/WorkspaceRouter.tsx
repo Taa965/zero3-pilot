@@ -1,3 +1,4 @@
+import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { CodexConversationSurface } from '../conversations/CodexConversationSurface'
 import { GptWebSurface } from '../conversations/GptWebSurface'
 import { GeminiWorkspaceSurface } from '../conversations/GeminiWorkspaceSurface'
@@ -11,6 +12,8 @@ interface WorkspaceRouterProps {
   provider: 'codex' | 'gpt' | 'gemini'
   onProviderChange: (provider: 'codex' | 'gpt' | 'gemini') => void
   activeSessionId: string | null
+  activeProject: Zero3ProjectRecord | null
+  activeProjectSessionCount: number
   onToggleInspector: () => void
 }
 
@@ -19,6 +22,8 @@ export function WorkspaceRouter({
   provider,
   onProviderChange,
   activeSessionId,
+  activeProject,
+  activeProjectSessionCount,
   onToggleInspector
 }: WorkspaceRouterProps) {
   return (
@@ -29,8 +34,8 @@ export function WorkspaceRouter({
           {activeModule === 'conversations' && (
             <div className="flex gap-2 text-xs">
               {(['codex', 'gpt', 'gemini'] as const).map(p => (
-                <button 
-                  key={p} 
+                <button
+                  key={p}
                   onClick={() => onProviderChange(p)}
                   className={`px-2 py-1 rounded ${provider === p ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'}`}
                 >
@@ -54,7 +59,7 @@ export function WorkspaceRouter({
         ) : activeModule === 'groups' ? (
           <DevelopmentGroupWorkspace />
         ) : activeModule === 'projects' ? (
-          <ProjectWorkspace />
+          <ProjectWorkspace project={activeProject} sessionCount={activeProjectSessionCount} />
         ) : activeModule === 'runtime' ? (
           <RuntimeWorkspace />
         ) : (

@@ -1,12 +1,17 @@
-import type { Zero3AgentTarget, Zero3TaskSpecV2, Zero3TaskType } from './agent-contracts'
+import type {
+  Zero3ResolvedAgentTarget,
+  Zero3TaskSpecV2,
+  Zero3TaskType
+} from './agent-contracts'
 
 export type Zero3ProviderAvailability = {
   codex: { available: boolean; authenticated: boolean | null }
   gemini: { available: boolean; authenticated: boolean | null }
+  claude: { available: boolean; authenticated: boolean | null }
 }
 
 export type Zero3RouteDecision = {
-  target: Exclude<Zero3AgentTarget, 'AUTO'>
+  target: Zero3ResolvedAgentTarget
   reason: string
   fallbackAllowed: boolean
 }
@@ -14,8 +19,10 @@ export type Zero3RouteDecision = {
 const GEMINI_PREFERRED = new Set<Zero3TaskType>(['DESIGN', 'RESEARCH', 'REVIEW'])
 const CODEX_PREFERRED = new Set<Zero3TaskType>(['IMPLEMENT', 'VERIFY', 'FIX', 'INTEGRATE'])
 
-function providerState(target: 'CODEX' | 'GEMINI', availability: Zero3ProviderAvailability) {
-  return target === 'CODEX' ? availability.codex : availability.gemini
+function providerState(target: Zero3ResolvedAgentTarget, availability: Zero3ProviderAvailability) {
+  if (target === 'CODEX') return availability.codex
+  if (target === 'GEMINI') return availability.gemini
+  return availability.claude
 }
 
 function autoEligible(target: 'CODEX' | 'GEMINI', availability: Zero3ProviderAvailability) {
@@ -59,6 +66,9 @@ export class Zero3AgentRouter {
       }
     }
 
+    // Claude intentionally does not participate in AUTO task-type preference yet. It is
+    // available as an explicit target and as an executor failover candidate. Adding it to
+    // AUTO requires a separate product decision on task-type preference.
     const preferred: 'CODEX' | 'GEMINI' = GEMINI_PREFERRED.has(task.type)
       ? 'GEMINI'
       : CODEX_PREFERRED.has(task.type)
