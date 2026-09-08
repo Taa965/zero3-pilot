@@ -1,0 +1,81 @@
+name: Relay Zero3 Memory Events
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'events/**/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zero3-memory-relay-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Resolve append-only event files
+        id: changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          before='${{ github.event.before }}'
+          after='${{ github.sha }}'
+          zero='0000000000000000000000000000000000000000'
+          if [[ "$before" == "$zero" ]]; then
+            git diff-tree --root --no-commit-id --name-status -r "$after" > /tmp/changes.txt
+          else
+            git diff --name-status "$before" "$after" > /tmp/changes.txt
+          fi
+
+          echo 'Changes:'
+          cat /tmp/changes.txt
+
+          if awk '$2 ~ /^events\// && $1 != "A" { bad=1 } END { exit bad ? 0 : 1 }' /tmp/changes.txt; then
+            echo 'Memory events are append-only: modifying, renaming or deleting an existing events/* file is forbidden.' >&2
+            exit 1
+          fi
+
+          awk '$1 == "A" && $2 ~ /^events\/.*\.json$/ { print $2 }' /tmp/changes.txt > /tmp/event-files.txt
+          if [[ ! -s /tmp/event-files.txt ]]; then
+            echo 'No newly added memory event files were found.' >&2
+            exit 1
+          fi
+
+      - name: Validate and relay every event
+        env:
+          ZERO3_MEMORY_AUTHORITY_URL: ${{ secrets.ZERO3_MEMORY_AUTHORITY_URL }}
+          ZERO3_MEMORY_INGRESS_TOKEN: ${{ secrets.ZERO3_MEMORY_INGRESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${ZERO3_MEMORY_AUTHORITY_URL:?missing ZERO3_MEMORY_AUTHORITY_URL secret}"
+          : "${ZERO3_MEMORY_INGRESS_TOKEN:?missing ZERO3_MEMORY_INGRESS_TOKEN secret}"
+          endpoint="${ZERO3_MEMORY_AUTHORITY_URL%/}/v1/memory/events"
+
+          while IFS= read -r file; do
+            node scripts/validate-memory-event.mjs "$file"
+            response="$(curl --fail-with-body --silent --show-error \
+              -X POST "$endpoint" \
+              -H "Authorization: Bearer ${ZERO3_MEMORY_INGRESS_TOKEN}" \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json' \
+              --data-binary "@$file")"
+            status="$(jq -r '.status // empty' <<<"$response")"
+            if [[ "$status" != 'accepted' && "$status" != 'duplicate' ]]; then
+              echo "Unexpected Memory Authority response for $file: $response" >&2
+              exit 1
+            fi
+            echo "Relayed $file -> $status"
+          done < /tmp/event-files.txt
