@@ -29,8 +29,16 @@ INSERT INTO memory_events (
   '88888888-8888-4888-8888-888888888885', 'project-task', 'task-1', 'claude-1', 'claude',
   'task.verified', 'task', 85, 'verified_result', 'task-1-verify-1', 0,
   '{"result":"tests passed"}'::jsonb, 'task', now()
-),
-(
+ );
+
+-- A later lifecycle event is a separate append operation in the actual
+-- Memory Event API. Keep it in a separate SQL statement so optimistic
+-- entity version 1 observes the projection committed by task.created.
+INSERT INTO memory_events (
+  event_id, project_id, task_id, agent_id, agent_type, event_type, memory_class,
+  authority, entity_type, entity_id, expected_entity_version, payload,
+  source_type, created_at
+) VALUES (
   '88888888-8888-4888-8888-888888888886', 'project-task', 'task-1', 'zero3', 'zero3',
   'task.completed', 'task', 60, 'task_state', 'task-1-state', 1,
   '{"summary":"done"}'::jsonb, 'task', now()
