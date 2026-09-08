@@ -121,6 +121,12 @@ class FakeAppServerTransport implements NativeCodexAppServerTransport {
   }
 }
 
+const TEST_SHELL_CAPABILITIES = {
+  policy: 'codex-native' as const,
+  preferred: 'pwsh' as const,
+  shells: [{ kind: 'pwsh' as const, command: 'pwsh', status: 'ready' as const, version: '7.6.0' }]
+}
+
 const startContext = {
   contract: ZERO3_EXECUTOR_CONTRACT,
   identity: {
@@ -132,8 +138,8 @@ const startContext = {
 
 test('Native executor implements frozen contract and normalizes failures with correct provenance', async () => {
   const driver = new FakeDriver()
-  const executor = new NativeCodexExecutor(driver, { now: () => '2026-08-30T00:00:00.000Z' })
-  assert.deepEqual(await executor.probe(), { executorId: 'native-codex', status: 'ready', detail: 'chatgpt_subscription' })
+  const executor = new NativeCodexExecutor(driver, { now: () => '2026-08-30T00:00:00.000Z', shellProbe: async () => TEST_SHELL_CAPABILITIES })
+  assert.deepEqual(await executor.probe(), { executorId: 'native-codex', status: 'ready', detail: 'chatgpt_subscription', capabilities: { shell: TEST_SHELL_CAPABILITIES } })
   const session = await executor.start(startContext)
   assert.equal(driver.starts, 1)
   assert.equal(session.generation, 1)
@@ -174,7 +180,7 @@ test('native Codex home is selected per app-server instance without mutating pro
 test('injected Zero3CodexAppServer transport probes subscription/capabilities and preserves approval + sandbox semantics', async () => {
   const transport = new FakeAppServerTransport()
   const driver = new NativeCodexAppServerDriver({ transport, turnTimeoutMs: 2_000, pollMs: 1 })
-  const executor = new NativeCodexExecutor(driver, { now: () => '2026-08-30T00:00:00.000Z' })
+  const executor = new NativeCodexExecutor(driver, { now: () => '2026-08-30T00:00:00.000Z', shellProbe: async () => TEST_SHELL_CAPABILITIES })
   assert.equal((await executor.probe()).status, 'ready')
   assert.deepEqual(transport.requests.slice(0, 3).map(request => request.method), [
     'account/read', 'modelProvider/capabilities/read', 'account/rateLimits/read'
@@ -198,7 +204,7 @@ test('injected Zero3CodexAppServer transport probes subscription/capabilities an
 })
 
 test('capability probe failure is unsupported without exposing raw provider data', async () => {
-  const executor = new NativeCodexExecutor(new NativeCodexAppServerDriver({ transport: new FakeAppServerTransport('no-capabilities') }))
+  const executor = new NativeCodexExecutor(new NativeCodexAppServerDriver({ transport: new FakeAppServerTransport('no-capabilities') }), { shellProbe: async () => TEST_SHELL_CAPABILITIES })
   assert.equal((await executor.probe()).status, 'unsupported')
 })
 

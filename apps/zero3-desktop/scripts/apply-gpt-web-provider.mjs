@@ -76,10 +76,14 @@ ipcMain.handle('zero3:gpt-web:create', (_event, request: unknown) => {
   if (projectId != null && typeof projectId !== 'string') throw new Error('projectId must be a string or null')
   return zero3GptWeb.create(projectId as string | null)
 })
-ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())
+ipcMain.handle('zero3:gpt-web:list-remote-projects', event => zero3GptWeb.listRemoteProjects(zero3GptWebParent(event)))
 ipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.rename(zero3GptWebId(input), input.title)
+})
+ipcMain.handle('zero3:gpt-web:set-archived', (_event, request: unknown) => {
+  const input = zero3GptWebRecord(request)
+  return zero3GptWeb.setArchived(zero3GptWebId(input), input.archived)
 })
 ipcMain.handle('zero3:gpt-web:show', (event, request: unknown) => {
   const input = zero3GptWebRecord(request)
@@ -94,6 +98,10 @@ ipcMain.handle('zero3:gpt-web:hide', (_event, request: unknown) => zero3GptWeb.h
 ipcMain.handle('zero3:gpt-web:set-chrome-visible', (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.setChromeVisible(zero3GptWebId(input), input.visible)
+})
+ipcMain.handle('zero3:gpt-web:toolbar-action', (_event, request: unknown) => {
+  const input = zero3GptWebRecord(request)
+  return zero3GptWeb.invokeToolbarAction(zero3GptWebId(input), input.action)
 })
 ipcMain.handle('zero3:gpt-web:set-bounds', (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
@@ -116,11 +124,13 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3GptWeb', 
   create: request => ipcRenderer.invoke('zero3:gpt-web:create', request),
   listRemoteProjects: () => ipcRenderer.invoke('zero3:gpt-web:list-remote-projects'),
   rename: request => ipcRenderer.invoke('zero3:gpt-web:rename', request),
+  setArchived: request => ipcRenderer.invoke('zero3:gpt-web:set-archived', request),
   show: request => ipcRenderer.invoke('zero3:gpt-web:show', request),
   warm: request => ipcRenderer.invoke('zero3:gpt-web:warm', request),
   snapshot: request => ipcRenderer.invoke('zero3:gpt-web:snapshot', request),
   hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),
   setChromeVisible: request => ipcRenderer.invoke('zero3:gpt-web:set-chrome-visible', request),
+  toolbarAction: request => ipcRenderer.invoke('zero3:gpt-web:toolbar-action', request),
   setBounds: request => ipcRenderer.invoke('zero3:gpt-web:set-bounds', request),
   navigate: request => ipcRenderer.invoke('zero3:gpt-web:navigate', request),
   reload: request => ipcRenderer.invoke('zero3:gpt-web:reload', request),
@@ -139,6 +149,7 @@ contextBridge.exposeInMainWorld('zero3Workspace', {`
 const globalTypeDefinitions = String.raw`
 type Zero3ChatGptRemoteProject = { id: string; name: string; url: string }
 type Zero3GptWebBounds = { x: number; y: number; width: number; height: number }
+type Zero3GptWebToolbarAction = 'sidebar' | 'new_chat' | 'share' | 'more'
 type Zero3GptWebEvent =
   | {
       kind: 'state'
@@ -171,11 +182,13 @@ const globalWindowSurface = String.raw`    zero3GptWeb: {
       create: (request?: { projectId?: string | null }) => Promise<Zero3WorkspaceEntry>
       listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>
       rename: (request: { id: string; title: string }) => Promise<Zero3WorkspaceEntry>
+      setArchived: (request: { id: string; archived: boolean }) => Promise<Zero3WorkspaceEntry>
       show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>
       warm: (request: { id: string }) => Promise<{ state: 'warming' | 'warm' | 'visible' }>
       snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>
       hide: (request: { id: string }) => Promise<{ hidden: boolean }>
       setChromeVisible: (request: { id: string; visible: boolean }) => Promise<{ visible: boolean }>
+      toolbarAction: (request: { id: string; action: Zero3GptWebToolbarAction }) => Promise<{ action: Zero3GptWebToolbarAction; invoked: true }>
       setBounds: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<{ ok: true }>
       navigate: (request: { id: string; url: string }) => Promise<{ url: string }>
       reload: (request: { id: string }) => Promise<{ ok: true }>
@@ -192,6 +205,7 @@ export function applyZero3GptWebProvider() {
   patchFile('electron/main.ts', [
     {
       label: 'GPT Web provider import beside workspace runtime',
+      already: "import { Zero3GptWebProvider } from './zero3/gpt-web/index'",
       from: "import { Zero3WorkspaceEntryStore } from './zero3/workspace/index'",
       to:
         "import { Zero3WorkspaceEntryStore } from './zero3/workspace/index'\n" +
@@ -235,6 +249,32 @@ export function applyZero3GptWebProvider() {
   // Upgrade an already-prepared pinned Hermes tree in place. The main overlay
   // is intentionally rerunnable during development, so changing the generated
   // bridge must not duplicate the entire provider block on the next prepare.
+  patchFile('electron/main.ts', [{
+    label: 'GPT Web promoted toolbar IPC handler',
+    already: "ipcMain.handle('zero3:gpt-web:toolbar-action'",
+    from: "ipcMain.handle('zero3:gpt-web:set-bounds', (_event, request: unknown) => {",
+    to: "ipcMain.handle('zero3:gpt-web:toolbar-action', (_event, request: unknown) => {\n  const input = zero3GptWebRecord(request)\n  return zero3GptWeb.invokeToolbarAction(zero3GptWebId(input), input.action)\n})\nipcMain.handle('zero3:gpt-web:set-bounds', (_event, request: unknown) => {"
+  }])
+  patchFile('electron/preload.ts', [{
+    label: 'GPT Web promoted toolbar preload method',
+    already: "  toolbarAction: request => ipcRenderer.invoke('zero3:gpt-web:toolbar-action'",
+    from: "  setBounds: request => ipcRenderer.invoke('zero3:gpt-web:set-bounds', request),",
+    to: "  toolbarAction: request => ipcRenderer.invoke('zero3:gpt-web:toolbar-action', request),\n  setBounds: request => ipcRenderer.invoke('zero3:gpt-web:set-bounds', request),"
+  }])
+  patchFile('src/global.d.ts', [
+    {
+      label: 'GPT Web promoted toolbar action type',
+      already: 'type Zero3GptWebToolbarAction =',
+      from: 'type Zero3GptWebBounds = { x: number; y: number; width: number; height: number }',
+      to: "type Zero3GptWebBounds = { x: number; y: number; width: number; height: number }\ntype Zero3GptWebToolbarAction = 'sidebar' | 'new_chat' | 'share' | 'more'"
+    },
+    {
+      label: 'GPT Web promoted toolbar renderer method',
+      already: '      toolbarAction: (request:',
+      from: '      setBounds: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<{ ok: true }>',
+      to: '      toolbarAction: (request: { id: string; action: Zero3GptWebToolbarAction }) => Promise<{ action: Zero3GptWebToolbarAction; invoked: true }>\n      setBounds: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<{ ok: true }>'
+    }
+  ])
   patchFile('electron/main.ts', [
     {
       label: 'GPT Web warm/snapshot IPC handlers',
@@ -291,10 +331,17 @@ export function applyZero3GptWebProvider() {
   ])
 
   patchFile('electron/main.ts', [{
+    label: 'GPT Web authenticated project-list parent window',
+    already: "zero3GptWeb.listRemoteProjects(zero3GptWebParent(event))",
+    from: "ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())",
+    to: "ipcMain.handle('zero3:gpt-web:list-remote-projects', event => zero3GptWeb.listRemoteProjects(zero3GptWebParent(event)))"
+  }])
+
+  patchFile('electron/main.ts', [{
     label: 'GPT Web verified rename handler',
     already: "ipcMain.handle('zero3:gpt-web:rename'",
-    from: "ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())",
-    to: "ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())\nipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {\n  const input = zero3GptWebRecord(request)\n  return zero3GptWeb.rename(zero3GptWebId(input), input.title)\n})"
+    from: "ipcMain.handle('zero3:gpt-web:list-remote-projects', event => zero3GptWeb.listRemoteProjects(zero3GptWebParent(event)))",
+    to: "ipcMain.handle('zero3:gpt-web:list-remote-projects', event => zero3GptWeb.listRemoteProjects(zero3GptWebParent(event)))\nipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {\n  const input = zero3GptWebRecord(request)\n  return zero3GptWeb.rename(zero3GptWebId(input), input.title)\n})"
   }])
   patchFile('electron/preload.ts', [{
     label: 'GPT Web rename preload method',

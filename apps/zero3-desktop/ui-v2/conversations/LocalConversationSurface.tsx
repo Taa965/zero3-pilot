@@ -63,13 +63,24 @@ async function runAntigravityTurn(session: LocalSessionRecord, project: Zero3Pro
   return result.response ?? (result.structuredOutput ? JSON.stringify(result.structuredOutput, null, 2) : 'Antigravity 已完成，但没有返回文本。')
 }
 
-async function runZero3Turn(session: LocalSessionRecord) {
+async function runZero3Turn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string) {
   if (!session.zero3ProfileId) throw new Error('该 Zero3 会话没有绑定 API Profile')
-  const messages = session.messages.map(message => ({ role: message.role, content: message.content }))
-  return (await window.zero3SessionProviders.zero3Turn({
+  if (!project?.rootPath) throw new Error('Zero3 本体需要绑定项目目录，才能提供文件、终端与工具能力')
+  const migrationHistory = session.runtimeId
+    ? []
+    : session.messages.slice(0, -1).map(message => ({ role: message.role, content: message.content }))
+  const result = await window.zero3SessionProviders.zero3Turn({
     profileId: session.zero3ProfileId,
-    messages
-  })).text
+    text: prompt,
+    cwd: project.rootPath,
+    projectId: project.id,
+    threadId: session.runtimeId,
+    history: migrationHistory
+  })
+  if (result.threadId && result.threadId !== session.runtimeId) {
+    LocalSessionAdapter.setRuntimeId(session.id, result.threadId)
+  }
+  return result.text
 }
 
 export function LocalConversationSurface({ provider, session, project, onChanged }: LocalConversationSurfaceProps) {
@@ -83,7 +94,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
     setError(null)
   }, [session?.id, session?.updatedAt])
 
-  const requiresProject = provider === 'codex' || provider === 'claude' || provider === 'antigravity'
+  const requiresProject = provider === 'codex' || provider === 'claude' || provider === 'antigravity' || provider === 'zero3'
   const canSend = Boolean(session && input.trim() && !busy && (!requiresProject || project))
   const subtitle = useMemo(() => {
     if (!session) return '未选择会话'
@@ -104,7 +115,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
       if (provider === 'codex') response = await runCodexTurn(withUser, project, prompt)
       else if (provider === 'claude') response = await runClaudeTurn(withUser, project, prompt)
       else if (provider === 'antigravity') response = await runAntigravityTurn(withUser, project, prompt)
-      else response = await runZero3Turn(withUser)
+      else response = await runZero3Turn(withUser, project, prompt)
       const withAssistant = LocalSessionAdapter.appendMessage(session.id, 'assistant', response)
       setMessages(withAssistant.messages)
       onChanged()

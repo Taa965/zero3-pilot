@@ -14,8 +14,8 @@ import {
   ZERO3_GPT_WEB_PROFILE_ID,
   type Zero3GptWebWorkspaceEntry
 } from '../workspace/workspace-entry-types'
-import { readChatGptProjectCatalog, withChatGptContents } from './chatgpt-project-catalog'
-import { chatGptConversationId, renameChatGptConversation } from './chatgpt-conversation-name'
+import { ChatGptSignedOutError, readChatGptProjectCatalog, withChatGptContents } from './chatgpt-project-catalog'
+import { chatGptConversationId, renameChatGptConversation, setChatGptConversationArchived } from './chatgpt-conversation-name'
 import {
   ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS,
   ZERO3_GPT_WEB_BASE_LIVE_VIEWS,
@@ -40,6 +40,7 @@ type LiveGptWebView = {
   loadState: LiveGptWebLoadState
   chromeHidden: boolean
   chromeCssKey: string | null
+  headerCssKey: string | null
 }
 
 type SnapshotRecord = {
@@ -58,15 +59,45 @@ const RENDER_WAIT_TIMEOUT_MS = 8_000
 const SNAPSHOT_MAX_COUNT = 30
 const SNAPSHOT_MAX_WIDTH = 1_280
 const SNAPSHOT_JPEG_QUALITY = 55
+const CHATGPT_LOGIN_STATUS_SCRIPT = String.raw`fetch('/api/auth/session', { credentials: 'include' })
+  .then(response => response.ok ? response.json() : null)
+  .then(session => Boolean(session && typeof session.accessToken === 'string' && session.accessToken))
+  .catch(() => false)`
 
-// ChatGPT ships its own conversation rail. Zero3's second column already lists
-// these sessions, so leaving it visible puts two navigation surfaces side by
-// side. The tiny collapsed rail is a descendant of the same element, so one
-// selector covers both states. These ids belong to chatgpt.com and can vanish
-// on any redeploy: insertCSS does not fail on a selector that matches nothing,
-// so a rename makes the rail reappear rather than breaking the view -- which is
-// why the renderer keeps a toggle for reaching ChatGPT's own history.
+// Zero3 owns the outer navigation and toolbar. Keep ChatGPT's own conversation
+// rail suppressed by default, and collapse its page header so the same controls
+// do not consume a second row. The hidden header remains in layout at zero
+// height (rather than display:none) so Zero3 can invoke its native buttons and
+// ChatGPT can still position portaled menus/dialogs relative to those triggers.
 const CHATGPT_CHROME_CSS = '#stage-slideover-sidebar{display:none !important}'
+const CHATGPT_HEADER_CSS = `#page-header{
+  height:0 !important;
+  min-height:0 !important;
+  padding:0 !important;
+  margin:0 !important;
+  opacity:0 !important;
+  pointer-events:none !important;
+  overflow:visible !important;
+  align-items:flex-start !important;
+}`
+
+const CHATGPT_TOOLBAR_ACTION_SELECTORS = {
+  sidebar: [
+    '[data-testid="open-sidebar-button"]',
+    'button[aria-label="打开侧边栏"]',
+    'button[aria-label="Open sidebar"]',
+    'button[aria-controls="stage-slideover-sidebar"][aria-expanded="false"]',
+    'button[aria-controls="stage-popover-sidebar"][aria-expanded="false"]',
+    '[data-testid="close-sidebar-button"]',
+    'button[aria-label="关闭侧边栏"]',
+    'button[aria-label="Close sidebar"]'
+  ],
+  new_chat: ['#page-header a[aria-label="新聊天"]', '#page-header a[aria-label="New chat"]', '#page-header a[href="/"]'],
+  share: ['[data-testid="share-chat-button"]'],
+  more: ['[data-testid="conversation-options-button"]']
+} as const
+
+type ChatGptToolbarAction = keyof typeof CHATGPT_TOOLBAR_ACTION_SELECTORS
 const GENERIC_TITLES = new Set(['ChatGPT', 'New chat', '新聊天', '新对话'])
 
 function requiredText(value: unknown, label: string, max: number): string {
@@ -197,9 +228,10 @@ export class Zero3GptWebProvider {
   private readonly live = new Map<string, LiveGptWebView>()
   private readonly snapshots = new Map<string, SnapshotRecord>()
   private profileSession: Session | null = null
+  private loginWindow: BrowserWindow | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
   private catalogTail: Promise<unknown> = Promise.resolve()
-  private renameTail: Promise<unknown> = Promise.resolve()
+  private conversationMutationTail: Promise<unknown> = Promise.resolve()
   private maintenanceTimer: NodeJS.Timeout | null = null
 
   constructor(
@@ -226,11 +258,17 @@ export class Zero3GptWebProvider {
    * Serialised because each miss opens a page: two pickers racing would load
    * chatgpt.com twice for the same answer.
    */
-  listRemoteProjects(): Promise<Zero3ChatGptRemoteProject[]> {
-    const task = this.catalogTail.then(
-      () => readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents()),
-      () => readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents())
-    )
+  listRemoteProjects(parent: BrowserWindow): Promise<Zero3ChatGptRemoteProject[]> {
+    const read = async () => {
+      try {
+        return await readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents())
+      } catch (error) {
+        if (!(error instanceof ChatGptSignedOutError)) throw error
+        await this.openLoginWindow(parent)
+        return readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents())
+      }
+    }
+    const task = this.catalogTail.then(read, read)
     this.catalogTail = task.then(
       () => undefined,
       () => undefined
@@ -238,9 +276,107 @@ export class Zero3GptWebProvider {
     return task
   }
 
+  private async openLoginWindow(parent: BrowserWindow): Promise<void> {
+    if (parent.isDestroyed()) throw new Error('GPT Web parent window is unavailable')
+    const profile = this.getProfileSession()
+    const login = new BrowserWindow({
+      parent,
+      modal: true,
+      width: 980,
+      height: 760,
+      minWidth: 720,
+      minHeight: 560,
+      show: true,
+      autoHideMenuBar: true,
+      title: '登录 ChatGPT - Zero3 Pilot',
+      webPreferences: {
+        session: profile,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false
+      }
+    })
+    this.loginWindow = login
+    const contents = login.webContents
+
+    contents.on('will-navigate', event => {
+      if (observedHttpsUrl(event.url)) return
+      event.preventDefault()
+    })
+    contents.setWindowOpenHandler(details => {
+      if (!observedHttpsUrl(details.url)) return { action: 'deny' }
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 900,
+          height: 700,
+          show: true,
+          webPreferences: {
+            session: profile,
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            webSecurity: true,
+            allowRunningInsecureContent: false
+          }
+        }
+      }
+    })
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        let checking = false
+        const finish = (error?: Error) => {
+          if (settled) return
+          settled = true
+          cleanup()
+          if (error) reject(error)
+          else resolve()
+        }
+        const checkLogin = async () => {
+          if (checking || contents.isDestroyed() || !observedChatGptUrl(contents.getURL())) return
+          checking = true
+          try {
+            const signedIn = await contents.executeJavaScript(CHATGPT_LOGIN_STATUS_SCRIPT, false)
+            if (signedIn === true) finish()
+          } catch {
+            // Login navigation can briefly destroy/change the document; retry on the next navigation event.
+          } finally {
+            checking = false
+          }
+        }
+        const onClosed = () => finish(new Error('ChatGPT 登录窗口已关闭，请重新尝试'))
+        const cleanup = () => {
+          login.removeListener('closed', onClosed)
+          contents.removeListener('did-navigate', checkLogin)
+          contents.removeListener('did-navigate-in-page', checkLogin)
+          contents.removeListener('did-stop-loading', checkLogin)
+        }
+
+        login.once('closed', onClosed)
+        contents.on('did-navigate', checkLogin)
+        contents.on('did-navigate-in-page', checkLogin)
+        contents.on('did-stop-loading', checkLogin)
+        login.focus()
+        void contents.loadURL(ZERO3_GPT_WEB_HOME).then(() => checkLogin()).catch(error => {
+          finish(error instanceof Error ? error : new Error(String(error)))
+        })
+      })
+    } finally {
+      for (const child of login.getChildWindows()) {
+        if (!child.isDestroyed()) child.close()
+      }
+      if (!login.isDestroyed()) login.close()
+      if (this.loginWindow === login) this.loginWindow = null
+    }
+  }
+
   rename(id: string, title: unknown): Promise<Zero3GptWebWorkspaceEntry> {
     const normalized = requiredText(title, '会话名称', 200)
-    const task = this.renameTail.then(async () => {
+    const task = this.conversationMutationTail.then(async () => {
       await this.persistenceTail
       const entry = await this.requireEntry(id)
       const conversationUrl = entry.conversationUrl ?? entry.currentUrl
@@ -258,7 +394,48 @@ export class Zero3GptWebProvider {
         currentUrl: renamed.currentUrl, conversationUrl: renamed.conversationUrl, pageTitle: renamed.pageTitle })
       return renamed
     })
-    this.renameTail = task.catch(() => undefined)
+    this.conversationMutationTail = task.catch(() => undefined)
+    return task
+  }
+
+  setArchived(id: string, archived: unknown): Promise<Zero3GptWebWorkspaceEntry> {
+    if (typeof archived !== 'boolean') throw new Error('archive state must be a boolean')
+    const task = this.conversationMutationTail.then(async () => {
+      await this.persistenceTail
+      const entry = await this.requireEntry(id)
+      const conversationUrl = canonicalConversationUrl(entry.conversationUrl ?? entry.currentUrl)
+      const conversationId = conversationUrl ? chatGptConversationId(conversationUrl) : null
+
+      // An untouched new-chat page has no remote conversation yet. In that one
+      // case there is nothing for ChatGPT to archive, so only the Zero3 entry is
+      // moved. Saved conversations must succeed and verify remotely first.
+      if (conversationUrl && conversationId) {
+        await withChatGptContents(this.getProfileSession(), this.reusableContents(), contents =>
+          setChatGptConversationArchived(contents, conversationUrl, archived)
+        )
+        const current = await this.requireEntry(id)
+        const currentUrl = canonicalConversationUrl(current.conversationUrl ?? current.currentUrl)
+        if (!currentUrl || chatGptConversationId(currentUrl) !== conversationId) {
+          throw new Error('ChatGPT archive state changed remotely but the Zero3 conversation identity changed; refresh and retry')
+        }
+      }
+
+      const updated = await this.entries.setArchived({ id, archived }) as Zero3GptWebWorkspaceEntry
+      if (archived) {
+        this.destroyLive(id, 'suspended')
+        this.snapshots.delete(id)
+      }
+      this.emitEvent({
+        kind: 'navigation',
+        entryId: id,
+        previousEntryId: null,
+        currentUrl: updated.currentUrl,
+        conversationUrl: updated.conversationUrl,
+        pageTitle: updated.pageTitle
+      })
+      return updated
+    })
+    this.conversationMutationTail = task.catch(() => undefined)
     return task
   }
 
@@ -291,9 +468,8 @@ export class Zero3GptWebProvider {
     const id = requiredText(input.id, 'workspace entry id', MAX_ENTRY_ID)
     const bounds = normalizeBounds(input.bounds)
 
-    // Never revive a hidden view that has already aged out of the five-minute
-    // activity window. A click on such an entry intentionally becomes a cold
-    // restore so the provider can reclaim memory predictably.
+    // Trim any expired burst-tier views before switching. The durable ten-view
+    // LRU base tier is never removed merely because five minutes elapsed.
     this.maintainHotPool()
 
     const entry = await this.requireEntry(id)
@@ -304,6 +480,10 @@ export class Zero3GptWebProvider {
     // loading. This lets UI v2 keep a cached screenshot (or its lightweight
     // placeholder) visible instead of flashing an empty native WebContentsView.
     if (live.loadState === 'warming') await this.waitUntilRenderable(live)
+    // Suppression is part of show(), not just dom-ready, so a renderer reload or
+    // a timing race can never re-expose ChatGPT's duplicate native header.
+    await this.applyHeaderSuppression(live)
+    if (live.chromeHidden) await this.applyChromeSuppression(live)
 
     this.detachFromParent(live)
     this.hideOtherViewsInWindow(parent.id, id)
@@ -367,6 +547,16 @@ export class Zero3GptWebProvider {
     return { hidden: true }
   }
 
+  private async applyHeaderSuppression(live: LiveGptWebView): Promise<void> {
+    const contents = live.view.webContents
+    if (contents.isDestroyed() || live.headerCssKey) return
+    try {
+      live.headerCssKey = await contents.insertCSS(CHATGPT_HEADER_CSS)
+    } catch {
+      live.headerCssKey = null
+    }
+  }
+
   private async applyChromeSuppression(live: LiveGptWebView): Promise<void> {
     const contents = live.view.webContents
     if (contents.isDestroyed() || live.chromeCssKey) return
@@ -398,6 +588,59 @@ export class Zero3GptWebProvider {
       await this.applyChromeSuppression(live)
     }
     return { visible: visibleValue }
+  }
+
+  async invokeToolbarAction(
+    idValue: unknown,
+    actionValue: unknown
+  ): Promise<{ action: ChatGptToolbarAction; invoked: true }> {
+    const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
+    if (
+      typeof actionValue !== 'string' ||
+      !Object.prototype.hasOwnProperty.call(CHATGPT_TOOLBAR_ACTION_SELECTORS, actionValue)
+    ) {
+      throw new Error('unsupported GPT Web toolbar action')
+    }
+    const action = actionValue as ChatGptToolbarAction
+    const live = this.live.get(id)
+    if (!live || live.view.webContents.isDestroyed()) throw new Error('GPT Web view is not live')
+
+    const selectors = CHATGPT_TOOLBAR_ACTION_SELECTORS[action]
+    live.view.webContents.focus()
+    // The native ChatGPT rail is suppressed by default so it does not duplicate
+    // Zero3's own session navigation. A promoted sidebar action explicitly opts
+    // this live session back into the native rail before clicking ChatGPT's
+    // current open/close control.
+    if (action === 'sidebar' && live.chromeHidden) {
+      await this.setChromeVisible(id, true)
+    }
+    let invoked = await live.view.webContents.executeJavaScript(
+      `(() => {
+        const selectors = ${JSON.stringify(selectors)}
+        for (const selector of selectors) {
+          for (const element of document.querySelectorAll(selector)) {
+            if (!(element instanceof HTMLElement)) continue
+            const style = getComputedStyle(element)
+            if (style.display === 'none' || style.visibility === 'hidden' || element.getClientRects().length === 0) continue
+            element.click()
+            return true
+          }
+        }
+        return false
+      })()`,
+      true
+    )
+    // Some ChatGPT surfaces omit the pencil/new-chat control entirely. Keep
+    // Zero3's promoted toolbar action reliable by falling back to the same
+    // canonical ChatGPT home navigation used by a native new-chat link.
+    if (invoked !== true && action === 'new_chat') {
+      await live.view.webContents.loadURL(ZERO3_GPT_WEB_HOME)
+      invoked = true
+    }
+    if (invoked !== true) throw new Error(`ChatGPT toolbar action is unavailable: ${action}`)
+    live.lastUsedAt = Date.now()
+    this.bump(id)
+    return { action, invoked: true }
   }
 
   async setBounds(idValue: unknown, boundsValue: unknown): Promise<{ ok: true }> {
@@ -461,6 +704,8 @@ export class Zero3GptWebProvider {
   }
 
   stop(): void {
+    if (this.loginWindow && !this.loginWindow.isDestroyed()) this.loginWindow.close()
+    this.loginWindow = null
     if (this.maintenanceTimer) {
       clearInterval(this.maintenanceTimer)
       this.maintenanceTimer = null
@@ -516,7 +761,8 @@ export class Zero3GptWebProvider {
       lastActivatedAt: null,
       loadState: 'warming',
       chromeHidden: true,
-      chromeCssKey: null
+      chromeCssKey: null,
+      headerCssKey: null
     }
     this.live.set(entry.id, live)
     this.installViewGuards(live)
@@ -598,6 +844,8 @@ export class Zero3GptWebProvider {
     // therefore the existing sheet.
     contents.on('dom-ready', () => {
       live.chromeCssKey = null
+      live.headerCssKey = null
+      void this.applyHeaderSuppression(live)
       if (live.chromeHidden) void this.applyChromeSuppression(live)
     })
 
@@ -609,6 +857,8 @@ export class Zero3GptWebProvider {
       this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'warming' })
     })
     contents.on('did-stop-loading', () => {
+      void this.applyHeaderSuppression(live)
+      if (live.chromeHidden) void this.applyChromeSuppression(live)
       observe()
       live.loadState = 'warm'
       this.emitEvent({
@@ -747,20 +997,14 @@ export class Zero3GptWebProvider {
 
   private maintainHotPool(protectedEntryId?: string): void {
     const now = Date.now()
-
-    // Five minutes after a hidden session was last selected/left (or prewarmed
-    // without ever being selected), its native renderer is removed from the hot
-    // pool. The cached screenshot remains in memory so a later cold restore can
-    // still appear instant while the page is loading.
-    for (const [id, live] of [...this.live.entries()]) {
-      if (id === protectedEntryId || live.parentWindowId != null) continue
-      const reference = live.lastActivatedAt ?? live.warmedAt
-      if (now - reference > ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS) {
-        this.destroyLive(id, 'suspended')
-      }
-    }
-
     const capacity = this.hotCapacity(now)
+
+    // The newest ten live sessions form the durable LRU base tier. Recent user
+    // activity may temporarily grow that tier up to thirty live renderers, but
+    // once those extra sessions fall outside the five-minute activity window the
+    // capacity contracts back to ten. Do not destroy stale sessions up front:
+    // doing so would erase the persistent base tier before its LRU budget is
+    // applied, which is what caused long-lived sessions to reload on selection.
     while (this.live.size > capacity) {
       const candidate = [...this.live.values()]
         .filter(live => live.entryId !== protectedEntryId && live.parentWindowId == null)

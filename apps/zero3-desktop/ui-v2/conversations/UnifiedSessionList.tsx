@@ -9,18 +9,22 @@ interface UnifiedSessionListProps {
   sessions: WorkspaceSession[]
   activeId: string | null
   activeProjectId: string | null
+  focusedProjectId: string | null
   projects: Zero3ProjectRecord[]
   onSelect: (session: WorkspaceSession) => void
+  onSelectProjectContext: (projectId: string | null) => void
   onCreate: () => void
   onDelete: (session: WorkspaceSession) => void
+  onArchive: (session: WorkspaceSession, archived: boolean) => void
   onRename: (session: WorkspaceSession) => void
   error: string | null
 }
 
 const CONTEXT_MENU_WIDTH = 184
-const CONTEXT_MENU_HEIGHT = 112
+const CONTEXT_MENU_HEIGHT = 152
 const GPT_PREWARM_DELAY_MS = 150
-const FILTERS: Array<'all' | WorkspaceProvider> = ['all', 'gpt', 'gemini', 'codex', 'claude', 'antigravity', 'zero3']
+type SessionFilter = 'all' | 'archived' | WorkspaceProvider
+const FILTERS: SessionFilter[] = ['all', 'gpt', 'gemini', 'codex', 'claude', 'antigravity', 'zero3', 'archived']
 
 const PROVIDER_MARKS: Record<WorkspaceProvider, { symbol: string; color: string; label: string }> = {
   gpt: { symbol: '◎', color: 'text-blue-500', label: 'GPT' },
@@ -35,16 +39,20 @@ export function UnifiedSessionList({
   sessions,
   activeId,
   activeProjectId,
+  focusedProjectId,
   projects,
   onSelect,
+  onSelectProjectContext,
   onCreate,
   onDelete,
+  onArchive,
   onRename,
   error
 }: UnifiedSessionListProps) {
-  const [filter, setFilter] = useState<'all' | WorkspaceProvider>('all')
+  const [filter, setFilter] = useState<SessionFilter>('all')
   const [query, setQuery] = useState('')
   const [menu, setMenu] = useState<{ session: WorkspaceSession; x: number; y: number } | null>(null)
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(() => new Set())
   const paneRef = useRef<HTMLDivElement>(null)
   const prewarmTimersRef = useRef(new Map<string, number>())
 
@@ -81,7 +89,7 @@ export function UnifiedSessionList({
   }
 
   const queuePrewarm = (session: WorkspaceSession) => {
-    if (session.provider !== 'gpt' || session.source !== 'web' || session.id === activeId) return
+    if (session.archived || session.provider !== 'gpt' || session.source !== 'web' || session.id === activeId) return
     cancelPrewarm(session.id)
     const timer = window.setTimeout(() => {
       prewarmTimersRef.current.delete(session.id)
@@ -106,11 +114,73 @@ export function UnifiedSessionList({
     const needle = query.trim().toLowerCase()
     return sessions.filter(session => {
       if (activeProjectId !== null && session.projectId !== activeProjectId) return false
-      if (filter !== 'all' && session.provider !== filter) return false
+      if (filter === 'archived') {
+        if (!session.archived) return false
+      } else {
+        if (session.archived) return false
+        if (filter !== 'all' && session.provider !== filter) return false
+      }
       if (!needle) return true
       return session.title.toLowerCase().includes(needle) || session.subtitle.toLowerCase().includes(needle)
     })
   }, [sessions, activeProjectId, filter, query])
+
+  const projectGroups = useMemo(() => {
+    const names = new Map(projects.map(project => [project.id, project.name]))
+    const groups = new Map<string, { key: string; projectId: string | null; name: string; sessions: WorkspaceSession[] }>()
+    for (const session of projectSessions) {
+      const key = session.projectId ?? '__unassigned__'
+      const existing = groups.get(key)
+      if (existing) existing.sessions.push(session)
+      else groups.set(key, { key, projectId: session.projectId, name: session.projectId ? (names.get(session.projectId) ?? '未知项目') : '未归属项目', sessions: [session] })
+    }
+    return [...groups.values()]
+  }, [projectSessions, projects])
+
+  const toggleProjectGroup = (key: string) => {
+    setCollapsedProjectIds(current => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const renderSession = (session: WorkspaceSession) => {
+    const active = session.id === activeId
+    const archived = session.archived === true
+    const mark = PROVIDER_MARKS[session.provider]
+    return (
+      <button
+        key={session.id}
+        onClick={() => {
+          cancelPrewarm(session.id)
+          if (!archived) onSelect(session)
+        }}
+        onMouseEnter={() => queuePrewarm(session)}
+        onMouseLeave={() => cancelPrewarm(session.id)}
+        onFocus={() => queuePrewarm(session)}
+        onBlur={() => cancelPrewarm(session.id)}
+        onContextMenu={event => openMenu(session, event)}
+        className={cn(
+          'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
+          active ? 'border-(--ui-border) bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'
+        )}
+      >
+        <div className="flex w-full items-center justify-between">
+          <div className="flex min-w-0 items-center gap-1.5 font-medium">
+            <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
+            <span className="truncate">{session.title}</span>
+            {archived && <Codicon name="archive" className="size-3.5 shrink-0 text-(--ui-text-tertiary)" />}
+          </div>
+          <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
+        </div>
+        <div className="flex w-full items-center gap-1.5 text-xs text-(--ui-text-secondary)">
+          <span className="truncate">{session.subtitle}</span>
+        </div>
+      </button>
+    )
+  }
 
   return (
     <div ref={paneRef} className="flex h-full flex-col">
@@ -149,7 +219,7 @@ export function UnifiedSessionList({
                 filter === value && 'bg-(--ui-control-active-background) font-medium text-foreground'
               )}
             >
-              {value === 'all' ? '全部' : PROVIDER_MARKS[value].label}
+              {value === 'all' ? '\u5168\u90e8' : value === 'archived' ? '\u5f52\u6863' : PROVIDER_MARKS[value].label}
             </button>
           ))}
         </div>
@@ -157,43 +227,32 @@ export function UnifiedSessionList({
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {error && <div className="px-2 py-3 text-xs text-red-600">{error}</div>}
-        {projectSessions.map(session => {
-          const active = session.id === activeId
-          const mark = PROVIDER_MARKS[session.provider]
-          const ownerLabel = activeProjectId !== null ? null : (projects.find(project => project.id === session.projectId)?.name ?? '未归属')
-          return (
-            <button
-              key={session.id}
-              onClick={() => {
-                cancelPrewarm(session.id)
-                onSelect(session)
-              }}
-              onMouseEnter={() => queuePrewarm(session)}
-              onMouseLeave={() => cancelPrewarm(session.id)}
-              onFocus={() => queuePrewarm(session)}
-              onBlur={() => cancelPrewarm(session.id)}
-              onContextMenu={event => openMenu(session, event)}
-              className={cn(
-                'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
-                active ? 'border-(--ui-border) bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'
-              )}
-            >
-              <div className="flex w-full items-center justify-between">
-                <div className="flex min-w-0 items-center gap-1.5 font-medium">
-                  <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
-                  <span className="truncate">{session.title}</span>
-                </div>
-                <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
-              </div>
-              <div className="flex w-full items-center gap-1.5 text-xs text-(--ui-text-secondary)">
-                {ownerLabel && (
-                  <span className="shrink-0 rounded bg-(--ui-control-background) px-1.5 py-0.5 text-(--ui-text-tertiary)">{ownerLabel}</span>
-                )}
-                <span className="truncate">{session.subtitle}</span>
-              </div>
-            </button>
-          )
-        })}
+        {activeProjectId === null
+          ? projectGroups.map(group => {
+              const collapsed = collapsedProjectIds.has(group.key)
+              return (
+                <section key={group.key} data-project-group={group.key} className="mb-2">
+                  <button
+                    type="button"
+                    aria-expanded={!collapsed}
+                    onClick={() => {
+                      onSelectProjectContext(group.projectId)
+                      toggleProjectGroup(group.key)
+                    }}
+                    className={cn(
+                      'mb-1 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs font-medium text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-foreground',
+                      focusedProjectId !== null && group.projectId === focusedProjectId && 'bg-(--ui-control-active-background) text-foreground'
+                    )}
+                  >
+                    <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} className="size-3.5 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{group.name}</span>
+                    <span className="shrink-0 text-[11px] font-normal text-(--ui-text-tertiary)">{group.sessions.length}</span>
+                  </button>
+                  {!collapsed && <div>{group.sessions.map(renderSession)}</div>}
+                </section>
+              )
+            })
+          : projectSessions.map(renderSession)}
 
         {!error && projectSessions.length === 0 && (
           <div className="px-2 py-6 text-center text-xs text-(--ui-text-tertiary)">
@@ -226,6 +285,18 @@ export function UnifiedSessionList({
             onClick={() => {
               const target = menu.session
               setMenu(null)
+              onArchive(target, !target.archived)
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-(--ui-control-hover-background)"
+          >
+            <Codicon name="archive" className="size-4" />
+            {menu.session.archived ? '\u53d6\u6d88\u5f52\u6863' : '\u5f52\u6863\u4f1a\u8bdd'}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              const target = menu.session
+              setMenu(null)
               onDelete(target)
             }}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-red-600 hover:bg-(--ui-control-hover-background)"
@@ -234,7 +305,7 @@ export function UnifiedSessionList({
             删除会话
           </button>
           <div className="px-2 pb-1 pt-0.5 text-[11px] leading-tight text-(--ui-text-tertiary)">
-            网页会话仅从 Zero3 移除；本地会话会删除本机记录
+            {'\u5f52\u6863\u4f1a\u540c\u6b65\u5230\u652f\u6301\u539f\u751f\u5f52\u6863\u7684\u5e73\u53f0'}
           </div>
         </div>
       )}

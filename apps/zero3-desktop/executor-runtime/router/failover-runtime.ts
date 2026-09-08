@@ -75,8 +75,13 @@ export class Zero3FailoverExecutorManager {
 
   async start(executorId: ExecutorId, identity: ExecutorTaskIdentity, policy: ExecutorPolicyContext): Promise<ExecutorSession> {
     const session = await this.manager.start(executorId, identity, policy)
-    await this.bind(executorId, identity, policy, session)
-    return session
+    try {
+      await this.bind(executorId, identity, policy, session)
+      return session
+    } catch (error) {
+      try { await this.manager.close(identity.taskId, identity.executionId) } catch {}
+      throw error
+    }
   }
 
   async startFromHandoff(
@@ -86,8 +91,13 @@ export class Zero3FailoverExecutorManager {
     checkpoint: ExecutorHandoffCheckpointRef
   ): Promise<ExecutorSession> {
     const session = await this.manager.startFromHandoff(executorId, identity, policy, checkpoint)
-    await this.bind(executorId, identity, policy, session)
-    return session
+    try {
+      await this.bind(executorId, identity, policy, session)
+      return session
+    } catch (error) {
+      try { await this.manager.close(identity.taskId, identity.executionId) } catch {}
+      throw error
+    }
   }
 
   async resume(
@@ -98,8 +108,13 @@ export class Zero3FailoverExecutorManager {
     checkpoint: ExecutorHandoffCheckpointRef
   ): Promise<ExecutorSession> {
     const session = await this.manager.resume(executorId, identity, policy, ref, checkpoint)
-    await this.bind(executorId, identity, policy, session)
-    return session
+    try {
+      await this.bind(executorId, identity, policy, session)
+      return session
+    } catch (error) {
+      try { await this.manager.close(identity.taskId, identity.executionId) } catch {}
+      throw error
+    }
   }
 
   async *prompt(
@@ -211,6 +226,10 @@ export class Zero3FailoverExecutorManager {
       }
       this.#bindings.delete(key(taskId, executionId))
     }
+  }
+
+  async probeAll() {
+    return this.manager.probeAll()
   }
 
   active(taskId: string, executionId: string) {

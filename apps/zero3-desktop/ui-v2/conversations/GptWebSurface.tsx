@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Codicon } from '@/components/ui/codicon'
 
 type SurfaceStatus = 'cold' | 'warming' | 'warm' | 'visible' | 'suspended' | 'error'
+type ToolbarAction = 'sidebar' | 'new_chat' | 'share' | 'more'
 
 interface GptWebSurfaceProps {
   /** Workspace entry chosen in the session list; null until one is selected. */
@@ -46,9 +47,11 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
   const [status, setStatus] = useState<SurfaceStatus>('cold')
   const [detail, setDetail] = useState<string | null>(null)
   const [pageTitle, setPageTitle] = useState<string | null>(null)
-  const [railVisible, setRailVisible] = useState(false)
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null)
   const [showFallback, setShowFallback] = useState(false)
+  // Renderer HMR can update before Electron main/preload restarts. Never show
+  // promoted ChatGPT controls until the matching preload bridge is actually live.
+  const promotedToolbarAvailable = typeof window.zero3GptWeb.toolbarAction === 'function'
 
   useEffect(() => {
     if (!entryId) {
@@ -107,9 +110,6 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         // rect measured before it can already be stale.
         void window.zero3GptWeb.setBounds({ id: entryId, bounds: boundsOf(host) }).catch(() => {})
         setPageTitle(entry.pageTitle)
-        // Each view starts with ChatGPT's own rail suppressed, so a surface
-        // remounted after the toggle was flipped must not claim otherwise.
-        setRailVisible(false)
       } catch (error) {
         if (cancelled) return
         setStatus('error')
@@ -159,12 +159,11 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
     if (entryId) void window.zero3GptWeb.openExternal({ id: entryId }).catch(() => {})
   }, [entryId])
 
-  const toggleRail = useCallback(() => {
-    if (!entryId) return
-    const next = !railVisible
-    setRailVisible(next)
-    void window.zero3GptWeb.setChromeVisible({ id: entryId, visible: next }).catch(() => {})
-  }, [entryId, railVisible])
+  const toolbarAction = useCallback((action: ToolbarAction) => {
+    const invoke = window.zero3GptWeb.toolbarAction
+    if (!entryId || typeof invoke !== 'function') return
+    void invoke({ id: entryId, action }).catch(() => {})
+  }, [entryId])
 
   if (!entryId) {
     return (
@@ -181,6 +180,16 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-(--ui-border) px-4 text-sm">
+        {promotedToolbarAvailable && (
+          <button
+            onClick={() => toolbarAction('sidebar')}
+            title="ChatGPT 侧边栏"
+            aria-label="ChatGPT 侧边栏"
+            className="grid size-8 shrink-0 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
+          >
+            <Codicon name="menu" className="text-base" />
+          </button>
+        )}
         <span className="truncate text-(--ui-text-secondary)">{pageTitle ?? 'ChatGPT'}</span>
         <span
           className={
@@ -193,25 +202,51 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         >
           {statusText(status)}
         </span>
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={toggleRail}
-            title="ChatGPT 自带的会话栏默认隐藏，需要翻它的历史对话时可临时显示"
-            className="rounded-md border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background)"
-          >
-            {railVisible ? '隐藏 ChatGPT 会话栏' : '显示 ChatGPT 会话栏'}
-          </button>
+        <div className="ml-auto flex items-center gap-1">
+          {promotedToolbarAvailable && (
+            <>
+              <button
+                onClick={() => toolbarAction('new_chat')}
+                title="新聊天"
+                aria-label="新聊天"
+                className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
+              >
+                <Codicon name="edit" className="text-base" />
+              </button>
+              <button
+                onClick={() => toolbarAction('share')}
+                title="分享聊天"
+                aria-label="分享聊天"
+                className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
+              >
+                <Codicon name="share" className="text-base" />
+              </button>
+              <button
+                onClick={() => toolbarAction('more')}
+                title="更多"
+                aria-label="更多"
+                className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
+              >
+                <Codicon name="ellipsis" className="text-base" />
+              </button>
+              <div className="mx-1 h-4 w-px bg-(--ui-border)" aria-hidden="true" />
+            </>
+          )}
           <button
             onClick={reload}
-            className="rounded-md border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background)"
+            title="刷新"
+            aria-label="刷新"
+            className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
           >
-            刷新
+            <Codicon name="refresh" className="text-base" />
           </button>
           <button
             onClick={openExternal}
-            className="rounded-md border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background)"
+            title="在浏览器打开"
+            aria-label="在浏览器打开"
+            className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
           >
-            在浏览器打开
+            <Codicon name="link-external" className="text-base" />
           </button>
         </div>
       </div>

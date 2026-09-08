@@ -29,7 +29,16 @@ function load(relative, overrides = {}, globals = {}) {
 const names = load('gpt-web-runtime/chatgpt-conversation-name.ts')
 const url = 'https://chatgpt.com/g/g-p-project/c/conversation-123'
 const { webSessionTitle } = load('ui-v2/adapters/web-session-title.ts')
+const { resolveCreateProjectId } = load('ui-v2/conversations/session-create-target.ts')
 const base = { kind: 'gpt_web', localDisplayTitle: null, pageTitle: '项目 - 标题 - 第二部分', currentUrl: url, conversationUrl: url }
+
+test('all-session creation resolves the selected session or project context before falling back to unassigned', () => {
+  const session = { projectId: 'p1' }
+  assert.equal(resolveCreateProjectId(null, null, session), 'p1')
+  assert.equal(resolveCreateProjectId(null, 'p2', session), 'p2')
+  assert.equal(resolveCreateProjectId('p3', 'p2', session), 'p3')
+  assert.equal(resolveCreateProjectId(null, null, { projectId: null }), null)
+})
 
 test('project prefix removed, rest of title and explicit user names preserved', () => {
   assert.equal(webSessionTitle(base), '标题 - 第二部分')
@@ -151,7 +160,7 @@ test('context menu offers rename; dialog preserves draft on failure and blocks d
   const session = { id: 'test', provider: 'gpt', source: 'web', title: '会话标题', subtitle: '', updatedAt: '', projectId: null }
   let selected = null
   try {
-    const list = render(React.createElement(UnifiedSessionList, { sessions: [session], projects: [], activeId: null, activeProjectId: null, error: null, onSelect() {}, onCreate() {}, onDelete() {}, onRename: value => { selected = value } }))
+    const list = render(React.createElement(UnifiedSessionList, { sessions: [session], projects: [], activeId: null, activeProjectId: null, focusedProjectId: null, error: null, onSelect() {}, onSelectProjectContext() {}, onCreate() {}, onDelete() {}, onRename: value => { selected = value } }))
     fireEvent.contextMenu(list.getByRole('button', { name: /会话标题/ }), { clientX: 100, clientY: 100 })
     assert.ok(list.getByRole('menu').className.includes('bg-(--ui-bg-elevated)'))
     fireEvent.click(list.getByRole('menuitem', { name: '修改名称' }))
@@ -173,6 +182,50 @@ test('context menu offers rename; dialog preserves draft on failure and blocks d
     assert.equal(dialog.getByRole('alert').textContent, '网页保存失败')
     assert.equal(input.value, '修改后的名称')
     assert.equal(dialog.getByRole('button', { name: '保存' }).disabled, false)
+  } finally {
+    cleanup()
+    dom.window.close()
+    Object.assign(globalThis, before)
+  }
+})
+
+test('all-session scope groups conversations by project and project headers collapse independently', () => {
+  const { JSDOM } = desktopRequire('jsdom')
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost' })
+  const before = Object.fromEntries(['window', 'document', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, globalThis[key]]))
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true })
+  const React = desktopRequire('react')
+  const { render, fireEvent, cleanup } = desktopRequire('@testing-library/react')
+  const overrides = {
+    react: React,
+    'react/jsx-runtime': desktopRequire('react/jsx-runtime'),
+    '@/components/ui/codicon': { Codicon: () => null },
+    '@/lib/utils': { cn: (...args) => args.filter(Boolean).join(' ') }
+  }
+  const globals = { window: dom.window, document: dom.window.document }
+  const { UnifiedSessionList } = load('ui-v2/conversations/UnifiedSessionList.tsx', overrides, globals)
+  const sessions = [
+    { id: 's1', provider: 'gpt', source: 'web', title: '项目一会话', subtitle: 'one', updatedAt: '20:10', projectId: 'p1' },
+    { id: 's2', provider: 'codex', source: 'local', title: '项目二会话', subtitle: 'two', updatedAt: '20:09', projectId: 'p2' },
+    { id: 's3', provider: 'claude', source: 'local', title: '项目一另一个会话', subtitle: 'three', updatedAt: '20:08', projectId: 'p1' }
+  ]
+  const projects = [{ id: 'p1', name: '项目一' }, { id: 'p2', name: '项目二' }]
+  let focusedProjectId = null
+  try {
+    const list = render(React.createElement(UnifiedSessionList, { sessions, projects, activeId: null, activeProjectId: null, focusedProjectId: null, error: null, onSelect() {}, onSelectProjectContext: value => { focusedProjectId = value }, onCreate() {}, onDelete() {}, onRename() {} }))
+    const firstProject = list.getByRole('button', { name: /^项目一\s*2$/ })
+    const secondProject = list.getByRole('button', { name: /^项目二\s*1$/ })
+    assert.equal(firstProject.getAttribute('aria-expanded'), 'true')
+    assert.equal(secondProject.getAttribute('aria-expanded'), 'true')
+    assert.ok(list.getByRole('button', { name: /项目一会话/ }))
+    assert.ok(list.getByRole('button', { name: /项目一另一个会话/ }))
+    assert.ok(list.getByRole('button', { name: /项目二会话/ }))
+    fireEvent.click(firstProject)
+    assert.equal(focusedProjectId, 'p1')
+    assert.equal(firstProject.getAttribute('aria-expanded'), 'false')
+    assert.equal(list.queryByRole('button', { name: /项目一会话/ }), null)
+    assert.equal(list.queryByRole('button', { name: /项目一另一个会话/ }), null)
+    assert.ok(list.getByRole('button', { name: /项目二会话/ }))
   } finally {
     cleanup()
     dom.window.close()

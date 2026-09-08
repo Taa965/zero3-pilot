@@ -10,6 +10,8 @@ import { ClaudeExecutor } from '../../executor-runtime/external/claude-executor.
 import { HandoffStore } from '../../executor-runtime/handoff/handoff-store.ts'
 import { NativeCodexAppServerDriver, type NativeCodexAppServerTransport } from '../../executor-runtime/native/native-app-server-driver.ts'
 import { NativeCodexExecutor } from '../../executor-runtime/native/native-codex-executor.ts'
+import { Zero3FailoverExecutorManager } from '../../executor-runtime/router/failover-runtime.ts'
+import type { FailoverConfig } from '../../executor-runtime/router/failover-controller.ts'
 import type { DevelopmentGroupDefinition, DevelopmentSessionDefinition, DevelopmentSessionRuntime, VerificationCommand } from '../contracts/index.ts'
 import { IntegrationGitAdapter } from '../integration/index.ts'
 import type { ControllerPlanningProposal, PlanningRequest } from '../planning/index.ts'
@@ -27,6 +29,18 @@ import { GitWorkspaceAdapter, resolveSessionWorktree } from '../workspace/index.
 import type { DevelopmentGroupDesktopPort } from './desktop-port.ts'
 
 const execFileAsync = promisify(execFile)
+
+const DEVELOPMENT_GROUP_FAILOVER_CONFIG: FailoverConfig = {
+  candidates: ['native-codex', 'claude'],
+  automaticFailover: true,
+  maxRetries: 1,
+  providerCooldownMs: 30_000,
+  circuitFailureThreshold: 2,
+  circuitOpenMs: 120_000,
+  switchOnAuthRequired: false,
+  returnToPrimaryAfterStage: false,
+  maxProcessedEvents: 512
+}
 
 interface VerificationPolicyFile {
   revision: string
@@ -194,7 +208,7 @@ async function loadVerificationCommands(definition: DevelopmentGroupDefinition):
 
 export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPort {
   readonly store: DevelopmentGroupStore
-  readonly executorManager: Zero3ExecutorManager
+  readonly executorManager: Zero3FailoverExecutorManager
   readonly #handoffStore: HandoffStore
   readonly #workspaceProvisioner = new GitSessionWorkspaceProvisioner()
   readonly #facades = new Map<string, DevelopmentGroupRuntimeFacade>()
@@ -206,7 +220,19 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     const registry = new Zero3ExecutorRegistry()
     registry.register(new NativeCodexExecutor(new NativeCodexAppServerDriver({ transport: codexTransport })))
     registry.register(new ClaudeExecutor())
-    this.executorManager = new Zero3ExecutorManager(registry)
+    const baseExecutorManager = new Zero3ExecutorManager(registry)
+    this.executorManager = new Zero3FailoverExecutorManager(baseExecutorManager, {
+      config: DEVELOPMENT_GROUP_FAILOVER_CONFIG,
+      handoffRoot: `${root}-executor-failover-handoffs`
+    })
+  }
+
+  async runtimeCapabilities(): Promise<unknown> {
+    return {
+      platform: process.platform,
+      arch: process.arch,
+      executors: await this.executorManager.probeAll()
+    }
   }
 
   async listGroups(): Promise<unknown> {
@@ -280,15 +306,13 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     const facade = await this.facadeFor(groupId)
     await resolveSessionOutcomeUnknown(this.store, groupId, sessionId, resolution, evidence)
     const taskId = `${groupId}:${sessionId}`
-    if (this.executorManager.active(taskId, (await this.store.loadSession(groupId, sessionId)).executionId)) {
-      try {
-        const runtime = await this.store.loadSession(groupId, sessionId)
-        await this.executorManager.close(taskId, runtime.executionId)
-      } catch {
-        // Zero3ExecutorManager.close removes the in-memory binding in finally;
-        // recovery classification is already durable and must not be rolled back
-        // because a dead provider session could not acknowledge cleanup.
-      }
+    const runtime = await this.store.loadSession(groupId, sessionId)
+    try {
+      await this.executorManager.close(taskId, runtime.executionId)
+    } catch {
+      // Failover close releases an in-memory active or handoff-pending writer lease in finally.
+      // Recovery classification is already durable and must not be rolled back because a dead
+      // provider session could not acknowledge cleanup or the replacement failed to start.
     }
     return facade.snapshot(groupId)
   }
@@ -316,7 +340,7 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
       executorManager: this.executorManager,
       integrationGit: new IntegrationGitAdapter(repositoryRoot),
       deliveryVerifier: new WorkspaceRuntimeDeliveryVerifier(handoffResolver),
-      deliveryMaterializer: new WorkspaceDeliveryMaterializer(this.#handoffStore),
+      deliveryMaterializer: new WorkspaceDeliveryMaterializer(this.#handoffStore, { materializeDirtyExecutorIds: ['claude'] }),
       verificationCommands: { commands: loadVerificationCommands },
       verificationExecutor: new ShelllessVerificationExecutor(repositoryRoot)
     })

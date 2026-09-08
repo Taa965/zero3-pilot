@@ -45,6 +45,7 @@ function outcomeResolution(value: unknown): DevelopmentGroupOutcomeResolution {
 
 export function registerDevelopmentGroupDesktopIpc(port: DevelopmentGroupDesktopPort): () => void {
   const channels = Object.values(DEVELOPMENT_GROUP_DESKTOP_CHANNELS)
+  ipcMain.handle(DEVELOPMENT_GROUP_DESKTOP_CHANNELS.runtimeCapabilities, () => port.runtimeCapabilities())
   ipcMain.handle(DEVELOPMENT_GROUP_DESKTOP_CHANNELS.listGroups, () => port.listGroups())
   ipcMain.handle(DEVELOPMENT_GROUP_DESKTOP_CHANNELS.getGroup, (_event, groupId: unknown) => port.getGroup(requiredId(groupId, 'groupId')))
   ipcMain.handle(DEVELOPMENT_GROUP_DESKTOP_CHANNELS.createGroup, (_event, request: unknown, proposal: unknown) =>

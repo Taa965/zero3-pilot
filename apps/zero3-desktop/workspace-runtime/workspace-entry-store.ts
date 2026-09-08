@@ -13,6 +13,7 @@ import {
   type Zero3GeminiWebWorkspaceEntry,
   type Zero3GptWebWorkspaceEntry,
   type Zero3RenameWorkspaceEntryInput,
+  type Zero3SetWorkspaceEntryArchivedInput,
   type Zero3ResolveGeminiWebNavigationResult,
   type Zero3ResolveGptWebNavigationResult,
   type Zero3UpdateGeminiWebNavigationInput,
@@ -67,6 +68,7 @@ function commonEntry(raw: Record<string, unknown>) {
     currentUrl: safeHttpsUrl(raw.currentUrl, 'workspace entry currentUrl'),
     pageTitle: optionalText(raw.pageTitle, 'workspace entry pageTitle', MAX_TITLE),
     localDisplayTitle: optionalText(raw.localDisplayTitle, 'workspace entry localDisplayTitle', MAX_TITLE),
+    archived: raw.archived === true,
     createdAt: requiredText(raw.createdAt, 'workspace entry createdAt', 128),
     lastActiveAt: requiredText(raw.lastActiveAt, 'workspace entry lastActiveAt', 128)
   }
@@ -119,6 +121,7 @@ export class Zero3WorkspaceEntryStore {
         currentUrl: input.homeUrl ? safeHttpsUrl(input.homeUrl, 'homeUrl') : ZERO3_GPT_WEB_HOME,
         pageTitle: null,
         localDisplayTitle: null,
+        archived: false,
         createdAt: now,
         lastActiveAt: now
       }
@@ -144,6 +147,7 @@ export class Zero3WorkspaceEntryStore {
         currentUrl: ZERO3_GEMINI_WEB_HOME,
         pageTitle: null,
         localDisplayTitle: null,
+        archived: false,
         createdAt: now,
         lastActiveAt: now
       }
@@ -180,6 +184,20 @@ export class Zero3WorkspaceEntryStore {
         localDisplayTitle: optionalText(input.title, 'title', MAX_TITLE),
         lastActiveAt: new Date().toISOString()
       } as Zero3WorkspaceEntry
+      state.entries[id] = next
+      await this.write(state)
+      return { ...next }
+    })
+  }
+
+  setArchived(input: Zero3SetWorkspaceEntryArchivedInput): Promise<Zero3WorkspaceEntry> {
+    return this.mutate(async () => {
+      const id = requiredText(input.id, 'workspace entry id', MAX_ID)
+      if (typeof input.archived !== 'boolean') throw new Error('archived must be a boolean')
+      const state = await this.read()
+      const existing = state.entries[id]
+      if (!existing) throw new Error('workspace entry was not found')
+      const next = { ...existing, archived: input.archived } as Zero3WorkspaceEntry
       state.entries[id] = next
       await this.write(state)
       return { ...next }
@@ -271,6 +289,7 @@ export class Zero3WorkspaceEntryStore {
               currentUrl,
               pageTitle,
               localDisplayTitle: null,
+              archived: false,
               createdAt: now,
               lastActiveAt: now
             }
@@ -285,6 +304,7 @@ export class Zero3WorkspaceEntryStore {
               currentUrl,
               pageTitle,
               localDisplayTitle: null,
+              archived: false,
               createdAt: now,
               lastActiveAt: now
             }

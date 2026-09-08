@@ -8,6 +8,7 @@ export type WorkspaceSession = {
   updatedAt: string
   projectId: string | null
   source: 'web' | 'local'
+  archived?: boolean
 }
 
 export type LocalSessionProvider = Exclude<WorkspaceProvider, 'gpt' | 'gemini'>
@@ -29,5 +30,6 @@ export type LocalSessionRecord = {
   titleIsCustom?: boolean
   runtimeId: string | null
   zero3ProfileId: string | null
+  archived?: boolean
   messages: LocalSessionMessage[]
 }

@@ -10,6 +10,7 @@ const source = files.map(file => fs.readFileSync(file, 'utf8')).join('\n')
 const executor = fs.readFileSync(files[2], 'utf8')
 const driver = fs.readFileSync(files[3], 'utf8')
 const home = fs.readFileSync(files[1], 'utf8')
+const shell = fs.readFileSync('apps/zero3-desktop/executor-runtime/shell/shell-capabilities.ts', 'utf8')
 const transportOverlay = fs.readFileSync('apps/zero3-desktop/scripts/apply-codex-transport.mjs', 'utf8')
 const requireText = (text, message) => { if (!source.includes(text)) throw new Error(message) }
 const forbidText = (text, message) => { if (source.includes(text)) throw new Error(message) }
@@ -38,6 +39,11 @@ requireText("const explicit = String(env.ZERO3_NATIVE_CODEX_HOME", 'explicit nat
 requireText("return path.join(homeDir, '.codex')", 'host Codex home fallback missing')
 requireText('nativeCodexAppServerEnv(', 'per-executor app-server environment seam missing')
 requireText("refreshToken: false", 'account/read must not request token refresh')
+requireText('probeShellCapabilities', 'Native Codex probe must publish host shell capabilities')
+for (const expected of ["kind: 'pwsh'", "kind: 'powershell'", "kind: 'cmd'", "kind: 'wsl'", "policy: 'codex-native'", 'shell: false']) {
+  if (!shell.includes(expected)) throw new Error(`Shell capability discovery missing invariant: ${expected}`)
+}
+if (shell.includes('shell: true')) throw new Error('Shell capability discovery must not route through an implicit command shell')
 
 requireOverlay('class Zero3CodexAppServer', 'R4C must reuse the existing Zero3CodexAppServer implementation')
 requireOverlay('function createZero3CodexAppServer(options: Zero3CodexAppServerOptions = {})', 'shared per-executor app-server factory missing')

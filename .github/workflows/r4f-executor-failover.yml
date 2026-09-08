@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - 'apps/zero3-desktop/executor-runtime/router/**'
+      - 'apps/zero3-desktop/group-runtime/desktop/desktop-runtime.ts'
+      - 'apps/zero3-desktop/group-runtime/session/session-runtime.ts'
+      - 'apps/zero3-desktop/group-runtime/session/session-runtime.test.ts'
       - 'scripts/check-r4f-failover-architecture.mjs'
       - '.github/workflows/r4f-executor-failover.yml'
 
@@ -30,4 +33,8 @@ jobs:
         run: >-
           npx --yes --package typescript@5.9.2 -- tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions --skipLibCheck apps/zero3-desktop/executor-runtime/router/failover-controller.ts
       - name: Failover behavior tests
-        run: node --experimental-transform-types --test apps/zero3-desktop/executor-runtime/router/failover-controller.test.ts
+        run: >-
+          node --experimental-transform-types --test
+          apps/zero3-desktop/executor-runtime/router/failover-controller.test.ts
+          apps/zero3-desktop/executor-runtime/router/failover-runtime.test.ts
+          apps/zero3-desktop/group-runtime/session/session-runtime.test.ts

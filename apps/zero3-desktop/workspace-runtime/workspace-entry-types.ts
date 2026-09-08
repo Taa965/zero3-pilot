@@ -14,6 +14,7 @@ export type Zero3WebWorkspaceEntryBase = {
   currentUrl: string
   pageTitle: string | null
   localDisplayTitle: string | null
+  archived?: boolean
   createdAt: string
   lastActiveAt: string
 }
@@ -71,4 +72,9 @@ export type Zero3ResolveGeminiWebNavigationResult = {
 export type Zero3RenameWorkspaceEntryInput = {
   id: string
   title: string | null
+}
+
+export type Zero3SetWorkspaceEntryArchivedInput = {
+  id: string
+  archived: boolean
 }

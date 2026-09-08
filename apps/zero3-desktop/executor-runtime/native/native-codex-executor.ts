@@ -10,9 +10,11 @@ import {
   type ExecutorProbe,
   type ExecutorSession,
   type ExecutorSessionRef,
+  type ExecutorShellCapabilitySnapshot,
   type ExecutorStartContext,
   type Zero3Executor
 } from '../executor-types.ts'
+import { probeShellCapabilities } from '../shell/shell-capabilities.ts'
 import type {
   NativeCodexDriver,
   NativeCodexDriverEvent,
@@ -27,6 +29,7 @@ export interface NativeCodexExecutorOptions {
   model?: string
   modelProvider?: string
   now?: () => string
+  shellProbe?: () => Promise<ExecutorShellCapabilitySnapshot>
 }
 
 const FAILURE_MAP: Readonly<Record<NativeCodexFailureReason, ExecutorFailureCode>> = {
@@ -84,6 +87,7 @@ function ensureSession(executorId: string, session: ExecutorSession | ExecutorSe
 export class NativeCodexExecutor implements Zero3Executor {
   readonly descriptor
   readonly #now: () => string
+  readonly #shellProbe: () => Promise<ExecutorShellCapabilitySnapshot>
 
   constructor(
     private readonly driver: NativeCodexDriver,
@@ -96,14 +100,24 @@ export class NativeCodexExecutor implements Zero3Executor {
       label: requireNonEmpty(options.label ?? 'Native Codex', 'executor label')
     }
     this.#now = options.now ?? (() => new Date().toISOString())
+    this.#shellProbe = options.shellProbe ?? probeShellCapabilities
   }
 
   async probe(): Promise<ExecutorProbe> {
-    const snapshot = await this.driver.probe()
+    const [snapshot, shell] = await Promise.all([this.driver.probe(), this.probeShellCapabilities()])
     return {
       executorId: this.descriptor.id,
       status: probeStatus(snapshot),
-      detail: snapshot.reason
+      detail: snapshot.reason,
+      capabilities: { shell }
+    }
+  }
+
+  private async probeShellCapabilities(): Promise<ExecutorShellCapabilitySnapshot> {
+    try {
+      return await this.#shellProbe()
+    } catch {
+      return { policy: 'codex-native', shells: [] }
     }
   }
 

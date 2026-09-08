@@ -63,6 +63,7 @@ function normalizeRecord(value: unknown): LocalSessionRecord | null {
     titleIsCustom: raw.titleIsCustom === true,
     runtimeId: typeof raw.runtimeId === 'string' && raw.runtimeId.trim() ? raw.runtimeId.trim() : null,
     zero3ProfileId: typeof raw.zero3ProfileId === 'string' && raw.zero3ProfileId.trim() ? raw.zero3ProfileId.trim() : null,
+    archived: raw.archived === true,
     messages
   }
 }
@@ -125,7 +126,8 @@ export const LocalSessionAdapter = {
       subtitle: last.replace(/\s+/g, ' ').slice(0, 120),
       updatedAt: relativeTime(record.updatedAt),
       projectId: record.projectId,
-      source: 'local'
+      source: 'local',
+      archived: record.archived === true
     }
   },
 
@@ -140,6 +142,7 @@ export const LocalSessionAdapter = {
       updatedAt: timestamp,
       runtimeId: provider === 'antigravity' ? uid('agy-session') : null,
       zero3ProfileId: provider === 'zero3' ? zero3ProfileId : null,
+      archived: false,
       messages: []
     }
     write([record, ...read().filter(item => item.id !== record.id)])
@@ -158,6 +161,10 @@ export const LocalSessionAdapter = {
     const normalized = title.trim()
     if (!normalized || normalized.length > 200) throw new Error('名称需为 1–200 个字符')
     return mutate(id, record => ({ ...record, title: normalized, titleIsCustom: true, updatedAt: now() }))
+  },
+
+  setArchived(id: string, archived: boolean): LocalSessionRecord {
+    return mutate(id, record => ({ ...record, archived }))
   },
 
   setRuntimeId(id: string, runtimeId: string): LocalSessionRecord {

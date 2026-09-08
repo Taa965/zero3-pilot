@@ -179,7 +179,11 @@ function positiveNumber(value: unknown): number | undefined {
 }
 
 function permissionMode(context: ExecutorStartContext): ClaudeSessionState['permissionMode'] {
-  if (context.policy.approvalRequired || context.policy.permissionProfile === 'read_only') return 'dontAsk'
+  // Match Zero3's permission profile rather than treating approvalRequired as read-only.
+  // Native Codex uses workspace-write for standard/elevated even with on-request approvals;
+  // Claude acceptEdits is the closest fail-closed headless equivalent: workspace edits are
+  // allowed, while non-filesystem tools and protected paths still require/deny approval.
+  if (context.policy.permissionProfile === 'read_only') return 'dontAsk'
   return 'acceptEdits'
 }
 

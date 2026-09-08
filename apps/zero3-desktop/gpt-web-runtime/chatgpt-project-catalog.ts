@@ -10,6 +10,13 @@ const GIZMO_ID = /^g-p-[A-Za-z0-9_-]{1,192}$/
 const LOAD_TIMEOUT_MS = 20_000
 const SCRIPT_TIMEOUT_MS = 20_000
 
+export class ChatGptSignedOutError extends Error {
+  constructor() {
+    super('尚未在 Zero3 内登录 ChatGPT 网页版')
+    this.name = 'ChatGptSignedOutError'
+  }
+}
+
 // ChatGPT publishes no API for "list my projects", so the catalog is read from
 // inside the logged-in page: its own session endpoint yields the bearer token
 // the web client uses, and the sidebar endpoint behind it lists the projects.
@@ -53,13 +60,36 @@ const CATALOG_SCRIPT = String.raw`(async () => {
     if (!token) {
       reason = 'signed-out'
     } else {
-      const sidebar = await fetch('/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=1', {
-        credentials: 'include',
-        headers: { Authorization: 'Bearer ' + token }
-      })
-      if (sidebar.ok) walk(await sidebar.json(), 0)
-      else if (sidebar.status === 401 || sidebar.status === 403) reason = 'signed-out'
-      else reason = 'sidebar-' + sidebar.status
+      let cursor = null
+      const seenCursors = new Set()
+      let page = 0
+      do {
+        const query = new URLSearchParams({
+          owned_only: 'true',
+          conversations_per_gizmo: '0'
+        })
+        if (cursor) query.set('cursor', cursor)
+        const sidebar = await fetch('/backend-api/gizmos/snorlax/sidebar?' + query.toString(), {
+          credentials: 'include',
+          headers: { Authorization: 'Bearer ' + token }
+        })
+        if (!sidebar.ok) {
+          if (sidebar.status === 401 || sidebar.status === 403) reason = 'signed-out'
+          else reason = 'sidebar-' + sidebar.status
+          break
+        }
+        const payload = await sidebar.json()
+        walk(payload, 0)
+        const nextCursor =
+          payload && typeof payload.cursor === 'string' && payload.cursor ? payload.cursor : null
+        if (!nextCursor || seenCursors.has(nextCursor) || found.size >= 400) {
+          cursor = null
+          break
+        }
+        seenCursors.add(nextCursor)
+        cursor = nextCursor
+        page += 1
+      } while (page < 100)
     }
   } catch (error) {
     reason = 'request-failed'
@@ -120,7 +150,10 @@ async function readFromContents(contents: WebContents): Promise<Zero3ChatGptRemo
     const project = normalizeRemoteProject(item)
     if (project) projects.push(project)
   }
-  if (projects.length === 0) throw new Error(reasonMessage(payload.reason))
+  if (projects.length === 0) {
+    if (payload.reason === 'signed-out') throw new ChatGptSignedOutError()
+    throw new Error(reasonMessage(payload.reason))
+  }
   return projects.sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'))
 }
 
