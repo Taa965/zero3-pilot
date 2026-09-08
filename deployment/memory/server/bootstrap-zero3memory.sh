@@ -18,6 +18,7 @@ DATA='/var/lib/zero3-memory'
 LOGS='/var/log/zero3-memory'
 SITE='/etc/nginx/sites-available/zero3-memory-authority'
 SITE_LINK='/etc/nginx/sites-enabled/zero3-memory-authority'
+MEMORY_PORT='8791'
 
 if [[ "$EUID" -ne 0 ]]; then
   echo 'Bootstrap must run as root (for example through sudo).' >&2
@@ -25,6 +26,10 @@ if [[ "$EUID" -ne 0 ]]; then
 fi
 if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
   echo 'Memory domain contains unsupported characters.' >&2
+  exit 1
+fi
+if ss -ltn | awk '{print $4}' | grep -q ":${MEMORY_PORT}$"; then
+  echo "Memory Authority port ${MEMORY_PORT} is already in use; refusing to disturb an existing service." >&2
   exit 1
 fi
 
@@ -107,7 +112,7 @@ fi
 
 echo '[9/9] done'
 echo 'ZERO3_MEMORY_BOOTSTRAP=PASS'
-echo "Memory Authority remains loopback-only on 127.0.0.1:8790 behind nginx for $DOMAIN."
+echo "Memory Authority remains loopback-only on 127.0.0.1:${MEMORY_PORT} behind nginx for $DOMAIN."
 if [[ -f "$CONFIG/authority.env" ]]; then
   echo 'Environment exists; deploy a tested binary with deployment/memory/deploy-memory-authority.sh.'
 else
