@@ -224,7 +224,10 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
   if (sessionId) args.push('--resume', sessionId)
   const { spawn } = await import('node:child_process')
   return new Promise<{ text: string; sessionId: string | null }>((resolve, reject) => {
-    const child = spawn(command, args, {
+    // Bare "claude" is an npm shim on Windows, which spawn cannot launch
+    // without a shell -- and a shell would hand the prompt text to cmd.exe.
+    const resolved = resolveWindowsCommand(command)
+    const child = spawn(resolved.command, [...resolved.args, ...args], {
       ...(cwd ? { cwd } : {}),
       env: process.env,
       windowsHide: true,
@@ -263,6 +266,79 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
     })
   })
 }
+// The official Codex client is an external collaborator alongside Claude Code,
+// not the pinned open-source Agent Kernel that Zero3 itself is built on. It is
+// driven headlessly through 'codex exec', whose JSONL stream carries the thread
+// id and the agent's messages.
+async function zero3RunCodexCliTurn(requestValue: unknown) {
+  const request = zero3SessionRecord(requestValue)
+  const text = zero3SessionText(request.text, 'Codex prompt', 128_000)
+  const cwd = zero3SessionOptionalText(request.cwd, 4096)
+  const threadId = zero3SessionOptionalText(request.threadId, 512)
+  const command = process.env.ZERO3_CODEX_CLI_BIN?.trim() || 'codex'
+  // 'exec resume' accepts neither --sandbox nor -C: it restores the session's
+  // own settings, and the working directory comes from the spawn. Its prompt is
+  // a positional argument where '-' means stdin; plain 'exec' reads stdin when
+  // no prompt argument is given.
+  const args = threadId
+    ? ['exec', 'resume', threadId, '-', '--json', '--skip-git-repo-check']
+    : ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'workspace-write']
+  const { spawn } = await import('node:child_process')
+  return new Promise<{ text: string; threadId: string | null }>((resolve, reject) => {
+    const resolved = resolveWindowsCommand(command)
+    const child = spawn(resolved.command, [...resolved.args, ...args], {
+      ...(cwd ? { cwd } : {}),
+      env: process.env,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    let bytes = 0
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error('Codex CLI turn timed out after 10 minutes'))
+    }, ZERO3_API_TIMEOUT_MS)
+    const capture = (target: Buffer[], chunk: Buffer) => {
+      bytes += chunk.byteLength
+      if (bytes > ZERO3_API_MAX_RESPONSE_BYTES) {
+        child.kill()
+        reject(new Error('Codex CLI output exceeded 16 MiB'))
+        return
+      }
+      target.push(Buffer.from(chunk))
+    }
+    child.stdout.on('data', chunk => capture(stdout, Buffer.from(chunk)))
+    child.stderr.on('data', chunk => capture(stderr, Buffer.from(chunk)))
+    child.once('error', error => { clearTimeout(timer); reject(error) })
+    // The prompt travels over stdin so it is never parsed as an argument.
+    child.stdin.on('error', () => {})
+    child.stdin.end(text, 'utf8')
+    child.once('close', code => {
+      clearTimeout(timer)
+      const output = Buffer.concat(stdout).toString('utf8')
+      const errorOutput = Buffer.concat(stderr).toString('utf8')
+      if (code !== 0) return reject(new Error(errorOutput.trim() || output.trim() || 'Codex CLI exited with code ' + String(code)))
+      let nextThreadId = threadId
+      let message = ''
+      for (const line of output.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('{')) continue
+        let event: Record<string, unknown>
+        try { event = zero3SessionRecord(JSON.parse(trimmed)) } catch { continue }
+        if (event.type === 'thread.started' && typeof event.thread_id === 'string' && event.thread_id.trim()) {
+          nextThreadId = event.thread_id.trim()
+          continue
+        }
+        if (event.type !== 'item.completed') continue
+        const item = zero3SessionRecord(event.item)
+        if (item.type === 'agent_message' && typeof item.text === 'string' && item.text.trim()) message = item.text.trim()
+      }
+      if (!message) return reject(new Error('Codex CLI returned no assistant message'))
+      resolve({ text: message, threadId: nextThreadId })
+    })
+  })
+}
 async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) {
   if (provider === 'gpt' || provider === 'gemini') return { opened: false, detail: '网页会话会直接打开官方登录页' }
   if (provider === 'zero3') return { opened: false, detail: 'Zero3 本体使用 API Profile，不需要 CLI 登录' }
@@ -278,26 +354,42 @@ async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) 
   child.unref()
   return { opened: true, detail: '已打开官方 CLI 授权终端；完成登录后回到 Zero3 点击刷新状态' }
 }
+// 'codex login status' answers both questions at once: a spawn failure means
+// the official client is not installed, a non-zero exit means it is installed
+// but not signed in. This probes the external client the picker offers, not
+// the pinned Agent Kernel -- that one is Zero3's own engine and is not a
+// session type the user picks.
+async function zero3ProbeCodexCli() {
+  const command = process.env.ZERO3_CODEX_CLI_BIN?.trim() || 'codex'
+  const { spawn } = await import('node:child_process')
+  return new Promise<{ available: boolean; authenticated: boolean | null; detail: string }>(resolve => {
+    const resolved = resolveWindowsCommand(command)
+    const child = spawn(resolved.command, [...resolved.args, 'login', 'status'], {
+      env: process.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    const chunks: Buffer[] = []
+    const timer = setTimeout(() => child.kill(), 20_000)
+    child.stdout.on('data', chunk => chunks.push(Buffer.from(chunk)))
+    child.stderr.on('data', chunk => chunks.push(Buffer.from(chunk)))
+    child.once('error', () => {
+      clearTimeout(timer)
+      resolve({ available: false, authenticated: null, detail: '未检测到官方 Codex 客户端 (codex)' })
+    })
+    child.once('close', code => {
+      clearTimeout(timer)
+      const output = Buffer.concat(chunks).toString('utf8').trim()
+      if (code === 0) return resolve({ available: true, authenticated: true, detail: output.slice(0, 200) || '已复用本机 Codex 客户端登录' })
+      resolve({ available: true, authenticated: false, detail: output.slice(0, 200) || '官方 Codex 客户端已安装，但尚未登录' })
+    })
+  })
+}
 async function zero3SessionProviderStatus() {
-  let codexAvailable = false
-  let codexAuthenticated: boolean | null = null
-  let codexDetail = 'Codex app-server 不可用'
-  try {
-    await zero3CodexAppServer.ensureStarted()
-    codexAvailable = true
-    try {
-      const accountRead = zero3SessionRecord(await zero3CodexAppServer.request('account/read', { refreshToken: false }))
-      const account = zero3SessionRecord(accountRead.account)
-      const type = typeof account.type === 'string' ? account.type : ''
-      codexAuthenticated = type === 'chatgpt'
-      codexDetail = codexAuthenticated ? '已复用本机 Codex 的 ChatGPT 登录' : 'Codex 已安装，但尚未完成 ChatGPT 登录'
-    } catch (error) {
-      codexAuthenticated = false
-      codexDetail = error instanceof Error ? error.message : String(error)
-    }
-  } catch (error) {
-    codexDetail = error instanceof Error ? error.message : String(error)
-  }
+  const codexCli = await zero3ProbeCodexCli()
+  const codexAvailable = codexCli.available
+  const codexAuthenticated = codexCli.authenticated
+  const codexDetail = codexCli.detail
 
   const claude = await zero3ClaudeTaskAdapter.availability()
   const agy = zero3Antigravity.status()
@@ -330,7 +422,7 @@ async function zero3SessionProviderStatus() {
       available: agy.available,
       authenticated: antigravityAuthenticated,
       authMode: 'cli' as const,
-      detail: !agy.available ? '未检测到 Antigravity CLI (agy)' : antigravityAuthenticated === true ? '已验证 Antigravity 授权' : antigravityAuthenticated === false ? 'Antigravity 授权已失效或缺失' : '已安装；首次启动会验证官方授权'
+      detail: !agy.available ? '未检测到官方 agy CLI；桌面版 Antigravity 应用本身不含该命令行工具' : antigravityAuthenticated === true ? '已验证 Antigravity 授权' : antigravityAuthenticated === false ? 'Antigravity 授权已失效或缺失' : '已安装；首次启动会验证官方授权'
     },
     zero3: {
       available: true,
@@ -387,6 +479,7 @@ ipcMain.handle('zero3:session-providers:zero3-turn', async (_event, requestValue
   return zero3ApiTurn(profile, request.messages)
 })
 ipcMain.handle('zero3:session-providers:claude-turn', (_event, request: unknown) => zero3RunClaudeTurn(request))
+ipcMain.handle('zero3:session-providers:codex-turn', (_event, request: unknown) => zero3RunCodexCliTurn(request))
 `
 
 const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionProviders', {
@@ -396,7 +489,8 @@ const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionP
   saveZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:save', request),
   removeZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:remove', request),
   zero3Turn: request => ipcRenderer.invoke('zero3:session-providers:zero3-turn', request),
-  claudeTurn: request => ipcRenderer.invoke('zero3:session-providers:claude-turn', request)
+  claudeTurn: request => ipcRenderer.invoke('zero3:session-providers:claude-turn', request),
+  codexTurn: request => ipcRenderer.invoke('zero3:session-providers:codex-turn', request)
 })
 
 contextBridge.exposeInMainWorld('zero3AgentTask', {`
@@ -431,11 +525,19 @@ const globalSurface = String.raw`    zero3SessionProviders: {
       removeZero3Profile: (request: { id: string }) => Promise<{ removed: boolean }>
       zero3Turn: (request: { profileId: string; messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> }) => Promise<{ text: string; model: string; profileId: string }>
       claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null }) => Promise<{ text: string; sessionId: string | null }>
+      codexTurn: (request: { text: string; cwd?: string | null; threadId?: string | null }) => Promise<{ text: string; threadId: string | null }>
     }
     zero3AgentTask: {`
 
 export function applyZero3SessionProviderRuntime() {
   patchFile('electron/main.ts', [
+    {
+      label: 'windows CLI resolver import',
+      from: "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'",
+      to:
+        "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'\n" +
+        "import { resolveWindowsCommand } from './zero3/executor-runtime/external/windows-command'"
+    },
     {
       label: 'session provider IPC before Agent orchestrator',
       from: 'const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({',

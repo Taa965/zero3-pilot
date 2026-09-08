@@ -23,7 +23,7 @@ const PROVIDERS: Array<{
 }> = [
   { id: 'gpt', title: 'ChatGPT 网页', icon: 'globe', description: '内嵌 chatgpt.com，直接使用网页账号与订阅。' },
   { id: 'gemini', title: 'Gemini 网页', icon: 'globe', description: '内嵌 gemini.google.com，直接使用 Google 网页账号。' },
-  { id: 'codex', title: '本地 Codex', icon: 'terminal', description: '调用本机 Codex app-server，复用 Codex CLI 的 ChatGPT 登录。', requiresProject: true },
+  { id: 'codex', title: '本地 Codex', icon: 'terminal', description: '调用本机官方 Codex 客户端（codex exec），复用它的 ChatGPT 登录。', requiresProject: true },
   { id: 'claude', title: 'Claude Code', icon: 'terminal', description: '调用本机 Claude Code CLI，复用官方 Claude 登录。', requiresProject: true },
   { id: 'antigravity', title: 'Antigravity', icon: 'rocket', description: '调用本机官方 agy CLI，并保留 Antigravity 会话绑定。', requiresProject: true },
   { id: 'zero3', title: 'Zero3 本体', icon: 'hubot', description: '由 Zero3 直接调用你配置的 API Provider 与模型。' }
@@ -170,12 +170,15 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 p-6" onMouseDown={onCancel}>
       <div
-        className="max-h-[88vh] w-[860px] max-w-[96vw] overflow-y-auto rounded-xl border border-(--ui-border) bg-(--ui-pane-background) p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-provider-picker-title"
+        className="max-h-[88vh] w-[860px] max-w-[96vw] overflow-y-auto rounded-xl border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) p-5 shadow-md"
         onMouseDown={event => event.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
-            <div className="text-lg font-semibold">新建会话</div>
+            <div id="session-provider-picker-title" className="text-lg font-semibold">新建会话</div>
             <div className="mt-1 text-xs text-(--ui-text-tertiary)">
               先选择运行平台。{project ? `当前项目：${project.name}` : '当前未选择项目。'}
             </div>
@@ -190,6 +193,14 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
             const itemStatus = status?.[provider.id]
             const badge = statusLabel(itemStatus)
             const disabledByProject = provider.requiresProject && !project
+            // A provider that cannot be used says why on its own card. The
+            // detail otherwise lives only in the panel below, one click away,
+            // so an installed Antigravity IDE reads as a flat 未安装 with no
+            // hint that the missing piece is the separate agy CLI.
+            const blockingDetail =
+              itemStatus && !disabledByProject && (!itemStatus.available || itemStatus.authenticated === false)
+                ? itemStatus.detail
+                : null
             return (
               <button
                 key={provider.id}
@@ -205,6 +216,11 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
                   </span>
                 </div>
                 <div className="mt-2 text-xs leading-5 text-(--ui-text-tertiary)">{provider.description}</div>
+                {blockingDetail && (
+                  <div className={`mt-1.5 line-clamp-3 text-[11px] leading-4 ${badge.className}`} title={blockingDetail}>
+                    {blockingDetail}
+                  </div>
+                )}
               </button>
             )
           })}
