@@ -12,14 +12,6 @@ interface LocalConversationSurfaceProps {
   onChanged: () => void
 }
 
-function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
-}
-
-function text(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null
-}
-
 function providerLabel(provider: LocalSessionProvider) {
   if (provider === 'codex') return 'Codex Local'
   if (provider === 'claude') return 'Claude Code'
@@ -27,80 +19,19 @@ function providerLabel(provider: LocalSessionProvider) {
   return 'Zero3'
 }
 
-function extractThreadId(value: unknown): string {
-  const root = record(value)
-  const thread = record(root.thread)
-  const id = text(root.id) ?? text(thread.id)
-  if (!id) throw new Error('Codex thread/start 没有返回 thread id')
-  return id
-}
-
-function extractTurnId(value: unknown): string | null {
-  const root = record(value)
-  const turn = record(root.turn)
-  return text(root.id) ?? text(turn.id)
-}
-
-function extractCodexReply(turn: Record<string, unknown>): string | null {
-  const items = Array.isArray(turn.items) ? turn.items.map(record) : []
-  for (const item of items.slice().reverse()) {
-    if (item.type !== 'agentMessage' && item.type !== 'agent_message') continue
-    const candidate = text(item.text)
-    if (candidate) return candidate
-    const content = Array.isArray(item.content) ? item.content.map(record) : []
-    const joined = content.map(part => text(part.text)).filter((part): part is string => Boolean(part)).join('\n')
-    if (joined) return joined
-  }
-  return null
-}
-
-async function waitForCodexReply(threadId: string, turnId: string | null): Promise<string> {
-  const deadline = Date.now() + 10 * 60_000
-  while (Date.now() < deadline) {
-    const root = record(await window.zero3Codex.thread.read({ threadId, includeTurns: true }))
-    const thread = record(root.thread)
-    const turns = Array.isArray(thread.turns)
-      ? thread.turns.map(record)
-      : Array.isArray(root.turns)
-        ? root.turns.map(record)
-        : []
-    const target = turnId ? turns.find(turn => text(turn.id) === turnId) : turns.at(-1)
-    if (target) {
-      const status = text(target.status)
-      if (status === 'completed') {
-        return extractCodexReply(target) ?? 'Codex 已完成，但没有返回可显示的文本。'
-      }
-      if (status === 'failed') {
-        const error = target.error == null ? 'Codex turn failed' : JSON.stringify(target.error)
-        throw new Error(error)
-      }
-      if (status === 'interrupted') throw new Error('Codex turn 已中断')
-    }
-    await new Promise(resolve => window.setTimeout(resolve, 300))
-  }
-  throw new Error('Codex turn 等待超过 10 分钟')
-}
-
+// The official Codex client is an external collaborator on the same footing as
+// Claude Code, so it is driven through the session-provider bridge rather than
+// the pinned Agent Kernel that Zero3 itself runs on.
 async function runCodexTurn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string) {
-  await window.zero3Codex.start()
-  let threadId = session.runtimeId
-  if (!threadId) {
-    const started = await window.zero3Codex.thread.start({
-      ...(project?.rootPath ? { cwd: project.rootPath } : {}),
-      approvalPolicy: 'never',
-      sandbox: 'workspace-write',
-      ephemeral: false
-    })
-    threadId = extractThreadId(started)
-    LocalSessionAdapter.setRuntimeId(session.id, threadId)
-  }
-  const turn = await window.zero3Codex.turn.start({
-    threadId,
+  const result = await window.zero3SessionProviders.codexTurn({
     text: prompt,
-    ...(project?.rootPath ? { cwd: project.rootPath } : {}),
-    approvalPolicy: 'never'
+    cwd: project?.rootPath ?? null,
+    threadId: session.runtimeId
   })
-  return waitForCodexReply(threadId, extractTurnId(turn))
+  if (result.threadId && result.threadId !== session.runtimeId) {
+    LocalSessionAdapter.setRuntimeId(session.id, result.threadId)
+  }
+  return result.text
 }
 
 async function runClaudeTurn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string) {

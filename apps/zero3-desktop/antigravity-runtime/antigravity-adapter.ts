@@ -133,17 +133,26 @@ export class Zero3AntigravityAdapter {
   private readonly listeners = new Set<EventSink>()
   private readonly turns = new Map<string, Promise<Zero3AntigravityTurnResult>>()
   private readonly store: BindingStore
-  private readonly binary: string | null
+  private binary: string | null = null
 
   constructor(stateFile: string) {
-    this.binary = discoverAntigravityBinary()
     this.store = new BindingStore(stateFile)
   }
 
+  // The CLI can be installed while Zero3 is running, so a miss is re-checked on
+  // every read rather than frozen at construction -- otherwise the picker's
+  // refresh button reports 未安装 until the whole app restarts. A hit is kept:
+  // the binary does not move underneath us.
+  private resolveBinary(): string | null {
+    this.binary ??= discoverAntigravityBinary()
+    return this.binary
+  }
+
   status() {
+    const binary = this.resolveBinary()
     return {
-      available: Boolean(this.binary),
-      binary: this.binary,
+      available: Boolean(binary),
+      binary,
       activeSessions: [...this.handles.keys()]
     }
   }
@@ -158,7 +167,7 @@ export class Zero3AntigravityAdapter {
   }
 
   async startTurn(inputValue: Zero3AntigravityTurnInput): Promise<{ turnId: string }> {
-    if (!this.binary) throw new Error('Antigravity CLI (agy) was not found. Install/authenticate the official CLI first.')
+    if (!this.resolveBinary()) throw new Error('Antigravity CLI (agy) was not found. Install/authenticate the official CLI first.')
     const logicalSessionId = required(inputValue.logicalSessionId, 'logicalSessionId', 256)
     const cwd = path.resolve(required(inputValue.cwd, 'cwd', 4096))
     const prompt = required(inputValue.prompt, 'prompt', 128_000)
@@ -275,8 +284,10 @@ export class Zero3AntigravityAdapter {
       '--json-schema', JSON.stringify(ZERO3_GEMINI_EXECUTION_RESULT_SCHEMA)
     ]
     if (binding.conversationId) args.push('--conversation', binding.conversationId)
-    const shell = process.platform === 'win32' && /\.cmd$/i.test(this.binary!)
-    const child = spawn(this.binary!, args, {
+    const binary = this.resolveBinary()
+    if (!binary) throw new Error('Antigravity CLI (agy) was not found. Install/authenticate the official CLI first.')
+    const shell = process.platform === 'win32' && /\.cmd$/i.test(binary)
+    const child = spawn(binary, args, {
       cwd,
       env: { ...process.env },
       stdio: ['pipe', 'pipe', 'pipe'],
