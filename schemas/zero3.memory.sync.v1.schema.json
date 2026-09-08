@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zero3.local/schemas/zero3.memory.sync.v1.schema.json",
+  "title": "Zero3 Memory Sync v1",
+  "oneOf": [
+    {"$ref": "#/$defs/hello"},
+    {"$ref": "#/$defs/ready"},
+    {"$ref": "#/$defs/events"},
+    {"$ref": "#/$defs/changed"},
+    {"$ref": "#/$defs/ack"},
+    {"$ref": "#/$defs/ping"},
+    {"$ref": "#/$defs/pong"},
+    {"$ref": "#/$defs/error"}
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {"type": {"type": "string"}}
+    },
+    "hello": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol", "client_id", "device_id", "last_sequence", "projects"],
+      "properties": {
+        "type": {"const": "hello"},
+        "protocol": {"const": "zero3.memory.sync.v1"},
+        "client_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "last_sequence": {"type": "integer", "minimum": 0},
+        "projects": {"type": "array", "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 256}}
+      }
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "latest_sequence"],
+      "properties": {
+        "type": {"const": "ready"},
+        "latest_sequence": {"type": "integer", "minimum": 0}
+      }
+    },
+    "events": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "from_sequence", "to_sequence", "events"],
+      "properties": {
+        "type": {"const": "events"},
+        "from_sequence": {"type": "integer", "minimum": 0},
+        "to_sequence": {"type": "integer", "minimum": 0},
+        "events": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "changed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "sequence", "event"],
+      "properties": {
+        "type": {"const": "memory.changed"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "event": {"type": "object"}
+      }
+    },
+    "ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "sequence"],
+      "properties": {
+        "type": {"const": "ack"},
+        "sequence": {"type": "integer", "minimum": 0}
+      }
+    },
+    "ping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "at"],
+      "properties": {"type": {"const": "ping"}, "at": {"type": "string", "format": "date-time"}}
+    },
+    "pong": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "at"],
+      "properties": {"type": {"const": "pong"}, "at": {"type": "string", "format": "date-time"}}
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "code", "message"],
+      "properties": {
+        "type": {"const": "error"},
+        "code": {"type": "string", "minLength": 1, "maxLength": 128},
+        "message": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "retryable": {"type": "boolean"}
+      }
+    }
+  }
+}
