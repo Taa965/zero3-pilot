@@ -1,0 +1,66 @@
+name: Memory V2.1 Lane B
+# Main-controller retrigger after PostgreSQL test sequencing fix.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deployment/memory/**'
+      - 'apps/zero3-desktop/memory-v21-runtime/authority-core*'
+      - '.github/workflows/memory-v21-lane-b.yml'
+
+jobs:
+  authority-core:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zero3_memory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d zero3_memory"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: zero3_memory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - run: node --test apps/zero3-desktop/memory-v21-runtime/authority-core.test.mjs
+      - name: Install PostgreSQL client if missing
+        run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+      - name: Apply all Memory Authority migrations
+        run: |
+          for migration in deployment/memory/migrations/*.sql; do
+            echo "Applying $migration"
+            psql -v ON_ERROR_STOP=1 -f "$migration"
+          done
+      - name: Verify live authority semantics
+        run: |
+          for test_file in deployment/memory/tests/*.sql; do
+            echo "Running $test_file"
+            psql -v ON_ERROR_STOP=1 -f "$test_file"
+          done
+      - name: Verify concurrent version-zero serialization
+        run: bash deployment/memory/tests/concurrency_v2_1.sh
+      - name: SQL static invariants
+        run: |
+          grep -q 'CREATE EXTENSION IF NOT EXISTS vector' deployment/memory/migrations/001_memory_authority_v2_1.sql
+          grep -q 'memory_events_append_only' deployment/memory/migrations/001_memory_authority_v2_1.sql
+          grep -q 'event_id UUID NOT NULL UNIQUE' deployment/memory/migrations/001_memory_authority_v2_1.sql
+          grep -q 'entity_version_conflict' deployment/memory/migrations/001_memory_authority_v2_1.sql
+          grep -q 'rebuild_project_memory_projection' deployment/memory/migrations/001_memory_authority_v2_1.sql
+          grep -q 'PRIMARY KEY (scope_key, entity_id)' deployment/memory/migrations/003_memory_authority_v2_1_scoped_entities.sql
+          grep -q 'pg_advisory_xact_lock' deployment/memory/migrations/004_memory_authority_v2_1_entity_lock.sql
+# final main-aligned postgres gate 
