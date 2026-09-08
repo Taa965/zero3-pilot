@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
 import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdapter'
-import { WebWorkspaceAdapter, type WebSession } from '../adapters/WebWorkspaceAdapter'
+import { WebWorkspaceAdapter } from '../adapters/WebWorkspaceAdapter'
 import { ChatGptProjectBindingDialog } from '../conversations/ChatGptProjectBindingDialog'
+import { SessionProviderPickerDialog } from '../conversations/SessionProviderPickerDialog'
+import type { LocalSessionRecord, WorkspaceProvider, WorkspaceSession } from '../conversations/session-types'
 import { AppTitleBar } from './AppTitleBar'
 import { GlobalRail } from './GlobalRail'
 import { ContextPane } from './ContextPane'
@@ -10,29 +13,40 @@ import { WorkspaceRouter } from './WorkspaceRouter'
 import { InspectorDrawer } from './InspectorDrawer'
 
 export type ActiveModule = 'conversations' | 'tasks' | 'groups' | 'projects' | 'runtime'
-export type WorkspaceProvider = 'codex' | 'gpt' | 'gemini'
 
 const ACTIVE_PROJECT_STORAGE_KEY = 'zero3.active-project-id'
 
 export function Zero3AppShell() {
   const [activeModule, setActiveModule] = useState<ActiveModule>('conversations')
   const [inspectorOpen, setInspectorOpen] = useState(false)
-  const [provider, setProvider] = useState<WorkspaceProvider>('codex')
-  const [sessions, setSessions] = useState<WebSession[]>([])
+  const [provider, setProvider] = useState<WorkspaceProvider>('gpt')
+  const [webSessions, setWebSessions] = useState<WorkspaceSession[]>([])
+  const [localSessions, setLocalSessions] = useState<LocalSessionRecord[]>([])
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [projects, setProjects] = useState<Zero3ProjectRecord[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
-  // Set while the ChatGPT-project picker is open. It holds the Zero3 project
-  // whose binding is being decided, plus whether a session should be created
-  // once that is settled -- the same dialog serves "new session in an unbound
-  // project" and "change the binding from the project view".
+  const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const [binding, setBinding] = useState<{ project: Zero3ProjectRecord; thenCreate: boolean } | null>(null)
 
-  const refreshSessions = useCallback(async () => {
+  const sessions = useMemo<WorkspaceSession[]>(() => {
+    const local = localSessions.map(LocalSessionAdapter.toWorkspaceSession)
+    return [...webSessions, ...local]
+  }, [webSessions, localSessions])
+
+  const refreshWebSessions = useCallback(async () => {
     try {
-      setSessions(await WebWorkspaceAdapter.list())
+      setWebSessions(await WebWorkspaceAdapter.list())
+      setSessionError(null)
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [])
+
+  const refreshLocalSessions = useCallback(() => {
+    try {
+      setLocalSessions(LocalSessionAdapter.list())
       setSessionError(null)
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
@@ -61,9 +75,14 @@ export function Zero3AppShell() {
   }, [])
 
   useEffect(() => {
-    void refreshSessions()
-    return WebWorkspaceAdapter.subscribe(() => void refreshSessions())
-  }, [refreshSessions])
+    void refreshWebSessions()
+    return WebWorkspaceAdapter.subscribe(() => void refreshWebSessions())
+  }, [refreshWebSessions])
+
+  useEffect(() => {
+    refreshLocalSessions()
+    return LocalSessionAdapter.subscribe(refreshLocalSessions)
+  }, [refreshLocalSessions])
 
   useEffect(() => {
     void refreshProjects()
@@ -76,24 +95,30 @@ export function Zero3AppShell() {
     } catch {}
   }, [activeProjectId])
 
-  const selectSession = useCallback((session: WebSession) => {
+  const selectSession = useCallback((session: WorkspaceSession) => {
     setActiveSessionId(session.id)
     setProvider(session.provider)
   }, [])
 
-  // Entries outlive the conversations they point at: deleting one on
-  // chatgpt.com leaves Zero3's row behind, and nothing in the navigation events
-  // reports that. This is the manual way to drop such a row.
-  const deleteSession = useCallback(async (session: WebSession) => {
+  const deleteSession = useCallback(async (session: WorkspaceSession) => {
     try {
-      await WebWorkspaceAdapter.remove(session)
+      if (session.source === 'local') {
+        if (session.provider === 'antigravity') {
+          const record = LocalSessionAdapter.get(session.id)
+          if (record?.runtimeId) await window.zero3Antigravity.stop({ logicalSessionId: record.runtimeId }).catch(() => {})
+        }
+        LocalSessionAdapter.remove(session.id)
+        refreshLocalSessions()
+      } else {
+        await WebWorkspaceAdapter.remove(session)
+        await refreshWebSessions()
+      }
       setActiveSessionId(current => (current === session.id ? null : current))
       setSessionError(null)
-      await refreshSessions()
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
-  }, [refreshSessions])
+  }, [refreshLocalSessions, refreshWebSessions])
 
   const selectProject = useCallback((project: Zero3ProjectRecord) => {
     setActiveProjectId(project.id)
@@ -103,9 +128,6 @@ export function Zero3AppShell() {
     })
   }, [sessions])
 
-  // Scope changes come from the switcher in the session pane. Clearing the scope
-  // keeps the current session selected -- the unscoped view lists it too, so
-  // there is nothing to deselect.
   const selectProjectScope = useCallback((projectId: string | null) => {
     setActiveProjectId(projectId)
     if (projectId === null) return
@@ -120,15 +142,12 @@ export function Zero3AppShell() {
       const id = await WebWorkspaceAdapter.createGptWeb(projectId)
       setActiveSessionId(id)
       setProvider('gpt')
-      await refreshSessions()
+      await refreshWebSessions()
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
-  }, [refreshSessions])
+  }, [refreshWebSessions])
 
-  // A scoped project that has never been bound gets the question once: which
-  // ChatGPT project do its conversations belong to? Every session after that
-  // inherits the answer, and an unscoped session never asks.
   const createGptSession = useCallback(() => {
     const project = projects.find(item => item.id === activeProjectId) ?? null
     if (project && !project.chatGptProjectUrl) {
@@ -137,6 +156,30 @@ export function Zero3AppShell() {
     }
     void openGptSession(activeProjectId)
   }, [projects, activeProjectId, openGptSession])
+
+  const createSession = useCallback(async (nextProvider: WorkspaceProvider, zero3ProfileId: string | null = null) => {
+    setProviderPickerOpen(false)
+    try {
+      if (nextProvider === 'gpt') {
+        createGptSession()
+        return
+      }
+      if (nextProvider === 'gemini') {
+        const id = await WebWorkspaceAdapter.createGeminiWeb(activeProjectId)
+        setActiveSessionId(id)
+        setProvider('gemini')
+        await refreshWebSessions()
+        return
+      }
+      const record = LocalSessionAdapter.create(nextProvider, activeProjectId, zero3ProfileId)
+      refreshLocalSessions()
+      setActiveSessionId(record.id)
+      setProvider(nextProvider)
+      setSessionError(null)
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [activeProjectId, createGptSession, refreshLocalSessions, refreshWebSessions])
 
   const applyBinding = useCallback(async (chatGptProjectUrl: string | null) => {
     if (!binding) return
@@ -148,7 +191,7 @@ export function Zero3AppShell() {
       setProjectError(null)
       if (thenCreate) await openGptSession(updated.id)
     } catch (error) {
-      setProjectError(error instanceof Error ? error.message : String(error))
+      setProjectError(error instanceof Error ? error.messae : String(error))
     }
   }, [binding, openGptSession])
 
@@ -186,11 +229,16 @@ export function Zero3AppShell() {
   }, [])
 
   const activeSession = sessions.find(session => session.id === activeSessionId) ?? null
-  const activeProject = projects.find(project => project.id === activeProjectId) ?? null
+  const activeLocalSession = activeSession?.source === 'local'
+    ? localSessions.find(session => session.id === activeSession.id) ?? null
+    : null
+  const activeProject = projects.find(project => project.id === (activeProjectId ?? activeSession?.projectId)) ?? null
   const activeProjectSessionCount = useMemo(
     () => activeProjectId ? sessions.filter(session => session.projectId === activeProjectId).length : 0,
     [sessions, activeProjectId]
   )
+  const nativeViewsMayShow = binding === null && !providerPickerOpen
+  const workspaceSession = nativeViewsMayShow ? activeSession : null
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -206,7 +254,7 @@ export function Zero3AppShell() {
           projects={projects}
           projectError={projectError}
           onSelectSession={selectSession}
-          onCreateGptSession={createGptSession}
+          onCreateSession={() => setProviderPickerOpen(true)}
           onDeleteSession={session => void deleteSession(session)}
           onSelectProjectScope={selectProjectScope}
           onSelectProject={selectProject}
@@ -216,18 +264,26 @@ export function Zero3AppShell() {
           activeModule={activeModule}
           provider={provider}
           onProviderChange={setProvider}
-          // The ChatGPT page is a native view stacked above the renderer, so it
-          // would cover the picker. Dropping the id unmounts the surface, which
-          // hides that view for as long as the dialog is up.
-          activeSessionId={binding === null && activeSession?.provider === 'gpt' ? activeSession.id : null}
+          activeSession={workspaceSession}
+          activeLocalSession={activeLocalSession}
           activeProject={activeProject}
           activeProjectSessionCount={activeProjectSessionCount}
+          onLocalSessionChanged={refreshLocalSessions}
           onBindChatGptProject={rebindProject}
           onUnbindChatGptProject={project => void unbindProject(project)}
           onToggleInspector={() => setInspectorOpen(!inspectorOpen)}
         />
         {inspectorOpen && <InspectorDrawer onClose={() => setInspectorOpen(false)} />}
       </div>
+
+      {providerPickerOpen && (
+        <SessionProviderPickerDialog
+          project={activeProject}
+          onCreate={(nextProvider, zero3ProfileId) => void createSession(nextProvider, zero3ProfileId ?? null)}
+          onCancel={() => setProviderPickerOpen(false)}
+        />
+      )}
+
       {binding && (
         <ChatGptProjectBindingDialog
           projectName={binding.project.name}

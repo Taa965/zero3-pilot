@@ -3,28 +3,32 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Codicon } from '@/components/ui/codicon'
 import { cn } from '@/lib/utils'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
-import type { WebSession } from '../adapters/WebWorkspaceAdapter'
+import type { WorkspaceProvider, WorkspaceSession } from './session-types'
 
 interface UnifiedSessionListProps {
-  sessions: WebSession[]
+  sessions: WorkspaceSession[]
   activeId: string | null
   activeProjectId: string | null
   projects: Zero3ProjectRecord[]
-  onSelect: (session: WebSession) => void
-  onCreateGpt: () => void
-  onDelete: (session: WebSession) => void
+  onSelect: (session: WorkspaceSession) => void
+  onCreate: () => void
+  onDelete: (session: WorkspaceSession) => void
   error: string | null
 }
 
 const CONTEXT_MENU_WIDTH = 184
 const CONTEXT_MENU_HEIGHT = 64
 const GPT_PREWARM_DELAY_MS = 150
+const FILTERS: Array<'all' | WorkspaceProvider> = ['all', 'gpt', 'gemini', 'codex', 'claude', 'antigravity', 'zero3']
 
-const PROVIDER_MARKS = {
-  codex: { symbol: '⌘', color: 'text-green-500' },
-  gpt: { symbol: '◎', color: 'text-blue-500' },
-  gemini: { symbol: '✦', color: 'text-violet-500' }
-} as const
+const PROVIDER_MARKS: Record<WorkspaceProvider, { symbol: string; color: string; label: string }> = {
+  gpt: { symbol: '◎', color: 'text-blue-500', label: 'GPT' },
+  gemini: { symbol: '✦', color: 'text-violet-500', label: 'Gemini' },
+  codex: { symbol: '⌘', color: 'text-green-500', label: 'Codex' },
+  claude: { symbol: 'C', color: 'text-orange-500', label: 'Claude' },
+  antigravity: { symbol: 'A', color: 'text-fuchsia-500', label: 'Antigravity' },
+  zero3: { symbol: 'Z', color: 'text-blue-600', label: 'Zero3' }
+}
 
 export function UnifiedSessionList({
   sessions,
@@ -32,13 +36,13 @@ export function UnifiedSessionList({
   activeProjectId,
   projects,
   onSelect,
-  onCreateGpt,
+  onCreate,
   onDelete,
   error
 }: UnifiedSessionListProps) {
-  const [filter, setFilter] = useState<'all' | 'codex' | 'gpt' | 'gemini'>('all')
+  const [filter, setFilter] = useState<'all' | WorkspaceProvider>('all')
   const [query, setQuery] = useState('')
-  const [menu, setMenu] = useState<{ session: WebSession; x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<{ session: WorkspaceSession; x: number; y: number } | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const prewarmTimersRef = useRef(new Map<string, number>())
 
@@ -50,8 +54,6 @@ export function UnifiedSessionList({
     }
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', onKey)
-    // Capture: the list scrolls inside its own container, whose scroll events
-    // never reach document in the bubble phase.
     document.addEventListener('scroll', close, true)
     window.addEventListener('blur', close)
     return () => {
@@ -76,8 +78,8 @@ export function UnifiedSessionList({
     prewarmTimersRef.current.delete(id)
   }
 
-  const queuePrewarm = (session: WebSession) => {
-    if (session.provider !== 'gpt' || session.id === activeId) return
+  const queuePrewarm = (session: WorkspaceSession) => {
+    if (session.provider !== 'gpt' || session.source !== 'web' || session.id === activeId) return
     cancelPrewarm(session.id)
     const timer = window.setTimeout(() => {
       prewarmTimersRef.current.delete(session.id)
@@ -86,10 +88,8 @@ export function UnifiedSessionList({
     prewarmTimersRef.current.set(session.id, timer)
   }
 
-  const openMenu = (session: WebSession, event: React.MouseEvent) => {
+  const openMenu = (session: WorkspaceSession, event: React.MouseEvent) => {
     event.preventDefault()
-    // The GPT and Gemini surfaces are native views stacked above the renderer,
-    // so a menu spilling past this pane would be painted behind them.
     const bounds = paneRef.current?.getBoundingClientRect()
     const maxX = bounds ? bounds.right - CONTEXT_MENU_WIDTH - 4 : event.clientX
     const minX = bounds ? bounds.left + 4 : 4
@@ -102,62 +102,13 @@ export function UnifiedSessionList({
 
   const projectSessions = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    const matches = (session: WebSession) => {
+    return sessions.filter(session => {
+      if (activeProjectId !== null && session.projectId !== activeProjectId) return false
       if (filter !== 'all' && session.provider !== filter) return false
       if (!needle) return true
       return session.title.toLowerCase().includes(needle) || session.subtitle.toLowerCase().includes(needle)
-    }
-    return sessions.filter(
-      session => (activeProjectId === null || session.projectId === activeProjectId) && matches(session)
-    )
+    })
   }, [sessions, activeProjectId, filter, query])
-
-  const renderSession = (session: WebSession) => {
-    const active = session.id === activeId
-    const mark = PROVIDER_MARKS[session.provider]
-    // Only in the unscoped view: inside a project every row would repeat the
-    // same name, and the switcher above already says which project that is.
-    const ownerLabel =
-      activeProjectId !== null
-        ? null
-        : (projects.find(project => project.id === session.projectId)?.name ?? '未归属')
-    return (
-      <button
-        key={session.id}
-        onClick={() => {
-          cancelPrewarm(session.id)
-          onSelect(session)
-        }}
-        onMouseEnter={() => queuePrewarm(session)}
-        onMouseLeave={() => cancelPrewarm(session.id)}
-        onFocus={() => queuePrewarm(session)}
-        onBlur={() => cancelPrewarm(session.id)}
-        onContextMenu={event => openMenu(session, event)}
-        className={cn(
-          'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
-          active
-            ? 'border-(--ui-border) bg-(--ui-control-active-background)'
-            : 'hover:bg-(--ui-control-hover-background)'
-        )}
-      >
-        <div className="flex w-full items-center justify-between">
-          <div className="flex min-w-0 items-center gap-1.5 font-medium">
-            <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
-            <span className="truncate">{session.title}</span>
-          </div>
-          <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
-        </div>
-        <div className="flex w-full items-center gap-1.5 text-xs text-(--ui-text-secondary)">
-          {ownerLabel && (
-            <span className="shrink-0 rounded bg-(--ui-control-background) px-1.5 py-0.5 text-(--ui-text-tertiary)">
-              {ownerLabel}
-            </span>
-          )}
-          <span className="truncate">{session.subtitle}</span>
-        </div>
-      </button>
-    )
-  }
 
   return (
     <div ref={paneRef} className="flex h-full flex-col">
@@ -176,15 +127,15 @@ export function UnifiedSessionList({
             />
           </div>
           <button
-            onClick={onCreateGpt}
-            title={activeProjectId ? '在当前项目中新建 GPT 网页会话' : '新建未归属 GPT 网页会话'}
+            onClick={onCreate}
+            title="新建会话并选择运行平台"
             className="flex size-7 items-center justify-center rounded-md border border-(--ui-border) hover:bg-(--ui-control-hover-background)"
           >
             <Codicon name="plus" className="size-4" />
           </button>
         </div>
-        <div className="flex gap-1 text-xs text-(--ui-text-secondary)">
-          {(['all', 'codex', 'gpt', 'gemini'] as const).map(value => (
+        <div className="flex flex-wrap gap-1 text-xs text-(--ui-text-secondary)">
+          {FILTERS.map(value => (
             <button
               key={value}
               onClick={() => {
@@ -196,7 +147,7 @@ export function UnifiedSessionList({
                 filter === value && 'bg-(--ui-control-active-background) font-medium text-foreground'
               )}
             >
-              {value === 'all' ? '全部' : value === 'codex' ? 'Codex' : value === 'gpt' ? 'GPT' : 'Gemini'}
+              {value === 'all' ? '全部' : PROVIDER_MARKS[value].label}
             </button>
           ))}
         </div>
@@ -204,20 +155,47 @@ export function UnifiedSessionList({
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {error && <div className="px-2 py-3 text-xs text-red-600">{error}</div>}
-
-        {projectSessions.map(renderSession)}
+        {projectSessions.map(session => {
+          const active = session.id === activeId
+          const mark = PROVIDER_MARKS[session.provider]
+          const ownerLabel = activeProjectId !== null ? null : (projects.find(project => project.id === session.projectId)?.name ?? '未归属')
+          return (
+            <button
+              key={session.id}
+              onClick={() => {
+                cancelPrewarm(session.id)
+                onSelect(session)
+              }}
+              onMouseEnter={() => queuePrewarm(session)}
+              onMouseLeave={() => cancelPrewarm(session.id)}
+              onFocus={() => queuePrewarm(session)}
+              onBlur={() => cancelPrewarm(session.id)}
+              onContextMenu={event => openMenu(session, event)}
+              className={cn(
+                'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
+                active ? 'border-(--ui-border) bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'
+              )}
+            >
+              <div className="flex w-full items-center justify-between">
+                <div className="flex min-w-0 items-center gap-1.5 font-medium">
+                  <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
+                  <span className="truncate">{session.title}</span>
+                </div>
+                <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
+              </div>
+              <div className="flex w-full items-center gap-1.5 text-xs text-(--ui-text-secondary)">
+                {ownerLabel && (
+                  <span className="shrink-0 rounded bg-(--ui-control-background) px-1.5 py-0.5 text-(--ui-text-tertiary)">{ownerLabel}</span>
+                )}
+                <span className="truncate">{session.subtitle}</span>
+              </div>
+            </button>
+          )
+        })}
 
         {!error && projectSessions.length === 0 && (
           <div className="px-2 py-6 text-center text-xs text-(--ui-text-tertiary)">
-            {filter === 'codex' ? (
-              <>Codex 会话尚未接入此列表</>
-            ) : sessions.length === 0 ? (
-              <>还没有会话，点击 ＋ 新建 GPT 网页会话</>
-            ) : activeProjectId ? (
-              <>当前项目没有匹配的会话</>
-            ) : (
-              <>没有匹配的会话</>
-            )}
+            {sessions.length === 0 ? '还没有会话，点击 ＋ 选择平台创建' : '没有匹配的会话'}
           </div>
         )}
       </div>
@@ -226,9 +204,6 @@ export function UnifiedSessionList({
         <div
           role="menu"
           style={{ left: menu.x, top: menu.y, width: CONTEXT_MENU_WIDTH }}
-          // The document-level mousedown listener closes the menu, and it fires
-          // before click -- without this the item would unmount before its own
-          // click ever lands.
           onMouseDown={event => event.stopPropagation()}
           className="fixed z-50 rounded-md border border-(--ui-border) bg-(--ui-pane-background) p-1 shadow-lg"
         >
@@ -245,7 +220,7 @@ export function UnifiedSessionList({
             删除会话
           </button>
           <div className="px-2 pb-1 pt-0.5 text-[11px] leading-tight text-(--ui-text-tertiary)">
-            仅从 Zero3 移除，不影响网页端
+            网页会话仅从 Zero3 移除；本地会话会删除本机记录
           </div>
         </div>
       )}
