@@ -57,7 +57,7 @@ requireText(taskRunner, 'findTurnByClientId', 'Remote Host must recover uncertai
 requireText(taskRunner, 'remote.turn.recovered', 'Recovered Codex Turns must be explicit evidence, not reported as new Turns.')
 requireText(taskRunner, 'refusing to start a duplicate Turn', 'Unresolved persisted Turn intent must fail closed instead of replaying side effects.')
 requireText(taskRunner, 'task_id is already bound to a different execution_id', 'task_id collisions must fail closed.')
-requireText(taskRunner, 'this.codex.execCommand(', 'Git preflight/postflight must execute through the narrow Codex command surface.')
+requireText(taskRunner, 'await codex.execCommand(', 'Git preflight/postflight must execute through the narrow Codex command surface.')
 requireText(taskRunner, "sandboxPolicy: { type: 'readOnly', networkAccess: false }", 'Git evidence commands must remain read-only and network-disabled.')
 requireText(taskRunner, "['rev-parse', '--show-toplevel']", 'Remote Host must prove the authoritative Git repository root through Codex.')
 requireText(taskRunner, "['rev-parse', '--verify', 'HEAD']", 'Remote Host must prove authoritative Git HEAD through Codex.')

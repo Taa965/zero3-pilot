@@ -1,0 +1,19 @@
+name: Memory V2.1 Lane F
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/memory-v21-runtime/github-memory-inbox*'
+      - '.github/workflows/memory-v21-lane-f.yml'
+
+jobs:
+  github-inbox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - run: node --check apps/zero3-desktop/memory-v21-runtime/github-memory-inbox.mjs
+      - run: node --test apps/zero3-desktop/memory-v21-runtime/github-memory-inbox.test.mjs

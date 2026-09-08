@@ -1,5 +1,5 @@
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
-import type { WebSession } from '../adapters/WebWorkspaceAdapter'
+import type { WorkspaceSession } from '../conversations/session-types'
 import { UnifiedSessionList } from '../conversations/UnifiedSessionList'
 import { TaskList } from '../tasks/TaskList'
 import { DevelopmentGroupList } from '../development-groups/DevelopmentGroupList'
@@ -9,15 +9,16 @@ import { RuntimeList } from '../runtime/RuntimeList'
 
 interface ContextPaneProps {
   activeModule: string
-  sessions: WebSession[]
+  sessions: WorkspaceSession[]
   activeSessionId: string | null
   activeProjectId: string | null
   sessionError: string | null
   projects: Zero3ProjectRecord[]
   projectError: string | null
-  onSelectSession: (session: WebSession) => void
-  onCreateGptSession: () => void
-  onDeleteSession: (session: WebSession) => void
+  onSelectSession: (session: WorkspaceSession) => void
+  onCreateSession: () => void
+  onDeleteSession: (session: WorkspaceSession) => void
+  onRenameSession: (session: WorkspaceSession) => void
   onSelectProject: (project: Zero3ProjectRecord) => void
   onSelectProjectScope: (projectId: string | null) => void
   onCreateProject: () => void
@@ -32,8 +33,9 @@ export function ContextPane({
   projects,
   projectError,
   onSelectSession,
-  onCreateGptSession,
+  onCreateSession,
   onDeleteSession,
+  onRenameSession,
   onSelectProject,
   onSelectProjectScope,
   onCreateProject
@@ -50,11 +52,7 @@ export function ContextPane({
     <div className="flex w-72 shrink-0 flex-col border-r border-(--ui-border) bg-(--ui-pane-background)">
       <div className="flex h-12 shrink-0 items-center border-b border-(--ui-border)">
         {activeModule === 'conversations' ? (
-          <ProjectScopeSwitcher
-            projects={projects}
-            activeProjectId={activeProjectId}
-            onSelectScope={onSelectProjectScope}
-          />
+          <ProjectScopeSwitcher projects={projects} activeProjectId={activeProjectId} onSelectScope={onSelectProjectScope} />
         ) : (
           <div className="px-4 font-medium">{titles[activeModule] || activeModule}</div>
         )}
@@ -67,8 +65,9 @@ export function ContextPane({
             activeProjectId={activeProjectId}
             projects={projects}
             onSelect={onSelectSession}
-            onCreateGpt={onCreateGptSession}
+            onCreate={onCreateSession}
             onDelete={onDeleteSession}
+            onRename={onRenameSession}
             error={sessionError}
           />
         ) : activeModule === 'tasks' ? (

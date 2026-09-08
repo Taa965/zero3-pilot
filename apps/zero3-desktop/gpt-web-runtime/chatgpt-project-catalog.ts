@@ -158,8 +158,16 @@ export async function readChatGptProjectCatalog(
   profile: Session,
   reusable: WebContents | null
 ): Promise<Zero3ChatGptRemoteProject[]> {
+  return withChatGptContents(profile, reusable, readFromContents)
+}
+
+export async function withChatGptContents<T>(
+  profile: Session,
+  reusable: WebContents | null,
+  operation: (contents: WebContents) => Promise<T>
+): Promise<T> {
   if (reusable && !reusable.isDestroyed() && onChatGptOrigin(reusable)) {
-    return readFromContents(reusable)
+    return operation(reusable)
   }
 
   const view = new WebContentsView({
@@ -178,7 +186,7 @@ export async function readChatGptProjectCatalog(
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
   try {
     await loadHome(contents)
-    return await readFromContents(contents)
+    return await operation(contents)
   } finally {
     if (!contents.isDestroyed()) contents.close({ waitForBeforeUnload: false })
   }
