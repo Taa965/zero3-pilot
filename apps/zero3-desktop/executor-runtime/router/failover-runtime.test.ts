@@ -157,6 +157,36 @@ test('quota exhaustion performs verified native-codex to claude handoff before g
   }
 })
 
+class StartFailingExecutor extends ScriptedExecutor {
+  override async start(context: ExecutorStartContext): Promise<ExecutorSession> {
+    if (context.generation === 2) throw new Error('replacement start failed')
+    return super.start(context)
+  }
+}
+
+test('failed replacement leaves handoff pending until explicit wrapper close releases it', async () => {
+  const fixture = await repoFixture()
+  try {
+    const native = new ScriptedExecutor('native-codex', 'native-codex', () => [
+      { type: 'failure', sequence: 1, at: '2026-09-08T00:00:00.000Z', failure: createExecutorFailure('quota_exhausted', 'quota', 'native-codex') }
+    ])
+    const claude = new StartFailingExecutor('claude', 'external-agent', () => [])
+    const { runtime } = createRuntime(fixture.root, native, claude)
+    const task = identity(fixture.repo, fixture.sha)
+    await runtime.start('native-codex', task, policy)
+    await assert.rejects(async () => {
+      for await (const _event of runtime.prompt(task, { kind: 'prompt', clientRequestId: 'R1', text: 'continue work' })) {}
+    }, /replacement start failed/)
+
+    assert.equal(runtime.active(task.taskId, task.executionId), undefined)
+    assert.equal((await new WorkspaceWriterGate(fixture.repo).current())?.state, 'handoff_pending')
+    await assert.rejects(runtime.close(task.taskId, task.executionId))
+    assert.equal(await new WorkspaceWriterGate(fixture.repo).current(), undefined)
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test('writer lease collision closes the just-started executor and leaves the existing lease untouched', async () => {
   const fixture = await repoFixture()
   try {

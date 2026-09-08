@@ -306,15 +306,13 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     const facade = await this.facadeFor(groupId)
     await resolveSessionOutcomeUnknown(this.store, groupId, sessionId, resolution, evidence)
     const taskId = `${groupId}:${sessionId}`
-    if (this.executorManager.active(taskId, (await this.store.loadSession(groupId, sessionId)).executionId)) {
-      try {
-        const runtime = await this.store.loadSession(groupId, sessionId)
-        await this.executorManager.close(taskId, runtime.executionId)
-      } catch {
-        // Executor manager close removes the in-memory binding in finally;
-        // recovery classification is already durable and must not be rolled back
-        // because a dead provider session could not acknowledge cleanup.
-      }
+    const runtime = await this.store.loadSession(groupId, sessionId)
+    try {
+      await this.executorManager.close(taskId, runtime.executionId)
+    } catch {
+      // Failover close releases an in-memory active or handoff-pending writer lease in finally.
+      // Recovery classification is already durable and must not be rolled back because a dead
+      // provider session could not acknowledge cleanup or the replacement failed to start.
     }
     return facade.snapshot(groupId)
   }

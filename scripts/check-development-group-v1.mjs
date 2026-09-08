@@ -116,6 +116,7 @@ requireText(desktopRuntime, 'createSessionWorktree(worktree, session.branch, ses
 requireText(desktopRuntime, 'refusing to adopt pre-existing fresh Session branch', 'fresh Session branch collision fail-closed gate')
 requireText(desktopRuntime, 'refusing to recreate from baseline', 'retry worktree evidence-preserving fail-closed gate')
 requireText(desktopRuntime, 'this.executorManager.close(taskId', 'post-recovery quarantined Executor binding release')
+forbid(desktopRuntime, /if\s*\(this\.executorManager\.active\(taskId/u, 'OutcomeUnknown cleanup gated on provider-active state')
 requireText(desktopRuntime, 'shell: false', 'shellless verification execution')
 requireText(desktopRuntime, 'JSON.parse(command)', 'argv-only verification command parsing')
 requireText(sessionRuntime, 'active?(taskId: string, executionId: string)', 'active executor authority snapshot port')
