@@ -186,3 +186,9 @@ test('paths and non-Windows platforms are passed straight through', () => {
     cleanup()
   }
 })
+
+test('CLI authorization opens one direct Windows command prompt without nested start quoting', () => {
+  const runtime = fs.readFileSync(path.join(root, 'scripts', 'apply-session-provider-runtime.mjs'), 'utf8')
+  assert.match(runtime, /spawn\(comspec, \['\/d', '\/k', command\]/)
+  assert.doesNotMatch(runtime, /start "" cmd\.exe \/k/)
+})

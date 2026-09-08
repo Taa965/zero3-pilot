@@ -35,3 +35,7 @@ test('provider picker removes the redundant selected-provider status panel', () 
   assert.match(picker, /打开官方 CLI 授权/)
   assert.match(picker, /保存 API 配置/)
 })
+
+test('provider cards re-probe runtime status when selected again after CLI login', () => {
+  assert.match(picker, /setSelected\(provider\.id\)[\s\S]*void refresh\(\)/)
+})

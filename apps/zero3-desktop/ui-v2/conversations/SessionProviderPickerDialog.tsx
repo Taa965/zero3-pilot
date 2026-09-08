@@ -205,7 +205,10 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
               <button
                 key={provider.id}
                 type="button"
-                onClick={() => setSelected(provider.id)}
+                onClick={() => {
+                  setSelected(provider.id)
+                  void refresh()
+                }}
                 className={`rounded-lg border p-3 text-left transition-colors ${selected === provider.id ? 'border-blue-500 bg-blue-500/5' : 'border-(--ui-border) hover:bg-(--ui-control-hover-background)'}`}
               >
                 <div className="flex items-center gap-2">

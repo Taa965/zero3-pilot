@@ -775,13 +775,16 @@ async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) 
   const command = provider === 'codex' ? 'codex login' : provider === 'claude' ? 'claude auth login' : 'agy'
   const { spawn } = await import('node:child_process')
   const comspec = process.env.ComSpec || 'cmd.exe'
-  const child = spawn(comspec, ['/d', '/s', '/c', 'start "" cmd.exe /k "' + command + '"'], {
+  // Spawn one independent command prompt directly. Nesting cmd.exe through
+  // The start command adds a second quoting layer; Electron/Node argument escaping can
+  // make Windows interpret the quote prefix as a bogus path.
+  const child = spawn(comspec, ['/d', '/k', command], {
     detached: true,
     stdio: 'ignore',
     windowsHide: false
   })
   child.unref()
-  return { opened: true, detail: '已打开官方 CLI 授权终端；完成登录后回到 Zero3 点击刷新状态' }
+  return { opened: true, detail: '已打开官方 CLI 授权终端；完成登录后重新点击该平台卡片即可检测授权状态' }
 }
 // 'codex login status' answers both questions at once: a spawn failure means
 // the official client is not installed, a non-zero exit means it is installed
