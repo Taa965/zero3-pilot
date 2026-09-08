@@ -88,7 +88,7 @@ requireAll(preload, preloadPath, ["contextBridge.exposeInMainWorld('zero3AgentTa
 
 const globalPath = 'src/global.d.ts'
 const global = read(globalPath)
-requireAll(global, globalPath, ["type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'AUTO'",'zero3AgentTask: {','zero3AgentTasks: {','recoveryInspect:','recoveryResolve:'])
+requireAll(global, globalPath, ["type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'AUTO'",'zero3AgentTask: {','zero3AgentTasks: {','recoveryInspect:','recoveryResolve:'])
 
 const handoffPath = 'src/app/chat/sidebar/gpt-web-handoff-actions.tsx'
 const handoff = read(handoffPath)
