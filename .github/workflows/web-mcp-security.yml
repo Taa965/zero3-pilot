@@ -1,0 +1,42 @@
+name: Web MCP Security Smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/mcp-runtime/project-context-*.mjs'
+      - 'apps/zero3-desktop/mcp-runtime/project-context-*.test.mjs'
+      - 'apps/zero3-desktop/scripts/apply-project-context-http.mjs'
+      - '.github/workflows/web-mcp-security.yml'
+
+jobs:
+  web-mcp-security:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+
+      - name: Diff hygiene
+        run: git diff --check origin/main...HEAD
+
+      - name: HTTP transport syntax
+        run: |
+          node --check apps/zero3-desktop/mcp-runtime/project-context-http.mjs
+          node --check apps/zero3-desktop/mcp-runtime/project-context-http-security.mjs
+          node --check apps/zero3-desktop/mcp-runtime/project-context-http-policy.mjs
+
+      - name: Core policy and HTTP front-door tests
+        run: >-
+          node --test
+          apps/zero3-desktop/mcp-runtime/project-context-core.test.mjs
+          apps/zero3-desktop/mcp-runtime/project-context-http-policy.test.mjs
+          apps/zero3-desktop/mcp-runtime/project-context-http-security.test.mjs
