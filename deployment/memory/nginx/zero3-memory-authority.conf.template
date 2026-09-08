@@ -1,5 +1,5 @@
 # Render __ZERO3_MEMORY_DOMAIN__ before installation.
-# The Rust service stays loopback-only on 127.0.0.1:8790.
+# The Rust service stays loopback-only on 127.0.0.1:8791.
 
 map $http_upgrade $zero3_memory_connection_upgrade {
     default upgrade;
@@ -14,21 +14,21 @@ server {
     client_max_body_size 512k;
 
     location = /health {
-        proxy_pass http://127.0.0.1:8790/health;
+        proxy_pass http://127.0.0.1:8791/health;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     location = /ready {
-        proxy_pass http://127.0.0.1:8790/ready;
+        proxy_pass http://127.0.0.1:8791/ready;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
     location /v1/ {
-        proxy_pass http://127.0.0.1:8790;
+        proxy_pass http://127.0.0.1:8791;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -43,4 +43,4 @@ server {
 
 # After DNS resolves to this host and `nginx -t` succeeds, obtain TLS with the
 # host's existing certificate-management convention (for example certbot).
-# Do not expose 8790 publicly and do not add a second public listen socket.
+# Do not expose 8791 publicly and do not add a second public listen socket.
