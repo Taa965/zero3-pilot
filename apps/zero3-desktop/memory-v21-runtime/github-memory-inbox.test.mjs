@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHmac } from 'node:crypto'
 import test from 'node:test'
 
 import {
@@ -39,7 +40,7 @@ test('path parser binds project and event id', () => {
 test('webhook signature uses constant-time digest comparison', () => {
   const body = Buffer.from('{"hello":"world"}')
   const secret = 'test-secret'
-  const signature = `sha256=${(await import('node:crypto')).createHmac('sha256', secret).update(body).digest('hex')}`
+  const signature = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`
   assert.equal(verifyGithubSignature(body, signature, secret), true)
   assert.equal(verifyGithubSignature(body, 'sha256=deadbeef', secret), false)
 })
