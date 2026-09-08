@@ -92,6 +92,9 @@ function assertOnlyOverlayChanges() {
     'apps/desktop/src/app/command-palette/index.tsx',
     'apps/desktop/src/app/context-menu/app-context-menu.tsx',
     'apps/desktop/src/app/contrib/hooks/use-desktop-integrations.ts',
+    // apply-codex-primary-chat.mjs patches this file to swap in the Zero3
+    // Ollama model menu, so its diff is overlay output like the rest of them.
+    'apps/desktop/src/app/contrib/surfaces.tsx',
     'apps/desktop/src/app/contrib/wiring.tsx',
     'apps/desktop/src/app/session/hooks/use-session-list-actions.ts',
     'apps/desktop/src/app/settings/about-settings.tsx',
