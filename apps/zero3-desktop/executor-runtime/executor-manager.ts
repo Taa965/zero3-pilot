@@ -1,5 +1,5 @@
-import { failurePolicyFor, isExecutorFailure } from './failure-normalizer.ts'
-import { Zero3ExecutorRouter, type ExecutorRoutePlan } from './executor-router.ts'
+import { isExecutorFailure } from './failure-normalizer.ts'
+import { Zero3FailoverController, type FailoverConfig } from './router/failover-controller.ts'
 import type {
   ExecutorEvent,
   ExecutorFailure,
@@ -32,8 +32,9 @@ export type ExecutorFailoverHandoffCapture = (
 ) => Promise<ExecutorHandoffCheckpointRef>
 
 export interface ExecutorManagerOptions {
-  routePlan?: ExecutorRoutePlan
+  failoverConfig?: FailoverConfig
   captureFailoverHandoff?: ExecutorFailoverHandoffCapture
+  nowMs?: () => number
 }
 
 export interface ExecutorFailoverResult {
@@ -53,17 +54,18 @@ export interface ExecutorBindingSnapshot {
 interface ExecutorBinding extends ExecutorBindingSnapshot {
   session: ExecutorSession
   pendingPermissions: Map<string, boolean>
+  failoverController?: Zero3FailoverController
 }
 
 export class Zero3ExecutorManager {
   readonly #bindings = new Map<string, ExecutorBinding>()
-  readonly #router?: Zero3ExecutorRouter
+  readonly #nowMs: () => number
 
   constructor(
     private readonly registry: Zero3ExecutorRegistry,
     private readonly options: ExecutorManagerOptions = {}
   ) {
-    if (options.routePlan) this.#router = new Zero3ExecutorRouter(registry, options.routePlan)
+    this.#nowMs = options.nowMs ?? (() => Date.now())
   }
 
   async start(
@@ -116,7 +118,8 @@ export class Zero3ExecutorManager {
       policy: { ...policy },
       executorId,
       session,
-      pendingPermissions: new Map()
+      pendingPermissions: new Map(),
+      failoverController: this.createFailoverController(executorId, ref.generation)
     })
     return session
   }
@@ -155,13 +158,14 @@ export class Zero3ExecutorManager {
   async failoverAfterFailure(
     taskId: string,
     executionId: string,
+    eventId: string,
     failure: ExecutorFailure
   ): Promise<ExecutorFailoverResult | null> {
+    if (!eventId.trim()) throw new ExecutorManagerError('failover event id must be non-empty')
     if (!isExecutorFailure(failure)) {
       throw new ExecutorManagerError('failover requires a failure from the frozen Zero3 taxonomy')
     }
-    if (failurePolicyFor(failure.code).failover !== 'eligible') return null
-    if (!this.#router || !this.options.captureFailoverHandoff) return null
+    if (!this.options.captureFailoverHandoff) return null
 
     const key = this.bindingKey(taskId, executionId)
     const binding = this.requireBinding(taskId, executionId)
@@ -169,55 +173,99 @@ export class Zero3ExecutorManager {
       throw new ExecutorManagerError('failover failure source does not match the active executor')
     }
     if (binding.pendingPermissions.size > 0) return null
+    const controller = binding.failoverController
+    if (!controller) return null
 
-    const candidates = this.#router.fallbackCandidatesAfter(binding.executorId, failure)
-    let targetExecutorId: ExecutorId | undefined
-    for (const candidate of candidates) {
-      try {
-        const probe = await this.registry.require(candidate).probe()
-        if (probe.status === 'ready') {
-          targetExecutorId = candidate
-          break
-        }
-      } catch {
-        // A failed probe is not authoritative evidence that the current task can
-        // safely transfer to that candidate. Continue to the next frozen route.
-      }
+    const action = controller.onFailure(eventId, failure, this.#nowMs())
+    if (action.type !== 'switch') return null
+    if (action.fromExecutorId !== binding.executorId) {
+      controller.abortSwitch(eventId)
+      throw new ExecutorManagerError('failover controller switch source does not match the active executor')
     }
-    if (!targetExecutorId) return null
+    if (action.targetGeneration !== binding.session.generation + 1) {
+      controller.abortSwitch(eventId)
+      throw new ExecutorManagerError('failover controller target generation is not current generation + 1')
+    }
 
-    const checkpoint = await this.options.captureFailoverHandoff({
-      identity: this.snapshotIdentity(binding.identity),
-      policy: { ...binding.policy },
-      session: {
-        executorId: binding.session.executorId,
-        sessionId: binding.session.sessionId,
-        generation: binding.session.generation
-      },
-      failure: { ...failure },
-      targetExecutorId
-    })
-    this.assertHandoffCheckpoint(checkpoint)
-    if (checkpoint.generation !== binding.session.generation) {
-      throw new ExecutorManagerError('failover checkpoint generation does not match the active executor generation')
+    let targetReady = false
+    try {
+      targetReady = (await this.registry.require(action.toExecutorId).probe()).status === 'ready'
+    } catch {
+      targetReady = false
+    }
+    if (!targetReady) {
+      controller.abortSwitch(eventId)
+      return null
+    }
+
+    let checkpoint: ExecutorHandoffCheckpointRef
+    try {
+      checkpoint = await this.options.captureFailoverHandoff({
+        identity: this.snapshotIdentity(binding.identity),
+        policy: { ...binding.policy },
+        session: {
+          executorId: binding.session.executorId,
+          sessionId: binding.session.sessionId,
+          generation: binding.session.generation
+        },
+        failure: { ...failure },
+        targetExecutorId: action.toExecutorId
+      })
+      this.assertHandoffCheckpoint(checkpoint)
+      if (checkpoint.generation !== binding.session.generation) {
+        throw new ExecutorManagerError('failover checkpoint generation does not match the active executor generation')
+      }
+      if (checkpoint.generation + 1 !== action.targetGeneration) {
+        throw new ExecutorManagerError('failover checkpoint does not authorize the controller target generation')
+      }
+    } catch (error) {
+      controller.abortSwitch(eventId)
+      throw error
     }
 
     const previousExecutorId = binding.executorId
     const previousExecutor = this.registry.require(previousExecutorId)
-    // Do not create the next writer until the old executor has positively closed.
-    // If close fails, keep the binding quarantined and fail closed.
-    await previousExecutor.close(binding.session)
+    try {
+      // Do not create the next writer until the old executor has positively closed.
+      // If close fails, keep the binding quarantined and fail closed.
+      await previousExecutor.close(binding.session)
+    } catch (error) {
+      controller.abortSwitch(eventId)
+      throw error
+    }
     this.#bindings.delete(key)
 
-    const session = await this.startFromHandoff(
-      targetExecutorId,
-      binding.identity,
-      binding.policy,
-      checkpoint
-    )
+    const targetExecutor = this.registry.require(action.toExecutorId)
+    const context: ExecutorStartContext = {
+      contract: ZERO3_EXECUTOR_CONTRACT,
+      identity: this.snapshotIdentity(binding.identity),
+      policy: { ...binding.policy },
+      generation: action.targetGeneration,
+      handoff: { ...checkpoint }
+    }
+
+    let session: ExecutorSession
+    try {
+      session = await targetExecutor.start(context)
+      this.assertReturnedSession(action.toExecutorId, action.targetGeneration, session)
+      controller.commitVerifiedSwitch(eventId, session.generation)
+    } catch (error) {
+      try { controller.abortSwitch(eventId) } catch {}
+      throw error
+    }
+
+    this.#bindings.set(key, {
+      identity: this.snapshotIdentity(binding.identity),
+      policy: { ...binding.policy },
+      executorId: action.toExecutorId,
+      session,
+      pendingPermissions: new Map(),
+      failoverController: controller
+    })
+
     return {
       fromExecutorId: previousExecutorId,
-      toExecutorId: targetExecutorId,
+      toExecutorId: action.toExecutorId,
       session,
       checkpoint
     }
@@ -310,9 +358,19 @@ export class Zero3ExecutorManager {
       policy: policySnapshot,
       executorId,
       session,
-      pendingPermissions: new Map()
+      pendingPermissions: new Map(),
+      failoverController: this.createFailoverController(executorId, generation)
     })
     return session
+  }
+
+  private createFailoverController(executorId: ExecutorId, generation: number): Zero3FailoverController | undefined {
+    const config = this.options.failoverConfig
+    if (!config) return undefined
+    if (!config.candidates.includes(executorId)) {
+      throw new ExecutorManagerError(`executor is not present in the configured failover candidate order: ${executorId}`)
+    }
+    return new Zero3FailoverController(config, executorId, generation)
   }
 
   private requireBinding(taskId: string, executionId: string): ExecutorBinding {
