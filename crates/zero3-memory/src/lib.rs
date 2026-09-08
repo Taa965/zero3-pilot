@@ -4,6 +4,8 @@
 //! an explicit approval bit at the storage boundary; callers cannot silently
 //! promote an observation into long-term personal memory.
 
+pub mod sync_queue;
+
 use std::path::Path;
 use std::sync::Mutex;
 

@@ -1,8 +1,5 @@
-#[path = "../src/sync_queue.rs"]
-mod sync_queue;
-
 use serde_json::json;
-use sync_queue::{PendingState, SqliteSyncQueue};
+use zero3_memory::sync_queue::{PendingState, SqliteSyncQueue};
 
 #[test]
 fn offline_queue_can_ack_after_reconnect() {
