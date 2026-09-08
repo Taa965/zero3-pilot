@@ -75,7 +75,8 @@ class FakeClaudeExecutor implements Zero3ClaudeExecutorPort {
 test('Claude project MCP config is strictly scoped to the TaskSpec project', () => {
   const config = JSON.parse(zero3ClaudeProjectMcpConfig(task(), {
     serverPath: '/opt/zero3/project-context-server.mjs',
-    stateDir: '/var/lib/zero3/project-context'
+    stateDir: '/var/lib/zero3/project-context',
+    memoryEnv: { ZERO3_MEMORY_AUTHORITY_V2: '1', ZERO3_MEMORY_AUTHORITY_TOKEN_FILE: '/secure/token', ZERO3_ACTIVE_PROJECT_ID: 'must-not-win' }
   }))
   const server = config.mcpServers.zero3_project_context
   assert.equal(server.type, 'stdio')
@@ -84,6 +85,9 @@ test('Claude project MCP config is strictly scoped to the TaskSpec project', () 
   assert.equal(server.env.ZERO3_ACTIVE_PROJECT_ID, 'project-a')
   assert.equal(server.env.ZERO3_PROJECT_CONTEXT_DIR, path.resolve('/var/lib/zero3/project-context'))
   assert.equal(server.env.ELECTRON_RUN_AS_NODE, '1')
+  assert.equal(server.env.ZERO3_MEMORY_AUTHORITY_V2, '1')
+  assert.equal(server.env.ZERO3_MEMORY_AUTHORITY_TOKEN_FILE, '/secure/token')
+  assert.equal(server.env.ZERO3_ACTIVE_PROJECT_ID, 'project-a')
 })
 
 test('Claude task dispatch requires handoff_get before execution and preserves result identity', async () => {

@@ -171,3 +171,56 @@ test('socket close schedules bounded reconnect', async () => {
   assert.equal(calls, 2)
   await client.stop()
 })
+
+test('non-retryable server error blocks reconnect instead of hammering authority', async () => {
+  const callbacks = []
+  const { client, socket, states } = makeClient({
+    setTimeoutImpl: (callback, delay) => { callbacks.push({ callback, delay }); return callbacks.length },
+    clearTimeoutImpl: () => {}
+  })
+  await client.start()
+  socket.emitOpen()
+  socket.emitMessage({ type: 'error', code: 'project_denied', message: 'denied', retryable: false })
+  await tick()
+  socket.emitClose()
+  await tick()
+  assert.equal(callbacks.length, 0)
+  assert.equal(states.at(-1).state, 'blocked')
+  assert.equal(states.at(-1).code, 'project_denied')
+})
+
+test('websocket 401/403 handshake failures block reconnect', async () => {
+  const callbacks = []
+  const error = Object.assign(new Error('unauthorized'), { statusCode: 401 })
+  const { client, states } = makeClient({
+    socketFactory: async () => { throw error },
+    setTimeoutImpl: (callback, delay) => { callbacks.push({ callback, delay }); return callbacks.length },
+    clearTimeoutImpl: () => {}
+  })
+  await client.start()
+  await tick()
+  assert.equal(callbacks.length, 0)
+  assert.equal(states.at(-1).state, 'blocked')
+  assert.equal(states.at(-1).status, 401)
+})
+test('base path is preserved for HTTPS batch and WebSocket sync', async () => {
+  const store = new FakeStore()
+  store.pending = [{ event_id: 'evt-path', payload: { event_id: 'evt-path' } }]
+  const socket = new FakeSocket()
+  const urls = []
+  const client = new MemorySyncClient({
+    baseUrl: 'https://34.218.104.186/memory-authority',
+    token: 'abcdefghijklmnopqrstuvwxyz123456',
+    clientId: 'pilot-test', deviceId: 'desktop-main', projects: ['*'], store,
+    socketFactory: async (url) => { urls.push(url); return socket },
+    fetchImpl: async (url) => {
+      urls.push(url)
+      return { ok: true, status: 200, json: async () => ({ results: [{ event_id: 'evt-path', status: 'accepted', sequence: 5 }] }) }
+    }
+  })
+  await client.start()
+  await client.flushPending()
+  assert.equal(urls[0], 'wss://34.218.104.186/memory-authority/v1/sync')
+  assert.equal(urls[1], 'https://34.218.104.186/memory-authority/v1/memory/events:batch')
+  await client.stop()
+})

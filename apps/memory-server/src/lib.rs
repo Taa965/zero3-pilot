@@ -138,6 +138,14 @@ pub struct SyncInfo {
     pub stale: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HandoffSnapshot {
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub version: i64,
+    pub result: Value,
+}
+
 #[async_trait]
 pub trait MemoryRepository: Send + Sync + 'static {
     async fn append(&self, event: MemoryEvent) -> anyhow::Result<AppendOutcome>;
@@ -148,6 +156,7 @@ pub trait MemoryRepository: Send + Sync + 'static {
     ) -> anyhow::Result<Vec<CommittedEvent>>;
     async fn latest_sequence(&self) -> anyhow::Result<i64>;
     async fn project_context(&self, project_id: &str) -> anyhow::Result<ProjectContext>;
+    async fn handoff(&self, project_id: &str, task_id: &str) -> anyhow::Result<HandoffSnapshot>;
     async fn ready(&self) -> anyhow::Result<()>;
 }
 
@@ -175,6 +184,33 @@ impl MemoryRepository for InMemoryRepository {
                 sequence,
             });
         }
+        if event.event_type == "project.context.replaced" {
+            let project_id = event
+                .scope
+                .project_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("project_context_scope_required"))?;
+            let expected = event
+                .payload
+                .get("expectedVersion")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| anyhow!("project_context_expected_version_required"))?;
+            let current = state
+                .events
+                .iter()
+                .filter(|item| {
+                    item.event.scope.project_id.as_deref() == Some(project_id)
+                        && item.event.memory.class == "project"
+                })
+                .map(|item| item.sequence)
+                .max()
+                .unwrap_or(0);
+            if expected != current {
+                return Err(anyhow!(
+                    "project_context_version_conflict: expected {expected}, current {current}"
+                ));
+            }
+        }
         state.sequence += 1;
         let sequence = state.sequence;
         state.by_id.insert(event.event_id.clone(), sequence);
@@ -195,6 +231,7 @@ impl MemoryRepository for InMemoryRepository {
         projects: &[String],
     ) -> anyhow::Result<Vec<CommittedEvent>> {
         let allow: HashSet<&str> = projects.iter().map(String::as_str).collect();
+        let allow_all = allow.contains("*");
         Ok(self
             .state
             .lock()
@@ -207,7 +244,7 @@ impl MemoryRepository for InMemoryRepository {
                     .scope
                     .project_id
                     .as_deref()
-                    .is_some_and(|id| allow.contains(id))
+                    .is_some_and(|id| allow_all || allow.contains(id))
             })
             .cloned()
             .collect())
@@ -233,9 +270,43 @@ impl MemoryRepository for InMemoryRepository {
             .iter()
             .filter(|item| item.event.scope.project_id.as_deref() == Some(project_id))
         {
-            version += 1;
             last_sequence = item.sequence;
+            if item.event.memory.class == "project" {
+                version = item.sequence;
+            }
             match item.event.event_type.as_str() {
+                "project.context.replaced" => {
+                    if let Some(context) =
+                        item.event.payload.get("context").and_then(Value::as_object)
+                    {
+                        decisions = context
+                            .get("decisions")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        current_focus = context.get("currentFocus").cloned().unwrap_or(Value::Null);
+                        pitfalls = context
+                            .get("pitfalls")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        glossary = context
+                            .get("glossary")
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .unwrap_or_default();
+                        constraints = context
+                            .get("constraints")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        policies = context
+                            .get("policies")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                    }
+                }
                 "decision.recorded" => decisions.push(item.event.payload.clone()),
                 "pitfall.recorded" => pitfalls.push(item.event.payload.clone()),
                 "constraint.recorded" => constraints.push(item.event.payload.clone()),
@@ -269,6 +340,28 @@ impl MemoryRepository for InMemoryRepository {
                 last_sequence,
                 stale: false,
             },
+        })
+    }
+
+    async fn handoff(&self, project_id: &str, task_id: &str) -> anyhow::Result<HandoffSnapshot> {
+        let state = self.state.lock().await;
+        let items: Vec<_> = state
+            .events
+            .iter()
+            .filter(|item| {
+                item.event.scope.project_id.as_deref() == Some(project_id)
+                    && item.event.scope.task_id.as_deref() == Some(task_id)
+                    && item.event.event_type == "handoff.published"
+            })
+            .collect();
+        let result = items
+            .last()
+            .map(|item| item.event.payload.clone())
+            .unwrap_or(Value::Null);
+        Ok(HandoffSnapshot {
+            task_id: task_id.to_owned(),
+            version: i64::try_from(items.len()).unwrap_or(i64::MAX),
+            result,
         })
     }
 
@@ -354,10 +447,17 @@ impl MemoryRepository for PostgresRepository {
             return Ok(Vec::new());
         }
         let client = self.client().await?;
-        let rows = client.query(
-            "SELECT sequence, event_id::text, created_at::text, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence, entity_type, entity_id, supersedes::text[], payload, source_type, source_ref, source_hash FROM memory_events WHERE sequence > $1 AND project_id = ANY($2) ORDER BY sequence ASC LIMIT 5000",
-            &[&sequence, &projects],
-        ).await?;
+        let rows = if projects.iter().any(|project| project == "*") {
+            client.query(
+                "SELECT sequence, event_id::text, created_at::text, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence, entity_type, entity_id, supersedes::text[], payload, source_type, source_ref, source_hash FROM memory_events WHERE sequence > $1 AND project_id IS NOT NULL ORDER BY sequence ASC LIMIT 5000",
+                &[&sequence],
+            ).await?
+        } else {
+            client.query(
+                "SELECT sequence, event_id::text, created_at::text, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence, entity_type, entity_id, supersedes::text[], payload, source_type, source_ref, source_hash FROM memory_events WHERE sequence > $1 AND project_id = ANY($2) ORDER BY sequence ASC LIMIT 5000",
+                &[&sequence, &projects],
+            ).await?
+        };
         rows.into_iter()
             .map(|row| {
                 let authority: i16 = row.get(12);
@@ -440,6 +540,26 @@ impl MemoryRepository for PostgresRepository {
         })
     }
 
+    async fn handoff(&self, project_id: &str, task_id: &str) -> anyhow::Result<HandoffSnapshot> {
+        let client = self.client().await?;
+        let row = client.query_opt(
+            "SELECT current_version, content FROM memory_entities WHERE project_id=$1 AND task_id=$2 AND memory_class='task' AND entity_type='handoff' AND verification_status NOT IN ('superseded','revoked','contradicted') ORDER BY updated_at DESC, entity_id DESC LIMIT 1",
+            &[&project_id, &task_id],
+        ).await?;
+        let Some(row) = row else {
+            return Ok(HandoffSnapshot {
+                task_id: task_id.to_owned(),
+                version: 0,
+                result: Value::Null,
+            });
+        };
+        Ok(HandoffSnapshot {
+            task_id: task_id.to_owned(),
+            version: row.get(0),
+            result: row.get(1),
+        })
+    }
+
     async fn ready(&self) -> anyhow::Result<()> {
         self.client().await?.query_one("SELECT 1", &[]).await?;
         Ok(())
@@ -462,6 +582,10 @@ pub fn router(repo: Arc<dyn MemoryRepository>, auth: AuthPolicy) -> Router {
         .route("/v1/memory/events", post(append_event))
         .route("/v1/memory/events:batch", post(append_batch))
         .route("/v1/projects/:project_id/context", get(project_context))
+        .route(
+            "/v1/projects/:project_id/tasks/:task_id/handoff",
+            get(task_handoff),
+        )
         .route("/v1/sync", get(sync_upgrade))
         .with_state(state)
 }
@@ -501,6 +625,9 @@ fn authorize_event(grant: &AuthGrant, event: &MemoryEvent) -> Result<(), AuthFai
 fn repository_error_code(error: &anyhow::Error) -> (&'static str, bool) {
     for cause in error.chain() {
         let message = cause.to_string();
+        if message.contains("project_context_version_conflict") {
+            return ("project_context_version_conflict", true);
+        }
         if message.contains("entity_version_conflict") {
             return ("entity_version_conflict", true);
         }
@@ -691,6 +818,31 @@ async fn project_context(
     }
 }
 
+async fn task_handoff(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((project_id, task_id)): Path<(String, String)>,
+) -> Response {
+    let grant = match authenticate(&state, &headers) {
+        Ok(grant) => grant,
+        Err(failure) => return auth_failure_response(failure),
+    };
+    if !grant.allows_project(&project_id) {
+        return auth_failure_response(AuthFailure {
+            status: StatusCode::FORBIDDEN,
+            code: "project_denied",
+        });
+    }
+    match state.repo.handoff(&project_id, &task_id).await {
+        Ok(handoff) => (StatusCode::OK, Json(json!(handoff))).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"handoff_read_failed","message":error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
 async fn sync_upgrade(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -754,6 +906,13 @@ async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
         return;
     }
 
+    // Subscribe before the catch-up query so an event committed between
+    // history replay and the live loop is delivered (duplicates are safe).
+    let requested_projects = hello.projects.clone();
+    let projects: HashSet<String> = requested_projects.iter().cloned().collect();
+    let all_projects = projects.contains("*");
+    let mut receiver = state.bus.subscribe();
+
     let latest = match state.repo.latest_sequence().await {
         Ok(value) => value,
         Err(_) => return,
@@ -769,7 +928,7 @@ async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
     }
     if let Ok(events) = state
         .repo
-        .events_after(hello.last_sequence, &hello.projects)
+        .events_after(hello.last_sequence, &requested_projects)
         .await
     {
         if !events.is_empty() {
@@ -785,8 +944,6 @@ async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
         }
     }
 
-    let projects: HashSet<String> = hello.projects.into_iter().collect();
-    let mut receiver = state.bus.subscribe();
     loop {
         tokio::select! {
             incoming = socket.recv() => match incoming {
@@ -806,7 +963,7 @@ async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
             },
             published = receiver.recv() => match published {
                 Ok(item) => {
-                    if item.event.scope.project_id.as_ref().is_some_and(|id| projects.contains(id))
+                    if item.event.scope.project_id.as_ref().is_some_and(|id| all_projects || projects.contains(id))
                         && socket.send(Message::Text(json!({"type":"memory.changed","sequence":item.sequence,"event":item.event}).to_string())).await.is_err() {
                         break;
                     }
@@ -956,6 +1113,12 @@ mod tests {
 
     #[test]
     fn repository_conflicts_are_classified_for_offline_replay() {
+        let project_error =
+            anyhow!("project_context_version_conflict").context("append memory event");
+        assert_eq!(
+            repository_error_code(&project_error),
+            ("project_context_version_conflict", true)
+        );
         let version_error =
             anyhow!("database rejected: entity_version_conflict").context("append memory event");
         assert_eq!(
@@ -972,6 +1135,106 @@ mod tests {
             repository_error_code(&invalid),
             ("memory_event_rejected", false)
         );
+    }
+
+    #[tokio::test]
+    async fn compat_snapshot_is_cas_guarded_and_typed_events_continue_after_it() {
+        let app = router(Arc::new(InMemoryRepository::default()), test_auth());
+        let mut snapshot = sample_event(
+            "66666666-6666-4666-8666-666666666666",
+            "project.context.replaced",
+        );
+        snapshot.memory.entity_type = "project_context".into();
+        snapshot.memory.entity_id = "project-context".into();
+        snapshot.payload = json!({"expectedVersion":0,"context":{"decisions":[{"text":"snapshot"}],"currentFocus":null,"pitfalls":[],"glossary":{},"constraints":[],"policies":[]}});
+        let response = app
+            .clone()
+            .oneshot(
+                authorized(Request::post("/v1/memory/events"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&snapshot).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut stale = snapshot.clone();
+        stale.event_id = "77777777-7777-4777-8777-777777777777".into();
+        let response = app
+            .clone()
+            .oneshot(
+                authorized(Request::post("/v1/memory/events"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&stale).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let typed = sample_event("88888888-8888-4888-8888-888888888888", "decision.recorded");
+        let response = app
+            .clone()
+            .oneshot(
+                authorized(Request::post("/v1/memory/events"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&typed).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .oneshot(
+                authorized(Request::get("/v1/projects/project-a/context"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let value: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(value["version"], 2);
+        assert_eq!(value["payload"]["decisions"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn handoff_endpoint_returns_latest_task_handoff() {
+        let app = router(Arc::new(InMemoryRepository::default()), test_auth());
+        let mut event = sample_event("99999999-9999-4999-8999-999999999999", "handoff.published");
+        event.scope.task_id = Some("task-1".into());
+        event.memory.class = "task".into();
+        event.memory.entity_type = "handoff".into();
+        event.memory.entity_id = "handoff:task-1".into();
+        event.memory.expected_entity_version = Some(0);
+        event.payload =
+            json!({"protocol":"zero3.execution-result.v2","task_id":"task-1","status":"COMPLETE"});
+        let response = app
+            .clone()
+            .oneshot(
+                authorized(Request::post("/v1/memory/events"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = app
+            .oneshot(
+                authorized(Request::get("/v1/projects/project-a/tasks/task-1/handoff"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(value["taskId"], "task-1");
+        assert_eq!(value["version"], 1);
+        assert_eq!(value["result"]["status"], "COMPLETE");
     }
 
     #[tokio::test]

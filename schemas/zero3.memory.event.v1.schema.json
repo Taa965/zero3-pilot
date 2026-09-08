@@ -42,7 +42,7 @@
         "task.failed", "handoff.published", "artifact.recorded",
         "sync.client_connected", "sync.client_recovered",
         "sync.conflict_detected", "sync.offline_batch_ingested",
-        "memory.corrected", "memory.superseded", "memory.revoked"
+        "project.context.replaced", "memory.corrected", "memory.superseded", "memory.revoked"
       ]
     },
     "memory": {

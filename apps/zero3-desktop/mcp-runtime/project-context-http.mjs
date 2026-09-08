@@ -5,7 +5,7 @@ import { createMcpHandler, McpServer } from '@modelcontextprotocol/server'
 import { toNodeHandler } from '@modelcontextprotocol/node'
 import * as z from 'zod/v4'
 
-import { createProjectContextCore } from './project-context-core.mjs'
+import { createProjectContextAuthorityAdapter } from './project-context-authority-adapter.mjs'
 import { appendHttpAudit, filterWebEgressPayload, isProjectWebAllowed, mergeWebIngressPayload, readBearerToken } from './project-context-http-policy.mjs'
 
 const SERVER_NAME = 'zero3-project-context-http'
@@ -19,7 +19,7 @@ const PORT = (() => {
 })()
 const WRITE_VERIFIED = process.env.ZERO3_MCP_HTTP_WRITE_VERIFIED === '1'
 const STATE_DIR = process.env.ZERO3_MCP_HTTP_STATE_DIR
-const core = createProjectContextCore({ rootDir: process.env.ZERO3_PROJECT_CONTEXT_DIR })
+const core = createProjectContextAuthorityAdapter({ rootDir: process.env.ZERO3_PROJECT_CONTEXT_DIR })
 
 function toolResult(value) {
   return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value }

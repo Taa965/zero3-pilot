@@ -6,6 +6,8 @@ import { McpServer } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import * as z from 'zod/v4'
 
+import { createProjectContextAuthorityAdapter } from './project-context-authority-adapter.mjs'
+
 const SERVER = 'zero3-task-gateway'
 const VERSION = '0.1.0'
 const MAX_JSON_BYTES = 4 * 1024 * 1024
@@ -54,9 +56,16 @@ async function taskSnapshot(id) {
   if (value?.task?.taskId !== id && value?.taskId !== id) throw new Error('Zero3 task snapshot identity mismatch')
   return value
 }
+let projectAuthorityAdapter = null
+function authorityAdapter() {
+  if (!projectAuthorityAdapter) {
+    projectAuthorityAdapter = createProjectContextAuthorityAdapter({ rootDir: contextRoot(), activeProjectId: projectId() })
+  }
+  return projectAuthorityAdapter
+}
 async function projectContext(id) {
   assertProject(id)
-  return (await readJson(path.join(contextRoot(), 'projects', `${storageName(id)}.json`))) ?? { projectId: id, version: 0, payload: null }
+  return authorityAdapter().getProject(id)
 }
 async function artifactList(id) {
   assertTask(id)

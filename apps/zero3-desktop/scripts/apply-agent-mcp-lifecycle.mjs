@@ -63,7 +63,8 @@ const startReplacement = String.raw`    const preflight = await zero3GitEvidence
         stateDir: zero3AgentTaskStateRoot,
         artifactDir: zero3ArtifactRoot,
         reviewDir: zero3ReviewRoot,
-        projectContextDir: zero3ProjectContextRoot
+        projectContextDir: zero3ProjectContextRoot,
+        memoryEnv: zero3MemoryAuthorityChildEnv('antigravity')
       })
       const started = await zero3Antigravity.startTurn({
         ...input,

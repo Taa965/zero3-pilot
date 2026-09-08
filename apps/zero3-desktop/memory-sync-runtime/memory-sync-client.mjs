@@ -21,20 +21,22 @@ function normalizeProjects(projects) {
   return [...new Set(projects.map((item, index) => nonEmpty(item, `projects[${index}]`)))]
 }
 
+function endpointUrl(baseUrl, relativePath) {
+  const url = new URL(baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`)
+  const basePath = url.pathname.endsWith('/') ? url.pathname : `${url.pathname}/`
+  url.pathname = `${basePath}${String(relativePath).replace(/^\/+/, '')}`.replace(/\/{2,}/g, '/')
+  url.search = ''
+  url.hash = ''
+  return url
+}
 function websocketUrl(baseUrl) {
-  const url = new URL(baseUrl)
+  const url = endpointUrl(baseUrl, 'v1/sync')
   if (url.protocol === 'https:') url.protocol = 'wss:'
   else if (url.protocol === 'http:') url.protocol = 'ws:'
   else throw new MemorySyncError('invalid_config', 'memory base URL must be http or https')
-  url.pathname = '/v1/sync'
-  url.search = ''
-  url.hash = ''
   return url.toString()
 }
-
-function httpUrl(baseUrl, path) {
-  return new URL(path, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString()
-}
+function httpUrl(baseUrl, relativePath) { return endpointUrl(baseUrl, relativePath).toString() }
 
 export class MemorySyncClient {
   #config
@@ -212,9 +214,18 @@ export class MemorySyncClient {
         socket.send(JSON.stringify({ type: 'pong', at: message.at ?? new Date().toISOString() }))
         break
       case 'error': {
-        const error = new MemorySyncError(message.code ?? 'server_sync_error', message.message ?? 'memory sync server error', { retryable: Boolean(message.retryable) })
+        const retryable = Boolean(message.retryable)
+        const error = new MemorySyncError(message.code ?? 'server_sync_error', message.message ?? 'memory sync server error', { retryable })
         this.#config.onError(error)
-        if (message.retryable) this.#onDisconnect(socket, error)
+        if (retryable) {
+          this.#onDisconnect(socket, error)
+        } else {
+          this.#stopped = true
+          this.#ready = false
+          this.#socket = null
+          try { socket.close?.() } catch {}
+          this.#emitState('blocked', { code: error.code })
+        }
         break
       }
       default:
@@ -243,6 +254,15 @@ export class MemorySyncClient {
 
   #scheduleReconnect(error) {
     if (this.#stopped) return
+    const status = Number(error?.statusCode ?? error?.status ?? 0)
+    if (status === 401 || status === 403) {
+      this.#stopped = true
+      this.#ready = false
+      const blocked = error instanceof Error ? error : new MemorySyncError('socket_auth_error', String(error))
+      this.#config.onError(blocked)
+      this.#emitState('blocked', { status })
+      return
+    }
     if (error) this.#config.onError(error instanceof Error ? error : new MemorySyncError('socket_error', String(error)))
     if (this.#reconnectTimer) return
     const delay = this.#config.backoff[Math.min(this.#reconnectIndex, this.#config.backoff.length - 1)]

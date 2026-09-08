@@ -15,6 +15,7 @@ export type Zero3TaskMcpLeaseInput = {
   artifactDir: string
   reviewDir: string
   projectContextDir: string
+  memoryEnv?: Record<string, string>
 }
 
 type Backup = { existed: boolean; content: string | null }
@@ -72,6 +73,7 @@ export class Zero3AntigravityMcpLease {
       command: path.resolve(input.electronExecutable),
       args: [path.resolve(input.serverPath)],
       env: {
+        ...(input.memoryEnv ?? {}),
         ELECTRON_RUN_AS_NODE: '1',
         ZERO3_MCP_TASK_ID: taskId,
         ZERO3_MCP_PROJECT_ID: projectId,

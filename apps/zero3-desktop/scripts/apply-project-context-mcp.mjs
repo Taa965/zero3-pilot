@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
 import { applyZero3ProjectContextHttp } from './apply-project-context-http.mjs'
+import { applyZero3MemoryAuthorityV21 } from './apply-memory-authority-v21.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'mcp-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp')
@@ -31,9 +32,10 @@ const ZERO3_UNASSIGNED_PROJECT_ID = '__zero3_unassigned__'
 function zero3ProjectContextMcpConfig(projectId?: string): Record<string, unknown> {
   const serverPath = path.join(app.getAppPath(), 'electron', 'zero3', 'mcp', 'project-context-server.mjs')
   const stateDir = path.join(app.getPath('userData'), 'zero3', 'project-context')
+  const memoryEnv = zero3MemoryAuthorityChildEnv('codex')
   return { 'mcp_servers.zero3_project_context': {
     command: process.execPath, args: [serverPath],
-    env: { ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: stateDir, ZERO3_ACTIVE_PROJECT_ID: projectId ?? ZERO3_UNASSIGNED_PROJECT_ID },
+    env: { ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: stateDir, ZERO3_ACTIVE_PROJECT_ID: projectId ?? ZERO3_UNASSIGNED_PROJECT_ID, ...memoryEnv },
     enabled: true, required: true, startup_timeout_sec: 15, tool_timeout_sec: 30,
     default_tools_approval_mode: 'approve',
     enabled_tools: ['project_get_context', 'handoff_get', 'project_put_context', 'handoff_publish']
@@ -49,7 +51,8 @@ function zero3WithProjectContextMcp(method: string, params: unknown): unknown {
 }
 `
 export function applyZero3ProjectContextMcp() {
-  for (const file of ['project-context-server.mjs', 'project-context-core.mjs']) {
+  applyZero3MemoryAuthorityV21()
+  for (const file of ['project-context-server.mjs', 'project-context-core.mjs', 'project-context-authority-adapter.mjs']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 project-context MCP source is missing: ${source}`)
     write(path.join(targetDir, file), read(source))
