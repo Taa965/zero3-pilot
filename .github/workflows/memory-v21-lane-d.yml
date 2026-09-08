@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'crates/zero3-memory/src/lib.rs'
       - 'crates/zero3-memory/src/sync_queue.rs'
       - 'crates/zero3-memory/tests/sync_queue.rs'
       - '.github/workflows/memory-v21-lane-d.yml'
@@ -18,5 +19,5 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy -p zero3-memory --all-targets -- -D warnings
-      - run: cargo test -p zero3-memory --test sync_queue
+      - run: cargo clippy --locked -p zero3-memory --all-targets -- -D warnings
+      - run: cargo test --locked -p zero3-memory --test sync_queue
