@@ -18,6 +18,7 @@ interface UnifiedSessionListProps {
 
 const CONTEXT_MENU_WIDTH = 184
 const CONTEXT_MENU_HEIGHT = 64
+const GPT_PREWARM_DELAY_MS = 150
 
 const PROVIDER_MARKS = {
   codex: { symbol: '⌘', color: 'text-green-500' },
@@ -39,6 +40,7 @@ export function UnifiedSessionList({
   const [query, setQuery] = useState('')
   const [menu, setMenu] = useState<{ session: WebSession; x: number; y: number } | null>(null)
   const paneRef = useRef<HTMLDivElement>(null)
+  const prewarmTimersRef = useRef(new Map<string, number>())
 
   useEffect(() => {
     if (!menu) return
@@ -59,6 +61,30 @@ export function UnifiedSessionList({
       window.removeEventListener('blur', close)
     }
   }, [menu])
+
+  useEffect(() => {
+    return () => {
+      for (const timer of prewarmTimersRef.current.values()) window.clearTimeout(timer)
+      prewarmTimersRef.current.clear()
+    }
+  }, [])
+
+  const cancelPrewarm = (id: string) => {
+    const timer = prewarmTimersRef.current.get(id)
+    if (timer == null) return
+    window.clearTimeout(timer)
+    prewarmTimersRef.current.delete(id)
+  }
+
+  const queuePrewarm = (session: WebSession) => {
+    if (session.provider !== 'gpt' || session.id === activeId) return
+    cancelPrewarm(session.id)
+    const timer = window.setTimeout(() => {
+      prewarmTimersRef.current.delete(session.id)
+      void window.zero3GptWeb.warm({ id: session.id }).catch(() => {})
+    }, GPT_PREWARM_DELAY_MS)
+    prewarmTimersRef.current.set(session.id, timer)
+  }
 
   const openMenu = (session: WebSession, event: React.MouseEvent) => {
     event.preventDefault()
@@ -98,7 +124,14 @@ export function UnifiedSessionList({
     return (
       <button
         key={session.id}
-        onClick={() => onSelect(session)}
+        onClick={() => {
+          cancelPrewarm(session.id)
+          onSelect(session)
+        }}
+        onMouseEnter={() => queuePrewarm(session)}
+        onMouseLeave={() => cancelPrewarm(session.id)}
+        onFocus={() => queuePrewarm(session)}
+        onBlur={() => cancelPrewarm(session.id)}
         onContextMenu={event => openMenu(session, event)}
         className={cn(
           'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
