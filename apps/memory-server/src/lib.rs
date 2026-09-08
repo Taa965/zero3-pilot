@@ -498,6 +498,19 @@ fn authorize_event(grant: &AuthGrant, event: &MemoryEvent) -> Result<(), AuthFai
     )
 }
 
+fn repository_error_code(error: &anyhow::Error) -> (&'static str, bool) {
+    for cause in error.chain() {
+        let message = cause.to_string();
+        if message.contains("entity_version_conflict") {
+            return ("entity_version_conflict", true);
+        }
+        if message.contains("authority_conflict") {
+            return ("authority_conflict", true);
+        }
+    }
+    ("memory_event_rejected", false)
+}
+
 async fn append_event(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -520,11 +533,19 @@ async fn append_event(
             }
             (StatusCode::OK, Json(json!(outcome))).into_response()
         }
-        Err(error) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"memory_event_rejected","message":error.to_string()})),
-        )
-            .into_response(),
+        Err(error) => {
+            let (code, conflict) = repository_error_code(&error);
+            let status = if conflict {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (
+                status,
+                Json(json!({"error":code,"message":error.to_string()})),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -565,9 +586,14 @@ async fn append_batch(
                 }
                 results.push(json!(outcome));
             }
-            Err(error) => results.push(
-                json!({"event_id":event.event_id,"status":"rejected","error":error.to_string()}),
-            ),
+            Err(error) => {
+                let (code, conflict) = repository_error_code(&error);
+                results.push(json!({
+                    "event_id": event.event_id,
+                    "status": if conflict { "conflict" } else { "rejected" },
+                    "error": code
+                }));
+            }
         }
     }
     Json(json!({"results":results})).into_response()
@@ -836,6 +862,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn repository_conflicts_are_classified_for_offline_replay() {
+        let version_error =
+            anyhow!("database rejected: entity_version_conflict").context("append memory event");
+        assert_eq!(
+            repository_error_code(&version_error),
+            ("entity_version_conflict", true)
+        );
+        let authority_error = anyhow!("authority_conflict").context("append memory event");
+        assert_eq!(
+            repository_error_code(&authority_error),
+            ("authority_conflict", true)
+        );
+        let invalid = anyhow!("bad payload").context("append memory event");
+        assert_eq!(
+            repository_error_code(&invalid),
+            ("memory_event_rejected", false)
+        );
     }
 
     #[tokio::test]
