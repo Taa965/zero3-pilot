@@ -31,12 +31,17 @@ INSERT INTO memory_events (
 DO $$
 DECLARE
   v_version BIGINT;
+  v_event_sequence BIGINT;
   v_decisions JSONB;
   v_entity_version BIGINT;
 BEGIN
+  SELECT sequence INTO v_event_sequence FROM memory_events
+    WHERE event_id = '11111111-1111-4111-8111-111111111111';
   SELECT version, decisions INTO v_version, v_decisions
     FROM project_memory_projection WHERE project_id = 'project-a';
-  IF v_version <> 1 THEN RAISE EXCEPTION 'projection version expected 1, got %', v_version; END IF;
+  IF v_version <> v_event_sequence THEN
+    RAISE EXCEPTION 'projection version expected event sequence %, got %', v_event_sequence, v_version;
+  END IF;
   IF jsonb_array_length(v_decisions) <> 1 THEN RAISE EXCEPTION 'expected one projected decision'; END IF;
   IF v_decisions->0->>'text' <> 'AWS is the shared memory authority' THEN RAISE EXCEPTION 'unexpected projected decision'; END IF;
   SELECT current_version INTO v_entity_version FROM memory_entities WHERE entity_id = 'decision-1';
