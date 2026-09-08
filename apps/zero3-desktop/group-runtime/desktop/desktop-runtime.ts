@@ -7,6 +7,7 @@ import { Zero3ExecutorManager } from '../../executor-runtime/executor-manager.ts
 import { Zero3ExecutorRegistry } from '../../executor-runtime/executor-registry.ts'
 import type { ExecutorPermissionResponse } from '../../executor-runtime/executor-types.ts'
 import { ClaudeExecutor } from '../../executor-runtime/external/claude-executor.ts'
+import { WorkspaceFailoverHandoffCapture } from '../../executor-runtime/handoff/failover-handoff.ts'
 import { HandoffStore } from '../../executor-runtime/handoff/handoff-store.ts'
 import { NativeCodexAppServerDriver, type NativeCodexAppServerTransport } from '../../executor-runtime/native/native-app-server-driver.ts'
 import { NativeCodexExecutor } from '../../executor-runtime/native/native-codex-executor.ts'
@@ -206,9 +207,10 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     const registry = new Zero3ExecutorRegistry()
     registry.register(new NativeCodexExecutor(new NativeCodexAppServerDriver({ transport: codexTransport })))
     registry.register(new ClaudeExecutor())
+    const failoverHandoff = new WorkspaceFailoverHandoffCapture(this.#handoffStore)
     this.executorManager = new Zero3ExecutorManager(registry, {
       routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
-      handoffStore: this.#handoffStore
+      captureFailoverHandoff: failoverHandoff.capture
     })
   }
 
