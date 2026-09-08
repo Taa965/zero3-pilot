@@ -15,6 +15,12 @@ for (const script of [
   execFileSync('bash', ['-n', path.join(root, script)], { stdio: 'inherit' })
 }
 
+const baseMigration = read('deployment/memory/migrations/001_memory_authority_v2_1.sql')
+const confidenceMigration = read('deployment/memory/migrations/008_memory_authority_v2_1_confidence_f64.sql')
+assert.match(baseMigration, /confidence DOUBLE PRECISION CHECK/)
+assert.doesNotMatch(baseMigration, /confidence REAL CHECK/)
+assert.match(confidenceMigration, /ALTER COLUMN confidence TYPE DOUBLE PRECISION/)
+
 const unit = read('deployment/memory/systemd/zero3-memory-authority.service')
 assert.match(unit, /User=zero3memory/)
 assert.match(unit, /WorkingDirectory=\/opt\/zero3-memory-runtime\/current/)
