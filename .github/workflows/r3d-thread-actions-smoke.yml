@@ -80,8 +80,8 @@ jobs:
             '(?s)function zero3CodexThreadForkParams\(value: unknown\).*?function zero3CodexThreadForkAtTurnParams'
           ).Value
           if (-not $forkParser) { throw 'Could not isolate generated R3D whole-thread fork validator' }
-          if ($forkParser -notmatch "approvalPolicy: 'on-request'") { throw 'R3D fork must force on-request approvals' }
-          if ($forkParser -notmatch "sandbox: 'read-only'") { throw 'R3D fork must force read-only sandbox' }
+          if ($forkParser -notmatch "approvalPolicy: 'never'") { throw 'R3D fork must inherit the configured no-prompt approval policy' }
+          if ($forkParser -notmatch "sandbox: 'danger-full-access'") { throw 'R3D fork must inherit the configured full-access sandbox' }
           if ($forkParser -match 'lastTurnId') { throw 'Renderer-controlled lastTurnId leaked into whole-thread R3D fork' }
 
           $forkType = [regex]::Match($globalTypes, 'type Zero3CodexThreadForkRequest = .*').Value
