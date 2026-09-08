@@ -3,8 +3,8 @@ BEGIN;
 CREATE OR REPLACE FUNCTION validate_memory_event_authority()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-    current_authority SMALLINT;
-    current_version BIGINT;
+    v_current_authority SMALLINT;
+    v_current_version BIGINT;
     v_scope_key TEXT;
     v_lock_key BIGINT;
 BEGIN
@@ -30,26 +30,26 @@ BEGIN
     v_lock_key := hashtextextended(v_scope_key || chr(31) || NEW.entity_id, 0);
     PERFORM pg_advisory_xact_lock(v_lock_key);
 
-    SELECT authority, current_version
-      INTO current_authority, current_version
-      FROM memory_entities
-     WHERE scope_key = v_scope_key
-       AND entity_id = NEW.entity_id
+    SELECT e.authority, e.current_version
+      INTO v_current_authority, v_current_version
+      FROM memory_entities AS e
+     WHERE e.scope_key = v_scope_key
+       AND e.entity_id = NEW.entity_id
      FOR UPDATE;
 
     IF NEW.expected_entity_version IS NOT NULL
-       AND NEW.expected_entity_version <> COALESCE(current_version, 0) THEN
+       AND NEW.expected_entity_version <> COALESCE(v_current_version, 0) THEN
         RAISE EXCEPTION USING
             ERRCODE = '40001',
             MESSAGE = 'entity_version_conflict',
-            DETAIL = format('scope=%s entity=%s expected=%s current=%s', v_scope_key, NEW.entity_id, NEW.expected_entity_version, COALESCE(current_version, 0));
+            DETAIL = format('scope=%s entity=%s expected=%s current=%s', v_scope_key, NEW.entity_id, NEW.expected_entity_version, COALESCE(v_current_version, 0));
     END IF;
 
-    IF current_authority IS NOT NULL AND NEW.authority < current_authority THEN
+    IF v_current_authority IS NOT NULL AND NEW.authority < v_current_authority THEN
         RAISE EXCEPTION USING
             ERRCODE = '42501',
             MESSAGE = 'authority_conflict',
-            DETAIL = format('scope=%s entity=%s incoming=%s current=%s', v_scope_key, NEW.entity_id, NEW.authority, current_authority);
+            DETAIL = format('scope=%s entity=%s incoming=%s current=%s', v_scope_key, NEW.entity_id, NEW.authority, v_current_authority);
     END IF;
 
     RETURN NEW;
