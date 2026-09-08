@@ -322,6 +322,10 @@ export class Zero3GptWebProvider {
     // loading. This lets UI v2 keep a cached screenshot (or its lightweight
     // placeholder) visible instead of flashing an empty native WebContentsView.
     if (live.loadState === 'warming') await this.waitUntilRenderable(live)
+    // Suppression is part of show(), not just dom-ready, so a renderer reload or
+    // a timing race can never re-expose ChatGPT's duplicate native header.
+    await this.applyHeaderSuppression(live)
+    if (live.chromeHidden) await this.applyChromeSuppression(live)
 
     this.detachFromParent(live)
     this.hideOtherViewsInWindow(parent.id, id)
@@ -684,6 +688,8 @@ export class Zero3GptWebProvider {
       this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'warming' })
     })
     contents.on('did-stop-loading', () => {
+      void this.applyHeaderSuppression(live)
+      if (live.chromeHidden) void this.applyChromeSuppression(live)
       observe()
       live.loadState = 'warm'
       this.emitEvent({

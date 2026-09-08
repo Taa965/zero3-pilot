@@ -199,6 +199,7 @@ export function applyZero3GptWebProvider() {
   patchFile('electron/main.ts', [
     {
       label: 'GPT Web provider import beside workspace runtime',
+      already: "import { Zero3GptWebProvider } from './zero3/gpt-web/index'",
       from: "import { Zero3WorkspaceEntryStore } from './zero3/workspace/index'",
       to:
         "import { Zero3WorkspaceEntryStore } from './zero3/workspace/index'\n" +
@@ -242,6 +243,32 @@ export function applyZero3GptWebProvider() {
   // Upgrade an already-prepared pinned Hermes tree in place. The main overlay
   // is intentionally rerunnable during development, so changing the generated
   // bridge must not duplicate the entire provider block on the next prepare.
+  patchFile('electron/main.ts', [{
+    label: 'GPT Web promoted toolbar IPC handler',
+    already: "ipcMain.handle('zero3:gpt-web:toolbar-action'",
+    from: "ipcMain.handle('zero3:gpt-web:set-bounds', (_event, request: unknown) => {",
+    to: "ipcMain.handle('zero3:gpt-web:toolbar-action', (_event, request: unknown) => {\n  const input = zero3GptWebRecord(request)\n  return zero3GptWeb.invokeToolbarAction(zero3GptWebId(input), input.action)\n})\nipcMain.handle('zero3:gpt-web:set-bounds', (_event, request: unknown) => {"
+  }])
+  patchFile('electron/preload.ts', [{
+    label: 'GPT Web promoted toolbar preload method',
+    already: "  toolbarAction: request => ipcRenderer.invoke('zero3:gpt-web:toolbar-action'",
+    from: "  setBounds: request => ipcRenderer.invoke('zero3:gpt-web:set-bounds', request),",
+    to: "  toolbarAction: request => ipcRenderer.invoke('zero3:gpt-web:toolbar-action', request),\n  setBounds: request => ipcRenderer.invoke('zero3:gpt-web:set-bounds', request),"
+  }])
+  patchFile('src/global.d.ts', [
+    {
+      label: 'GPT Web promoted toolbar action type',
+      already: 'type Zero3GptWebToolbarAction =',
+      from: 'type Zero3GptWebBounds = { x: number; y: number; width: number; height: number }',
+      to: "type Zero3GptWebBounds = { x: number; y: number; width: number; height: number }\ntype Zero3GptWebToolbarAction = 'sidebar' | 'new_chat' | 'share' | 'more'"
+    },
+    {
+      label: 'GPT Web promoted toolbar renderer method',
+      already: '      toolbarAction: (request:',
+      from: '      setBounds: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<{ ok: true }>',
+      to: '      toolbarAction: (request: { id: string; action: Zero3GptWebToolbarAction }) => Promise<{ action: Zero3GptWebToolbarAction; invoked: true }>\n      setBounds: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<{ ok: true }>'
+    }
+  ])
   patchFile('electron/main.ts', [
     {
       label: 'GPT Web warm/snapshot IPC handlers',
