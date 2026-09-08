@@ -418,9 +418,8 @@ export class Zero3GptWebProvider {
     const id = requiredText(input.id, 'workspace entry id', MAX_ENTRY_ID)
     const bounds = normalizeBounds(input.bounds)
 
-    // Never revive a hidden view that has already aged out of the five-minute
-    // activity window. A click on such an entry intentionally becomes a cold
-    // restore so the provider can reclaim memory predictably.
+    // Trim any expired burst-tier views before switching. The durable ten-view
+    // LRU base tier is never removed merely because five minutes elapsed.
     this.maintainHotPool()
 
     const entry = await this.requireEntry(id)
@@ -939,20 +938,14 @@ export class Zero3GptWebProvider {
 
   private maintainHotPool(protectedEntryId?: string): void {
     const now = Date.now()
-
-    // Five minutes after a hidden session was last selected/left (or prewarmed
-    // without ever being selected), its native renderer is removed from the hot
-    // pool. The cached screenshot remains in memory so a later cold restore can
-    // still appear instant while the page is loading.
-    for (const [id, live] of [...this.live.entries()]) {
-      if (id === protectedEntryId || live.parentWindowId != null) continue
-      const reference = live.lastActivatedAt ?? live.warmedAt
-      if (now - reference > ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS) {
-        this.destroyLive(id, 'suspended')
-      }
-    }
-
     const capacity = this.hotCapacity(now)
+
+    // The newest ten live sessions form the durable LRU base tier. Recent user
+    // activity may temporarily grow that tier up to thirty live renderers, but
+    // once those extra sessions fall outside the five-minute activity window the
+    // capacity contracts back to ten. Do not destroy stale sessions up front:
+    // doing so would erase the persistent base tier before its LRU budget is
+    // applied, which is what caused long-lived sessions to reload on selection.
     while (this.live.size > capacity) {
       const candidate = [...this.live.values()]
         .filter(live => live.entryId !== protectedEntryId && live.parentWindowId == null)
