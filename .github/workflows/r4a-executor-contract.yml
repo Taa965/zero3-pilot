@@ -58,6 +58,7 @@ jobs:
         run: >-
           npx --yes --package tsx@4.20.6 -- tsx --test
           apps/zero3-desktop/executor-runtime/executor-runtime.test.ts
+          apps/zero3-desktop/executor-runtime/executor-failover.test.ts
           apps/zero3-desktop/executor-runtime/external/claude-executor.test.ts
           apps/zero3-desktop/executor-runtime/router/failover-controller.test.ts
           apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts

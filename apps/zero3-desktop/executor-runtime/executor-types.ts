@@ -57,6 +57,7 @@ export interface ExecutorTaskIdentity {
   workspace: string
   repoIdentity?: string
   branch?: string
+  baseSha?: string
   objective: string
   constraints: readonly string[]
   acceptanceCriteria: readonly string[]

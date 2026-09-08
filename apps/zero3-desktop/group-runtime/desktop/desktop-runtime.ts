@@ -7,6 +7,7 @@ import { Zero3ExecutorManager } from '../../executor-runtime/executor-manager.ts
 import { Zero3ExecutorRegistry } from '../../executor-runtime/executor-registry.ts'
 import type { ExecutorPermissionResponse } from '../../executor-runtime/executor-types.ts'
 import { ClaudeExecutor } from '../../executor-runtime/external/claude-executor.ts'
+import { WorkspaceFailoverHandoffCapture } from '../../executor-runtime/handoff/failover-handoff.ts'
 import { HandoffStore } from '../../executor-runtime/handoff/handoff-store.ts'
 import { NativeCodexAppServerDriver, type NativeCodexAppServerTransport } from '../../executor-runtime/native/native-app-server-driver.ts'
 import { NativeCodexExecutor } from '../../executor-runtime/native/native-codex-executor.ts'
@@ -206,7 +207,20 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     const registry = new Zero3ExecutorRegistry()
     registry.register(new NativeCodexExecutor(new NativeCodexAppServerDriver({ transport: codexTransport })))
     registry.register(new ClaudeExecutor())
-    this.executorManager = new Zero3ExecutorManager(registry)
+    const failoverHandoff = new WorkspaceFailoverHandoffCapture(this.#handoffStore)
+    this.executorManager = new Zero3ExecutorManager(registry, {
+      failoverConfig: {
+        candidates: ['native-codex', 'claude'],
+        automaticFailover: true,
+        maxRetries: 1,
+        providerCooldownMs: 60_000,
+        circuitFailureThreshold: 3,
+        circuitOpenMs: 120_000,
+        switchOnAuthRequired: false,
+        returnToPrimaryAfterStage: false
+      },
+      captureFailoverHandoff: failoverHandoff.capture
+    })
   }
 
   async runtimeCapabilities(): Promise<unknown> {

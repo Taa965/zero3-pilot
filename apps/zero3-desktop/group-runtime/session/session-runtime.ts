@@ -1,5 +1,6 @@
 import type {
   ExecutorEvent,
+  ExecutorFailure,
   ExecutorHandoffCheckpointRef,
   ExecutorInput,
   ExecutorPermissionResponse,
@@ -18,6 +19,13 @@ import {
 } from '../contracts/index.ts'
 import { buildDevelopmentSessionPrompt } from './prompt-builder.ts'
 
+export interface ExecutorManagerFailoverResult {
+  fromExecutorId: string
+  toExecutorId: string
+  session: ExecutorSession
+  checkpoint: ExecutorHandoffCheckpointRef
+}
+
 export interface ExecutorManagerPort {
   start(executorId: string, identity: ExecutorTaskIdentity, policy: ExecutorPolicyContext): Promise<ExecutorSession>
   startFromHandoff(
@@ -34,6 +42,12 @@ export interface ExecutorManagerPort {
     checkpoint: ExecutorHandoffCheckpointRef
   ): Promise<ExecutorSession>
   prompt(identity: Pick<ExecutorTaskIdentity, 'taskId' | 'executionId'>, input: ExecutorInput): AsyncIterable<ExecutorEvent>
+  failoverAfterFailure?(
+    taskId: string,
+    executionId: string,
+    eventId: string,
+    failure: ExecutorFailure
+  ): Promise<ExecutorManagerFailoverResult | null>
   respondPermission(taskId: string, executionId: string, response: ExecutorPermissionResponse): Promise<void>
   cancel(taskId: string, executionId: string): Promise<void>
   close(taskId: string, executionId: string): Promise<void>
@@ -55,6 +69,21 @@ function now(): string {
 
 function cloneRuntime(runtime: DevelopmentSessionRuntime): DevelopmentSessionRuntime {
   return { ...runtime }
+}
+
+function failoverContinuation(
+  originalInstruction: string,
+  result: ExecutorManagerFailoverResult,
+  failure: ExecutorFailure
+): string {
+  return [
+    'Continue the same Zero3 task after an executor failover.',
+    `The previous executor ${result.fromExecutorId} stopped with ${failure.code}.`,
+    `A durable handoff checkpoint ${result.checkpoint.checkpointHash} was captured before ${result.toExecutorId} became writer generation ${result.session.generation}.`,
+    'Treat the current workspace and Git state as authoritative. Inspect them before editing; preserve correct existing work and do not blindly repeat side effects.',
+    'Original instruction:',
+    originalInstruction
+  ].join('\n\n')
 }
 
 export function initialSessionRuntime(session: DevelopmentSessionDefinition, at = now()): DevelopmentSessionRuntime {
@@ -94,6 +123,7 @@ export class DevelopmentSessionRunner {
       workspace: session.worktree,
       repoIdentity: group.repository,
       branch: session.branch,
+      baseSha: session.baselineSha,
       objective: session.objective,
       constraints: [
         `baseline=${session.baselineSha}`,
@@ -206,14 +236,68 @@ export class DevelopmentSessionRunner {
     if (this.#runtime.status !== 'running' && this.#runtime.status !== 'waiting_input') {
       throw new DevelopmentSessionRuntimeError(`session cannot prompt while ${this.#runtime.status}`)
     }
-    if (!clientRequestId.trim() || !text.trim()) throw new DevelopmentSessionRuntimeError('instruction request id and text must be non-empty')
-    const input: ExecutorInput = { kind: 'prompt', clientRequestId: clientRequestId.trim(), text }
+    const baseRequestId = clientRequestId.trim()
+    const originalInstruction = text.trim()
+    if (!baseRequestId || !originalInstruction) throw new DevelopmentSessionRuntimeError('instruction request id and text must be non-empty')
+
+    let requestId = baseRequestId
+    let instruction = originalInstruction
     try {
-      for await (const event of this.executorManager.prompt(this.taskIdentity, input)) {
-        await this.applyExecutorEvent(event)
-        await this.sink?.onExecutorEvent(event, this.snapshot())
+      while (true) {
+        const input: ExecutorInput = { kind: 'prompt', clientRequestId: requestId, text: instruction }
+        let failover: ExecutorManagerFailoverResult | null = null
+        for await (const event of this.executorManager.prompt(this.taskIdentity, input)) {
+          if (
+            event.type === 'failure' &&
+            event.failure.code === 'quota_exhausted' &&
+            this.executorManager.failoverAfterFailure
+          ) {
+            try {
+              const failoverEventId = [
+                this.taskIdentity.taskId,
+                this.taskIdentity.executionId,
+                requestId,
+                String(this.#runtime.writerGeneration),
+                String(event.sequence),
+                event.failure.code
+              ].join(':')
+              failover = await this.executorManager.failoverAfterFailure(
+                this.taskIdentity.taskId,
+                this.taskIdentity.executionId,
+                failoverEventId,
+                event.failure
+              )
+            } catch (error) {
+              await this.applyExecutorEvent(event)
+              this.#runtime.blocker = `quota_exhausted;failover_failed:${error instanceof Error ? error.message : String(error)}`
+              await this.persist()
+              await this.sink?.onExecutorEvent(event, this.snapshot())
+              return this.snapshot()
+            }
+            if (failover) {
+              // Count the authoritative failure in the durable Session event sequence,
+              // but do not transition to failed because the writer already transferred.
+              this.#runtime.lastEventSequence += 1
+              this.bindExecutorSession(failover.session)
+              this.#runtime.blocker = undefined
+              await this.persist()
+              await this.sink?.onExecutorEvent(event, this.snapshot())
+              break
+            }
+          }
+
+          await this.applyExecutorEvent(event)
+          await this.sink?.onExecutorEvent(event, this.snapshot())
+        }
+
+        if (!failover) return this.snapshot()
+        requestId = `${baseRequestId}:failover:${failover.session.generation}`
+        instruction = failoverContinuation(originalInstruction, failover, {
+          code: 'quota_exhausted',
+          message: `previous executor ${failover.fromExecutorId} exhausted quota`,
+          source: failover.fromExecutorId
+        })
       }
-      return this.snapshot()
     } catch (error) {
       // A transport/process exception during an active prompt may occur after a side effect.
       // Without an authoritative terminal event the control plane cannot safely infer failure/retry.
