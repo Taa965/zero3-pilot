@@ -191,7 +191,7 @@ export function Zero3AppShell() {
       setProjectError(null)
       if (thenCreate) await openGptSession(updated.id)
     } catch (error) {
-      setProjectError(error instanceof Error ? error.messae : String(error))
+      setProjectError(error instanceof Error ? error.message : String(error))
     }
   }, [binding, openGptSession])
 
