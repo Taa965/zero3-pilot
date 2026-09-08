@@ -224,7 +224,9 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
   if (sessionId) args.push('--resume', sessionId)
   const { spawn } = await import('node:child_process')
   return new Promise<{ text: string; sessionId: string | null }>((resolve, reject) => {
-    const child = spawn(command, args, {
+    // Bare "claude" is an npm shim on Windows, which spawn cannot launch
+    // without a shell -- and a shell would hand the prompt text to cmd.exe.
+    const child = spawn(resolveWindowsCommand(command), args, {
       ...(cwd ? { cwd } : {}),
       env: process.env,
       windowsHide: true,
@@ -436,6 +438,13 @@ const globalSurface = String.raw`    zero3SessionProviders: {
 
 export function applyZero3SessionProviderRuntime() {
   patchFile('electron/main.ts', [
+    {
+      label: 'windows CLI resolver import',
+      from: "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'",
+      to:
+        "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'\n" +
+        "import { resolveWindowsCommand } from './zero3/executor-runtime/external/windows-command'"
+    },
     {
       label: 'session provider IPC before Agent orchestrator',
       from: 'const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({',
