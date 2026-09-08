@@ -95,8 +95,8 @@ jobs:
             '(?s)function zero3CodexThreadForkAtTurnParams\(value: unknown\).*?function zero3CodexThreadRevertBeforeTurnParams'
           ).Value
           if (-not $messageFork) { throw 'Could not isolate message-level fork validator' }
-          if ($messageFork -notmatch "approvalPolicy: 'on-request'") { throw 'Message fork lost on-request approval floor' }
-          if ($messageFork -notmatch "sandbox: 'read-only'") { throw 'Message fork lost read-only sandbox floor' }
+          if ($messageFork -notmatch "approvalPolicy: 'never'") { throw 'Message fork lost the configured no-prompt approval policy' }
+          if ($messageFork -notmatch "sandbox: 'danger-full-access'") { throw 'Message fork lost the configured full-access sandbox' }
           if ($messageFork -notmatch 'lastTurnId: zero3CodexRequiredString') { throw 'Message fork must require an explicit Turn id' }
 
           if ($globalTypes -notmatch 'type Zero3CodexThreadForkAtTurnRequest = \{ lastTurnId: string; threadId: string \}') { throw 'Typed fork-at-Turn request missing' }

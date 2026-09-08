@@ -14,7 +14,8 @@ import {
   ZERO3_GPT_WEB_PROFILE_ID,
   type Zero3GptWebWorkspaceEntry
 } from '../workspace/workspace-entry-types'
-import { readChatGptProjectCatalog } from './chatgpt-project-catalog'
+import { readChatGptProjectCatalog, withChatGptContents } from './chatgpt-project-catalog'
+import { chatGptConversationId, renameChatGptConversation } from './chatgpt-conversation-name'
 import {
   ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS,
   ZERO3_GPT_WEB_BASE_LIVE_VIEWS,
@@ -198,6 +199,7 @@ export class Zero3GptWebProvider {
   private profileSession: Session | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
   private catalogTail: Promise<unknown> = Promise.resolve()
+  private renameTail: Promise<unknown> = Promise.resolve()
   private maintenanceTimer: NodeJS.Timeout | null = null
 
   constructor(
@@ -233,6 +235,30 @@ export class Zero3GptWebProvider {
       () => undefined,
       () => undefined
     )
+    return task
+  }
+
+  rename(id: string, title: unknown): Promise<Zero3GptWebWorkspaceEntry> {
+    const normalized = requiredText(title, '会话名称', 200)
+    const task = this.renameTail.then(async () => {
+      await this.persistenceTail
+      const entry = await this.requireEntry(id)
+      const conversationUrl = entry.conversationUrl ?? entry.currentUrl
+      chatGptConversationId(conversationUrl)
+      await withChatGptContents(this.getProfileSession(), this.reusableContents(), contents =>
+        renameChatGptConversation(contents, conversationUrl, normalized)
+      )
+      // Only commit the local name after the remote write was read back.
+      const current = await this.requireEntry(id)
+      if (chatGptConversationId(current.conversationUrl ?? current.currentUrl) !== chatGptConversationId(conversationUrl)) {
+        throw new Error('网页名称已修改，但零三会话地址已变更，请刷新列表后重试')
+      }
+      const renamed = await this.entries.rename({ id, title: normalized }) as Zero3GptWebWorkspaceEntry
+      this.emitEvent({ kind: 'navigation', entryId: id, previousEntryId: null,
+        currentUrl: renamed.currentUrl, conversationUrl: renamed.conversationUrl, pageTitle: renamed.pageTitle })
+      return renamed
+    })
+    this.renameTail = task.catch(() => undefined)
     return task
   }
 

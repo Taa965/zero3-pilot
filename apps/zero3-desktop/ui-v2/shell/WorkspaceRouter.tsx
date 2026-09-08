@@ -1,7 +1,8 @@
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
-import { CodexConversationSurface } from '../conversations/CodexConversationSurface'
 import { GptWebSurface } from '../conversations/GptWebSurface'
-import { GeminiWorkspaceSurface } from '../conversations/GeminiWorkspaceSurface'
+import { GeminiWebSurface } from '../conversations/GeminiWebSurface'
+import { LocalConversationSurface } from '../conversations/LocalConversationSurface'
+import type { LocalSessionRecord, WorkspaceProvider, WorkspaceSession } from '../conversations/session-types'
 import { TaskWorkspace } from '../tasks/TaskWorkspace'
 import { DevelopmentGroupWorkspace } from '../development-groups/DevelopmentGroupWorkspace'
 import { ProjectWorkspace } from '../projects/ProjectWorkspace'
@@ -9,41 +10,57 @@ import { RuntimeWorkspace } from '../runtime/RuntimeWorkspace'
 
 interface WorkspaceRouterProps {
   activeModule: string
-  provider: 'codex' | 'gpt' | 'gemini'
-  onProviderChange: (provider: 'codex' | 'gpt' | 'gemini') => void
-  activeSessionId: string | null
+  provider: WorkspaceProvider
+  onProviderChange: (provider: WorkspaceProvider) => void
+  activeSession: WorkspaceSession | null
+  activeLocalSession: LocalSessionRecord | null
   activeProject: Zero3ProjectRecord | null
   activeProjectSessionCount: number
+  onLocalSessionChanged: () => void
   onBindChatGptProject: (project: Zero3ProjectRecord) => void
   onUnbindChatGptProject: (project: Zero3ProjectRecord) => void
   onToggleInspector: () => void
 }
 
+const PROVIDERS: Array<{ id: WorkspaceProvider; label: string }> = [
+  { id: 'gpt', label: 'GPT' },
+  { id: 'gemini', label: 'Gemini' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'claude', label: 'Claude' },
+  { id: 'antigravity', label: 'Antigravity' },
+  { id: 'zero3', label: 'Zero3' }
+]
+
 export function WorkspaceRouter({
   activeModule,
   provider,
   onProviderChange,
-  activeSessionId,
+  activeSession,
+  activeLocalSession,
   activeProject,
   activeProjectSessionCount,
+  onLocalSessionChanged,
   onBindChatGptProject,
   onUnbindChatGptProject,
   onToggleInspector
 }: WorkspaceRouterProps) {
+  const webEntryId = activeSession?.source === 'web' && activeSession.provider === provider ? activeSession.id : null
+  const localSession = activeLocalSession?.provider === provider ? activeLocalSession : null
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-background">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-(--ui-border) px-4">
         <div className="flex items-center gap-4">
           <div className="font-medium">主工作区</div>
           {activeModule === 'conversations' && (
-            <div className="flex gap-2 text-xs">
-              {(['codex', 'gpt', 'gemini'] as const).map(p => (
+            <div className="flex flex-wrap gap-1 text-xs">
+              {PROVIDERS.map(item => (
                 <button
-                  key={p}
-                  onClick={() => onProviderChange(p)}
-                  className={`px-2 py-1 rounded ${provider === p ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'}`}
+                  key={item.id}
+                  onClick={() => onProviderChange(item.id)}
+                  className={`rounded px-2 py-1 ${provider === item.id ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'}`}
                 >
-                  {p}
+                  {item.label}
                 </button>
               ))}
             </div>
@@ -53,11 +70,16 @@ export function WorkspaceRouter({
           显示/隐藏属性面板
         </button>
       </div>
-      <div className="flex-1 overflow-hidden min-h-0">
+      <div className="min-h-0 flex-1 overflow-hidden">
         {activeModule === 'conversations' ? (
-          provider === 'codex' ? <CodexConversationSurface /> :
-          provider === 'gpt' ? <GptWebSurface entryId={activeSessionId} /> :
-          <GeminiWorkspaceSurface />
+          provider === 'gpt' ? <GptWebSurface entryId={webEntryId} /> :
+          provider === 'gemini' ? <GeminiWebSurface entryId={webEntryId} /> :
+          <LocalConversationSurface
+            provider={provider}
+            session={localSession}
+            project={activeProject}
+            onChanged={onLocalSessionChanged}
+          />
         ) : activeModule === 'tasks' ? (
           <TaskWorkspace />
         ) : activeModule === 'groups' ? (
@@ -72,9 +94,7 @@ export function WorkspaceRouter({
         ) : activeModule === 'runtime' ? (
           <RuntimeWorkspace />
         ) : (
-          <div className="flex h-full items-center justify-center text-(--ui-text-tertiary)">
-            {activeModule} 模块暂无对应视图
-          </div>
+          <div className="flex h-full items-center justify-center text-(--ui-text-tertiary)">{activeModule} 模块暂无对应视图</div>
         )}
       </div>
     </div>
