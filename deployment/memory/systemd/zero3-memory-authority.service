@@ -9,7 +9,7 @@ User=zero3memory
 Group=zero3memory
 WorkingDirectory=/opt/zero3-memory-runtime/current
 ExecStart=/opt/zero3-memory-runtime/current/bin/zero3-memory-server
-Environment=ZERO3_MEMORY_BIND=127.0.0.1:8790
+Environment=ZERO3_MEMORY_BIND=127.0.0.1:8791
 EnvironmentFile=/etc/zero3-memory/authority.env
 Restart=on-failure
 RestartSec=2
