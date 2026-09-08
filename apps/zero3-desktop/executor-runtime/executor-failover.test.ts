@@ -9,6 +9,7 @@ import test from 'node:test'
 import { Zero3ExecutorManager } from './executor-manager.ts'
 import { Zero3ExecutorRegistry } from './executor-registry.ts'
 import { createExecutorFailure } from './failure-normalizer.ts'
+import { WorkspaceFailoverHandoffCapture } from './handoff/failover-handoff.ts'
 import { HandoffStore } from './handoff/handoff-store.ts'
 import type {
   ExecutorHandoffCheckpointRef,
@@ -95,6 +96,17 @@ function identity(workspace: string, baseSha: string) {
   }
 }
 
+function managerWithHandoff(
+  registry: Zero3ExecutorRegistry,
+  store: HandoffStore
+): Zero3ExecutorManager {
+  const capture = new WorkspaceFailoverHandoffCapture(store)
+  return new Zero3ExecutorManager(registry, {
+    routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
+    captureFailoverHandoff: capture.capture
+  })
+}
+
 const policy = { permissionProfile: 'standard' as const, approvalRequired: false }
 
 test('quota_exhausted closes the old writer, persists a handoff and starts Claude at generation + 1', async () => {
@@ -106,10 +118,7 @@ test('quota_exhausted closes the old writer, persists a handoff and starts Claud
     registry.register(native)
     registry.register(claude)
     const handoffs = new HandoffStore(path.join(fixture.root, 'handoffs'))
-    const manager = new Zero3ExecutorManager(registry, {
-      routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
-      handoffStore: handoffs
-    })
+    const manager = managerWithHandoff(registry, handoffs)
     await manager.start('native-codex', identity(fixture.workspace, fixture.baseSha), policy)
 
     const result = await manager.failoverAfterFailure(
@@ -132,6 +141,7 @@ test('quota_exhausted closes the old writer, persists a handoff and starts Claud
     assert.equal(checkpoint.stop_reason, 'executor_failure:quota_exhausted')
     assert.equal(checkpoint.next_action, 'continue_with:claude')
     assert.equal(checkpoint.checkpoint_hash, result.checkpoint.checkpointHash)
+    assert.equal(checkpoint.dirty_worktree_fingerprint, result.checkpoint.workspaceFingerprint)
   } finally {
     await rm(fixture.root, { recursive: true, force: true })
   }
@@ -145,10 +155,7 @@ test('forbidden failures never switch executors', async () => {
     const registry = new Zero3ExecutorRegistry()
     registry.register(native)
     registry.register(claude)
-    const manager = new Zero3ExecutorManager(registry, {
-      routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
-      handoffStore: new HandoffStore(path.join(fixture.root, 'handoffs'))
-    })
+    const manager = managerWithHandoff(registry, new HandoffStore(path.join(fixture.root, 'handoffs')))
     await manager.start('native-codex', identity(fixture.workspace, fixture.baseSha), policy)
     const result = await manager.failoverAfterFailure(
       'task-failover',
@@ -172,10 +179,7 @@ test('unavailable fallback leaves the current binding intact', async () => {
     const registry = new Zero3ExecutorRegistry()
     registry.register(native)
     registry.register(claude)
-    const manager = new Zero3ExecutorManager(registry, {
-      routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
-      handoffStore: new HandoffStore(path.join(fixture.root, 'handoffs'))
-    })
+    const manager = managerWithHandoff(registry, new HandoffStore(path.join(fixture.root, 'handoffs')))
     await manager.start('native-codex', identity(fixture.workspace, fixture.baseSha), policy)
     const result = await manager.failoverAfterFailure(
       'task-failover',
@@ -199,10 +203,7 @@ test('old-writer close failure aborts failover before Claude starts', async () =
     const registry = new Zero3ExecutorRegistry()
     registry.register(native)
     registry.register(claude)
-    const manager = new Zero3ExecutorManager(registry, {
-      routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
-      handoffStore: new HandoffStore(path.join(fixture.root, 'handoffs'))
-    })
+    const manager = managerWithHandoff(registry, new HandoffStore(path.join(fixture.root, 'handoffs')))
     await manager.start('native-codex', identity(fixture.workspace, fixture.baseSha), policy)
     await assert.rejects(
       manager.failoverAfterFailure(
