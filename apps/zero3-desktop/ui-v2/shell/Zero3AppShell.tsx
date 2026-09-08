@@ -81,6 +81,20 @@ export function Zero3AppShell() {
     setProvider(session.provider)
   }, [])
 
+  // Entries outlive the conversations they point at: deleting one on
+  // chatgpt.com leaves Zero3's row behind, and nothing in the navigation events
+  // reports that. This is the manual way to drop such a row.
+  const deleteSession = useCallback(async (session: WebSession) => {
+    try {
+      await WebWorkspaceAdapter.remove(session)
+      setActiveSessionId(current => (current === session.id ? null : current))
+      setSessionError(null)
+      await refreshSessions()
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [refreshSessions])
+
   const selectProject = useCallback((project: Zero3ProjectRecord) => {
     setActiveProjectId(project.id)
     setActiveSessionId(current => {
@@ -193,6 +207,7 @@ export function Zero3AppShell() {
           projectError={projectError}
           onSelectSession={selectSession}
           onCreateGptSession={createGptSession}
+          onDeleteSession={session => void deleteSession(session)}
           onSelectProjectScope={selectProjectScope}
           onSelectProject={selectProject}
           onCreateProject={() => void createProject()}

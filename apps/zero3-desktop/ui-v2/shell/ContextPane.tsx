@@ -17,6 +17,7 @@ interface ContextPaneProps {
   projectError: string | null
   onSelectSession: (session: WebSession) => void
   onCreateGptSession: () => void
+  onDeleteSession: (session: WebSession) => void
   onSelectProject: (project: Zero3ProjectRecord) => void
   onSelectProjectScope: (projectId: string | null) => void
   onCreateProject: () => void
@@ -32,6 +33,7 @@ export function ContextPane({
   projectError,
   onSelectSession,
   onCreateGptSession,
+  onDeleteSession,
   onSelectProject,
   onSelectProjectScope,
   onCreateProject
@@ -66,6 +68,7 @@ export function ContextPane({
             projects={projects}
             onSelect={onSelectSession}
             onCreateGpt={onCreateGptSession}
+            onDelete={onDeleteSession}
             error={sessionError}
           />
         ) : activeModule === 'tasks' ? (

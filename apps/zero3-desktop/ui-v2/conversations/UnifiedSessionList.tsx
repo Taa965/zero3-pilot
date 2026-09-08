@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Codicon } from '@/components/ui/codicon'
 import { cn } from '@/lib/utils'
@@ -12,8 +12,12 @@ interface UnifiedSessionListProps {
   projects: Zero3ProjectRecord[]
   onSelect: (session: WebSession) => void
   onCreateGpt: () => void
+  onDelete: (session: WebSession) => void
   error: string | null
 }
+
+const CONTEXT_MENU_WIDTH = 184
+const CONTEXT_MENU_HEIGHT = 64
 
 const PROVIDER_MARKS = {
   codex: { symbol: '⌘', color: 'text-green-500' },
@@ -28,10 +32,47 @@ export function UnifiedSessionList({
   projects,
   onSelect,
   onCreateGpt,
+  onDelete,
   error
 }: UnifiedSessionListProps) {
   const [filter, setFilter] = useState<'all' | 'codex' | 'gpt' | 'gemini'>('all')
   const [query, setQuery] = useState('')
+  const [menu, setMenu] = useState<{ session: WebSession; x: number; y: number } | null>(null)
+  const paneRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menu) return
+    const close = () => setMenu(null)
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', onKey)
+    // Capture: the list scrolls inside its own container, whose scroll events
+    // never reach document in the bubble phase.
+    document.addEventListener('scroll', close, true)
+    window.addEventListener('blur', close)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('scroll', close, true)
+      window.removeEventListener('blur', close)
+    }
+  }, [menu])
+
+  const openMenu = (session: WebSession, event: React.MouseEvent) => {
+    event.preventDefault()
+    // The GPT and Gemini surfaces are native views stacked above the renderer,
+    // so a menu spilling past this pane would be painted behind them.
+    const bounds = paneRef.current?.getBoundingClientRect()
+    const maxX = bounds ? bounds.right - CONTEXT_MENU_WIDTH - 4 : event.clientX
+    const minX = bounds ? bounds.left + 4 : 4
+    setMenu({
+      session,
+      x: Math.max(minX, Math.min(event.clientX, maxX)),
+      y: Math.min(event.clientY, window.innerHeight - CONTEXT_MENU_HEIGHT - 4)
+    })
+  }
 
   const projectSessions = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -58,6 +99,7 @@ export function UnifiedSessionList({
       <button
         key={session.id}
         onClick={() => onSelect(session)}
+        onContextMenu={event => openMenu(session, event)}
         className={cn(
           'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
           active
@@ -85,14 +127,17 @@ export function UnifiedSessionList({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div ref={paneRef} className="flex h-full flex-col">
       <div className="flex flex-col gap-2 p-3">
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Codicon name="search" className="absolute left-2 top-1.5 size-4 text-(--ui-text-tertiary)" />
             <input
               value={query}
-              onChange={event => setQuery(event.target.value)}
+              onChange={event => {
+                setMenu(null)
+                setQuery(event.target.value)
+              }}
               placeholder="搜索会话"
               className="w-full rounded-md border border-(--ui-border) bg-(--ui-control-background) py-1 pl-8 pr-2 text-sm text-foreground outline-none focus:border-blue-500"
             />
@@ -109,7 +154,10 @@ export function UnifiedSessionList({
           {(['all', 'codex', 'gpt', 'gemini'] as const).map(value => (
             <button
               key={value}
-              onClick={() => setFilter(value)}
+              onClick={() => {
+                setMenu(null)
+                setFilter(value)
+              }}
               className={cn(
                 'rounded-md px-2 py-1 hover:bg-(--ui-control-hover-background)',
                 filter === value && 'bg-(--ui-control-active-background) font-medium text-foreground'
@@ -140,6 +188,34 @@ export function UnifiedSessionList({
           </div>
         )}
       </div>
+
+      {menu && (
+        <div
+          role="menu"
+          style={{ left: menu.x, top: menu.y, width: CONTEXT_MENU_WIDTH }}
+          // The document-level mousedown listener closes the menu, and it fires
+          // before click -- without this the item would unmount before its own
+          // click ever lands.
+          onMouseDown={event => event.stopPropagation()}
+          className="fixed z-50 rounded-md border border-(--ui-border) bg-(--ui-pane-background) p-1 shadow-lg"
+        >
+          <button
+            role="menuitem"
+            onClick={() => {
+              const target = menu.session
+              setMenu(null)
+              onDelete(target)
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-red-600 hover:bg-(--ui-control-hover-background)"
+          >
+            <Codicon name="trash" className="size-4" />
+            删除会话
+          </button>
+          <div className="px-2 pb-1 pt-0.5 text-[11px] leading-tight text-(--ui-text-tertiary)">
+            仅从 Zero3 移除，不影响网页端
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -86,9 +86,14 @@ export const WebWorkspaceAdapter = {
     return window.zero3GptWeb.listRemoteProjects()
   },
 
-  async remove(id: string): Promise<void> {
-    await window.zero3GptWeb.remove({ id }).catch(() => {})
-    await window.zero3Workspace.remove({ id })
+  // Removing an entry only drops Zero3's own record and its native view; the
+  // conversation on chatgpt.com/gemini.google.com is untouched. Each provider
+  // owns its live views, so the wrong bridge would leave one stranded above the
+  // renderer after the workspace record is gone.
+  async remove(session: Pick<WebSession, 'id' | 'provider'>): Promise<void> {
+    const bridge = session.provider === 'gemini' ? window.zero3GeminiWeb : window.zero3GptWeb
+    await bridge.remove({ id: session.id }).catch(() => {})
+    await window.zero3Workspace.remove({ id: session.id })
   },
 
   // Entry metadata (title, conversation URL, last-active) is written by main
