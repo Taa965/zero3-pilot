@@ -511,6 +511,66 @@ fn repository_error_code(error: &anyhow::Error) -> (&'static str, bool) {
     ("memory_event_rejected", false)
 }
 
+fn forbidden_secret_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().replace('-', "_").as_str(),
+        "password"
+            | "passwd"
+            | "secret"
+            | "api_key"
+            | "access_token"
+            | "refresh_token"
+            | "authorization"
+            | "cookie"
+            | "session_cookie"
+            | "private_key"
+            | "client_secret"
+            | "bearer"
+    )
+}
+
+fn looks_like_secret(value: &str) -> bool {
+    let trimmed = value.trim();
+    (trimmed.starts_with("sk-") && trimmed.len() >= 20)
+        || (trimmed.starts_with("ghp_") && trimmed.len() >= 20)
+        || (trimmed.starts_with("github_pat_") && trimmed.len() >= 24)
+        || (trimmed.starts_with("AKIA") && trimmed.len() >= 20)
+        || trimmed.contains("-----BEGIN PRIVATE KEY-----")
+        || trimmed.contains("-----BEGIN RSA PRIVATE KEY-----")
+        || trimmed.contains("-----BEGIN EC PRIVATE KEY-----")
+        || trimmed.contains("-----BEGIN OPENSSH PRIVATE KEY-----")
+        || (trimmed.to_ascii_lowercase().starts_with("bearer ") && trimmed.len() >= 24)
+        || (trimmed.starts_with("eyJ") && trimmed.split('.').count() == 3 && trimmed.len() >= 32)
+}
+
+fn validate_secret_free(value: &Value) -> Result<(), &'static str> {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if forbidden_secret_key(key) {
+                    return Err("secret_detected");
+                }
+                validate_secret_free(child)?;
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                validate_secret_free(child)?;
+            }
+        }
+        Value::String(text) if looks_like_secret(text) => return Err("secret_detected"),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_shared_event(event: &MemoryEvent) -> Result<(), &'static str> {
+    if event.memory.class == "personal" {
+        return Err("personal_memory_requires_separate_boundary");
+    }
+    validate_secret_free(&event.payload)
+}
+
 async fn append_event(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -522,6 +582,9 @@ async fn append_event(
     };
     if let Err(failure) = authorize_event(&grant, &event) {
         return auth_failure_response(failure);
+    }
+    if let Err(code) = validate_shared_event(&event) {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": code}))).into_response();
     }
     match state.repo.append(event.clone()).await {
         Ok(outcome) => {
@@ -574,6 +637,10 @@ async fn append_batch(
             results.push(
                 json!({"event_id": event.event_id, "status":"rejected", "error": failure.code}),
             );
+            continue;
+        }
+        if let Err(code) = validate_shared_event(&event) {
+            results.push(json!({"event_id": event.event_id, "status":"rejected", "error": code}));
             continue;
         }
         match state.repo.append(event.clone()).await {
@@ -862,6 +929,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn shared_event_secret_scanner_is_fail_closed() {
+        let mut event = sample_event("44444444-4444-4444-8444-444444444444", "decision.recorded");
+        event.payload = json!({"api_key":"ordinary-looking-value"});
+        assert_eq!(validate_shared_event(&event), Err("secret_detected"));
+
+        event.payload = json!({"note":"Bearer abcdefghijklmnopqrstuvwxyz012345"});
+        assert_eq!(validate_shared_event(&event), Err("secret_detected"));
+
+        event.payload = json!({"note":"ordinary architecture decision"});
+        assert_eq!(validate_shared_event(&event), Ok(()));
+    }
+
+    #[test]
+    fn personal_memory_never_uses_shared_ingress() {
+        let mut event = sample_event("55555555-5555-4555-8555-555555555555", "decision.recorded");
+        event.memory.class = "personal".into();
+        assert_eq!(
+            validate_shared_event(&event),
+            Err("personal_memory_requires_separate_boundary")
+        );
     }
 
     #[test]
