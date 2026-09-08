@@ -7,6 +7,7 @@ import { ChatGptProjectBindingDialog } from '../conversations/ChatGptProjectBind
 import { hideNativeWebSession } from '../conversations/native-overlay-visibility'
 import { RenameSessionDialog } from '../conversations/RenameSessionDialog'
 import { SessionProviderPickerDialog } from '../conversations/SessionProviderPickerDialog'
+import { resolveCreateProjectId } from '../conversations/session-create-target'
 import type { LocalSessionRecord, WorkspaceProvider, WorkspaceSession } from '../conversations/session-types'
 import { AppTitleBar } from './AppTitleBar'
 import { GlobalRail } from './GlobalRail'
@@ -28,6 +29,7 @@ export function Zero3AppShell() {
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [projects, setProjects] = useState<Zero3ProjectRecord[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
+  const [focusedProjectId, setFocusedProjectId] = useState<string | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
   const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const [renamingSession, setRenamingSession] = useState<WorkspaceSession | null>(null)
@@ -37,6 +39,12 @@ export function Zero3AppShell() {
     const local = localSessions.map(LocalSessionAdapter.toWorkspaceSession)
     return [...webSessions, ...local]
   }, [webSessions, localSessions])
+  const activeSession = useMemo(
+    () => sessions.find(session => session.id === activeSessionId) ?? null,
+    [sessions, activeSessionId]
+  )
+  const createTargetProjectId = resolveCreateProjectId(activeProjectId, focusedProjectId, activeSession)
+  const createTargetProject = projects.find(project => project.id === createTargetProjectId) ?? null
 
   const refreshWebSessions = useCallback(async () => {
     try {
@@ -100,6 +108,7 @@ export function Zero3AppShell() {
 
   const selectSession = useCallback((session: WorkspaceSession) => {
     setActiveSessionId(session.id)
+    setFocusedProjectId(session.projectId)
     setProvider(session.provider)
   }, [])
 
@@ -137,6 +146,7 @@ export function Zero3AppShell() {
 
   const selectProject = useCallback((project: Zero3ProjectRecord) => {
     setActiveProjectId(project.id)
+    setFocusedProjectId(project.id)
     setActiveSessionId(current => {
       const active = sessions.find(session => session.id === current)
       return active && active.projectId !== project.id ? null : current
@@ -144,13 +154,15 @@ export function Zero3AppShell() {
   }, [sessions])
 
   const selectProjectScope = useCallback((projectId: string | null) => {
+    if (projectId !== null) setFocusedProjectId(projectId)
+    else if (activeProjectId !== null) setFocusedProjectId(activeProjectId)
     setActiveProjectId(projectId)
     if (projectId === null) return
     setActiveSessionId(current => {
       const active = sessions.find(session => session.id === current)
       return active && active.projectId !== projectId ? null : current
     })
-  }, [sessions])
+  }, [activeProjectId, sessions])
 
   const openGptSession = useCallback(async (projectId: string | null) => {
     try {
@@ -164,13 +176,12 @@ export function Zero3AppShell() {
   }, [refreshWebSessions])
 
   const createGptSession = useCallback(() => {
-    const project = projects.find(item => item.id === activeProjectId) ?? null
-    if (project && !project.chatGptProjectUrl) {
-      setBinding({ project, thenCreate: true })
+    if (createTargetProject && !createTargetProject.chatGptProjectUrl) {
+      setBinding({ project: createTargetProject, thenCreate: true })
       return
     }
-    void openGptSession(activeProjectId)
-  }, [projects, activeProjectId, openGptSession])
+    void openGptSession(createTargetProjectId)
+  }, [createTargetProject, createTargetProjectId, openGptSession])
 
   const createSession = useCallback(async (nextProvider: WorkspaceProvider, zero3ProfileId: string | null = null) => {
     setProviderPickerOpen(false)
@@ -180,13 +191,13 @@ export function Zero3AppShell() {
         return
       }
       if (nextProvider === 'gemini') {
-        const id = await WebWorkspaceAdapter.createGeminiWeb(activeProjectId)
+        const id = await WebWorkspaceAdapter.createGeminiWeb(createTargetProjectId)
         setActiveSessionId(id)
         setProvider('gemini')
         await refreshWebSessions()
         return
       }
-      const record = LocalSessionAdapter.create(nextProvider, activeProjectId, zero3ProfileId)
+      const record = LocalSessionAdapter.create(nextProvider, createTargetProjectId, zero3ProfileId)
       refreshLocalSessions()
       setActiveSessionId(record.id)
       setProvider(nextProvider)
@@ -194,7 +205,7 @@ export function Zero3AppShell() {
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
-  }, [activeProjectId, createGptSession, refreshLocalSessions, refreshWebSessions])
+  }, [createTargetProjectId, createGptSession, refreshLocalSessions, refreshWebSessions])
 
   const applyBinding = useCallback(async (chatGptProjectUrl: string | null) => {
     if (!binding) return
@@ -243,7 +254,6 @@ export function Zero3AppShell() {
     }
   }, [])
 
-  const activeSession = sessions.find(session => session.id === activeSessionId) ?? null
   const activeLocalSession = activeSession?.source === 'local'
     ? localSessions.find(session => session.id === activeSession.id) ?? null
     : null
@@ -277,10 +287,12 @@ export function Zero3AppShell() {
           sessions={sessions}
           activeSessionId={activeSessionId}
           activeProjectId={activeProjectId}
+          focusedProjectId={createTargetProjectId}
           sessionError={sessionError}
           projects={projects}
           projectError={projectError}
           onSelectSession={selectSession}
+          onSelectProjectContext={setFocusedProjectId}
           onCreateSession={() => void openProviderPicker()}
           onDeleteSession={session => void deleteSession(session)}
           onRenameSession={setRenamingSession}
@@ -315,7 +327,7 @@ export function Zero3AppShell() {
 
       {providerPickerOpen && (
         <SessionProviderPickerDialog
-          project={activeProject}
+          project={createTargetProject}
           onCreate={(nextProvider, zero3ProfileId) => void createSession(nextProvider, zero3ProfileId ?? null)}
           onCancel={() => setProviderPickerOpen(false)}
         />

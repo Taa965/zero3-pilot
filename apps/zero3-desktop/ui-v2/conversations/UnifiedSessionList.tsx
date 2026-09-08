@@ -9,8 +9,10 @@ interface UnifiedSessionListProps {
   sessions: WorkspaceSession[]
   activeId: string | null
   activeProjectId: string | null
+  focusedProjectId: string | null
   projects: Zero3ProjectRecord[]
   onSelect: (session: WorkspaceSession) => void
+  onSelectProjectContext: (projectId: string | null) => void
   onCreate: () => void
   onDelete: (session: WorkspaceSession) => void
   onRename: (session: WorkspaceSession) => void
@@ -35,8 +37,10 @@ export function UnifiedSessionList({
   sessions,
   activeId,
   activeProjectId,
+  focusedProjectId,
   projects,
   onSelect,
+  onSelectProjectContext,
   onCreate,
   onDelete,
   onRename,
@@ -221,8 +225,14 @@ export function UnifiedSessionList({
                   <button
                     type="button"
                     aria-expanded={!collapsed}
-                    onClick={() => toggleProjectGroup(group.key)}
-                    className="mb-1 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs font-medium text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-foreground"
+                    onClick={() => {
+                      onSelectProjectContext(group.projectId)
+                      toggleProjectGroup(group.key)
+                    }}
+                    className={cn(
+                      'mb-1 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs font-medium text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-foreground',
+                      focusedProjectId !== null && group.projectId === focusedProjectId && 'bg-(--ui-control-active-background) text-foreground'
+                    )}
                   >
                     <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} className="size-3.5 shrink-0" />
                     <span className="min-w-0 flex-1 truncate">{group.name}</span>

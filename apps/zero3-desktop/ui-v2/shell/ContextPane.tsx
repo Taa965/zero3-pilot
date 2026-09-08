@@ -12,10 +12,12 @@ interface ContextPaneProps {
   sessions: WorkspaceSession[]
   activeSessionId: string | null
   activeProjectId: string | null
+  focusedProjectId: string | null
   sessionError: string | null
   projects: Zero3ProjectRecord[]
   projectError: string | null
   onSelectSession: (session: WorkspaceSession) => void
+  onSelectProjectContext: (projectId: string | null) => void
   onCreateSession: () => void
   onDeleteSession: (session: WorkspaceSession) => void
   onRenameSession: (session: WorkspaceSession) => void
@@ -29,10 +31,12 @@ export function ContextPane({
   sessions,
   activeSessionId,
   activeProjectId,
+  focusedProjectId,
   sessionError,
   projects,
   projectError,
   onSelectSession,
+  onSelectProjectContext,
   onCreateSession,
   onDeleteSession,
   onRenameSession,
@@ -63,8 +67,10 @@ export function ContextPane({
             sessions={sessions}
             activeId={activeSessionId}
             activeProjectId={activeProjectId}
+            focusedProjectId={focusedProjectId}
             projects={projects}
             onSelect={onSelectSession}
+            onSelectProjectContext={onSelectProjectContext}
             onCreate={onCreateSession}
             onDelete={onDeleteSession}
             onRename={onRenameSession}
