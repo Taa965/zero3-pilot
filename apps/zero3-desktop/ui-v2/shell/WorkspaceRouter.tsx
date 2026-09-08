@@ -1,3 +1,5 @@
+import { Codicon } from '@/components/ui/codicon'
+
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { GptWebSurface } from '../conversations/GptWebSurface'
 import { GeminiWebSurface } from '../conversations/GeminiWebSurface'
@@ -19,6 +21,7 @@ interface WorkspaceRouterProps {
   onLocalSessionChanged: () => void
   onBindChatGptProject: (project: Zero3ProjectRecord) => void
   onUnbindChatGptProject: (project: Zero3ProjectRecord) => void
+  onOpenPowerShell: () => void
   onToggleInspector: () => void
 }
 
@@ -42,6 +45,7 @@ export function WorkspaceRouter({
   onLocalSessionChanged,
   onBindChatGptProject,
   onUnbindChatGptProject,
+  onOpenPowerShell,
   onToggleInspector
 }: WorkspaceRouterProps) {
   const webEntryId = activeSession?.source === 'web' && activeSession.provider === provider ? activeSession.id : null
@@ -66,9 +70,21 @@ export function WorkspaceRouter({
             </div>
           )}
         </div>
-        <button onClick={onToggleInspector} className="text-sm text-blue-500 hover:underline">
-          显示/隐藏属性面板
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            aria-label="打开 PowerShell"
+            className="grid size-8 place-items-center rounded border border-(--ui-border) text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!activeProject}
+            onClick={onOpenPowerShell}
+            title={activeProject ? `在 ${activeProject.rootPath} 打开 PowerShell` : '请先选择项目'}
+            type="button"
+          >
+            <Codicon name="terminal-powershell" size={18} />
+          </button>
+          <button onClick={onToggleInspector} className="text-sm text-blue-500 hover:underline">
+            显示/隐藏属性面板
+          </button>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeModule === 'conversations' ? (

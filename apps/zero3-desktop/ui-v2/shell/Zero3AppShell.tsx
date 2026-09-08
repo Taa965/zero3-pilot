@@ -299,9 +299,10 @@ export function Zero3AppShell() {
           onLocalSessionChanged={refreshLocalSessions}
           onBindChatGptProject={rebindProject}
           onUnbindChatGptProject={project => void unbindProject(project)}
+          onOpenPowerShell={() => setInspectorOpen(true)}
           onToggleInspector={() => setInspectorOpen(!inspectorOpen)}
         />
-        {inspectorOpen && <InspectorDrawer onClose={() => setInspectorOpen(false)} />}
+        {inspectorOpen && <InspectorDrawer project={activeProject} onClose={() => setInspectorOpen(false)} />}
       </div>
 
       {renamingSession && (
