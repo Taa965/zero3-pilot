@@ -26,7 +26,7 @@ const PROVIDERS: Array<{
   { id: 'codex', title: '本地 Codex', icon: 'terminal', description: '调用本机官方 Codex 客户端（codex exec），复用它的 ChatGPT 登录。', requiresProject: true },
   { id: 'claude', title: 'Claude Code', icon: 'terminal', description: '调用本机 Claude Code CLI，复用官方 Claude 登录。', requiresProject: true },
   { id: 'antigravity', title: 'Antigravity', icon: 'rocket', description: '调用本机官方 agy CLI，并保留 Antigravity 会话绑定。', requiresProject: true },
-  { id: 'zero3', title: 'Zero3 本体', icon: 'hubot', description: '由 Zero3 直接调用你配置的 API Provider 与模型。' }
+  { id: 'zero3', title: 'Zero3 本体', icon: 'hubot', description: '使用你配置的 API 模型驱动 Zero3 的 Codex Agent Kernel，保留项目文件、终端与工具能力。', requiresProject: true }
 ]
 
 const PROTOCOL_DEFAULTS: Record<ApiProtocol, { baseUrl: string; model: string }> = {
