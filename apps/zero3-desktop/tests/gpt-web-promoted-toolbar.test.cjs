@@ -19,6 +19,16 @@ test('GPT provider reapplies native header suppression whenever a view is shown'
   assert.match(provider, /did-stop-loading[\s\S]*void this\.applyHeaderSuppression\(live\)/)
 })
 
+test('promoted sidebar action releases Zero3 chrome suppression and follows current ChatGPT controls', () => {
+  const provider = read('gpt-web-runtime/gpt-web-provider.ts')
+  assert.match(provider, /button\[aria-label="打开侧边栏"\]/)
+  assert.match(provider, /button\[aria-label="Open sidebar"\]/)
+  assert.match(provider, /stage-slideover-sidebar/)
+  assert.match(provider, /stage-popover-sidebar/)
+  assert.match(provider, /action === 'sidebar' && live\.chromeHidden[\s\S]*setChromeVisible\(id, true\)/)
+  assert.match(provider, /element\.getClientRects\(\)\.length === 0/)
+})
+
 test('generated Electron bridge upgrades old prepared trees with toolbar actions', () => {
   const overlay = read('scripts/apply-gpt-web-provider.mjs')
   assert.match(overlay, /zero3:gpt-web:toolbar-action/)

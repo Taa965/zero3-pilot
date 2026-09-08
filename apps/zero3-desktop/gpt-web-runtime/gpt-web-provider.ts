@@ -82,7 +82,16 @@ const CHATGPT_HEADER_CSS = `#page-header{
 }`
 
 const CHATGPT_TOOLBAR_ACTION_SELECTORS = {
-  sidebar: ['[data-testid="open-sidebar-button"]', '[data-testid="close-sidebar-button"]'],
+  sidebar: [
+    '[data-testid="open-sidebar-button"]',
+    'button[aria-label="打开侧边栏"]',
+    'button[aria-label="Open sidebar"]',
+    'button[aria-controls="stage-slideover-sidebar"][aria-expanded="false"]',
+    'button[aria-controls="stage-popover-sidebar"][aria-expanded="false"]',
+    '[data-testid="close-sidebar-button"]',
+    'button[aria-label="关闭侧边栏"]',
+    'button[aria-label="Close sidebar"]'
+  ],
   new_chat: ['#page-header a[aria-label="新聊天"]', '#page-header a[aria-label="New chat"]', '#page-header a[href="/"]'],
   share: ['[data-testid="share-chat-button"]'],
   more: ['[data-testid="conversation-options-button"]']
@@ -557,12 +566,21 @@ export class Zero3GptWebProvider {
 
     const selectors = CHATGPT_TOOLBAR_ACTION_SELECTORS[action]
     live.view.webContents.focus()
+    // The native ChatGPT rail is suppressed by default so it does not duplicate
+    // Zero3's own session navigation. A promoted sidebar action explicitly opts
+    // this live session back into the native rail before clicking ChatGPT's
+    // current open/close control.
+    if (action === 'sidebar' && live.chromeHidden) {
+      await this.setChromeVisible(id, true)
+    }
     let invoked = await live.view.webContents.executeJavaScript(
       `(() => {
         const selectors = ${JSON.stringify(selectors)}
         for (const selector of selectors) {
-          const element = document.querySelector(selector)
-          if (element instanceof HTMLElement) {
+          for (const element of document.querySelectorAll(selector)) {
+            if (!(element instanceof HTMLElement)) continue
+            const style = getComputedStyle(element)
+            if (style.display === 'none' || style.visibility === 'hidden' || element.getClientRects().length === 0) continue
             element.click()
             return true
           }
