@@ -1,73 +1,56 @@
 #!/usr/bin/env bash
+# Atomic routine release deploy. Run as the dedicated `zero3memory` service
+# account after one-time bootstrap; do not run routine releases as root.
 set -euo pipefail
 
-if [[ "${EUID}" -ne 0 ]]; then
-  echo 'Run as root (or via sudo).' >&2
+: "${GIT_SHA:?set GIT_SHA of the build to release}"
+: "${BUILD_ARTIFACT:?set BUILD_ARTIFACT path to the built zero3-memory-server binary}"
+DEPLOY_PATH="${DEPLOY_PATH:-/opt/zero3-memory-runtime}"
+PORT="${ZERO3_MEMORY_PORT:-8790}"
+
+if [[ "$(id -un)" != 'zero3memory' ]]; then
+  echo 'Routine Memory Authority deploy must run as the zero3memory service account.' >&2
+  exit 1
+fi
+if [[ ! -f "$BUILD_ARTIFACT" || ! -x "$BUILD_ARTIFACT" ]]; then
+  echo "Build artifact is missing or not executable: $BUILD_ARTIFACT" >&2
   exit 1
 fi
 
-binary="${1:-}"
-: "${binary:?usage: deploy-memory-authority.sh /path/to/zero3-memory-server}"
-: "${ZERO3_MEMORY_DOMAIN:?set ZERO3_MEMORY_DOMAIN before deployment}"
-: "${ZERO3_MEMORY_MIGRATION_DATABASE_URL:?set ZERO3_MEMORY_MIGRATION_DATABASE_URL for schema migrations}"
+release_dir="$DEPLOY_PATH/releases/$GIT_SHA"
+current_link="$DEPLOY_PATH/current"
+mkdir -p "$release_dir/bin"
+cp "$BUILD_ARTIFACT" "$release_dir/bin/zero3-memory-server"
+chmod 0755 "$release_dir/bin/zero3-memory-server"
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-env_file='/etc/zero3-memory/authority.env'
-service_file='/etc/systemd/system/zero3-memory-authority.service'
-nginx_available="/etc/nginx/sites-available/zero3-memory-authority.conf"
-nginx_enabled="/etc/nginx/sites-enabled/zero3-memory-authority.conf"
-runtime_root='/opt/zero3-memory-runtime'
-release_dir="${runtime_root}/releases/$(date -u +%Y%m%dT%H%M%SZ)"
-current_link="${runtime_root}/current"
-
-if [[ ! -f "$binary" || ! -x "$binary" ]]; then
-  echo "Memory server binary is missing or not executable: $binary" >&2
-  exit 1
+previous=''
+if [[ -L "$current_link" ]]; then
+  previous="$(readlink -f "$current_link")"
 fi
-if [[ ! -f "$env_file" ]]; then
-  echo "Refusing deployment: create $env_file from deployment/memory/authority.env.example first." >&2
-  exit 1
-fi
-chmod 0600 "$env_file"
-
-if ! id zero3memory >/dev/null 2>&1; then
-  useradd --system --home /var/lib/zero3-memory --shell /usr/sbin/nologin zero3memory
-fi
-
-install -d -m 0755 -o root -g root "$release_dir/bin"
-install -d -m 0750 -o zero3memory -g zero3memory /var/lib/zero3-memory /var/log/zero3-memory
-install -m 0755 -o root -g root "$binary" "$release_dir/bin/zero3-memory-server"
-
-# Migrations are applied in lexical order and must be forward-safe.
-for migration in "$repo_root"/deployment/memory/migrations/*.sql; do
-  echo "Applying $(basename "$migration")"
-  psql "$ZERO3_MEMORY_MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
-done
 
 ln -sfn "$release_dir" "$current_link"
-install -m 0644 "$repo_root/deployment/memory/systemd/zero3-memory-authority.service" "$service_file"
+sudo /usr/local/sbin/zero3memory-deploy-release
 
-sed "s/__ZERO3_MEMORY_DOMAIN__/${ZERO3_MEMORY_DOMAIN//\//\\/}/g" \
-  "$repo_root/deployment/memory/nginx/zero3-memory-authority.conf.template" \
-  > "$nginx_available"
-ln -sfn "$nginx_available" "$nginx_enabled"
-
-systemctl daemon-reload
-systemctl enable zero3-memory-authority.service
-systemctl restart zero3-memory-authority.service
-
-for _ in {1..20}; do
-  if curl --fail --silent http://127.0.0.1:8790/ready >/dev/null; then
+healthy=''
+for _ in $(seq 1 20); do
+  if curl -fsS "http://127.0.0.1:${PORT}/ready" >/dev/null 2>&1; then
+    healthy=1
     break
   fi
   sleep 0.5
 done
-curl --fail --silent --show-error http://127.0.0.1:8790/ready >/dev/null
 
-# Validate the full nginx configuration before any reload. If this fails, the
-# existing nginx process is left untouched.
-nginx -t
-systemctl reload nginx
+if [[ -n "$healthy" ]]; then
+  echo "zero3-memory-authority: readiness passed for $GIT_SHA"
+  exit 0
+fi
 
-printf '\nZero3 Memory Authority deployed on loopback and nginx configuration reloaded.\n'
-printf 'Next: verify DNS/TLS for %s before using wss/https externally.\n' "$ZERO3_MEMORY_DOMAIN"
+echo "zero3-memory-authority: readiness FAILED for $GIT_SHA — rolling back" >&2
+if [[ -n "$previous" && -d "$previous" ]]; then
+  ln -sfn "$previous" "$current_link"
+  sudo /usr/local/sbin/zero3memory-deploy-release
+  echo "rolled back to $previous" >&2
+else
+  echo 'no previous release is available for rollback' >&2
+fi
+exit 1
