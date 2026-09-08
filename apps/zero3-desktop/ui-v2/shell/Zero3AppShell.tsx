@@ -4,6 +4,7 @@ import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
 import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { WebWorkspaceAdapter } from '../adapters/WebWorkspaceAdapter'
 import { ChatGptProjectBindingDialog } from '../conversations/ChatGptProjectBindingDialog'
+import { hideNativeWebSession } from '../conversations/native-overlay-visibility'
 import { RenameSessionDialog } from '../conversations/RenameSessionDialog'
 import { SessionProviderPickerDialog } from '../conversations/SessionProviderPickerDialog'
 import type { LocalSessionRecord, WorkspaceProvider, WorkspaceSession } from '../conversations/session-types'
@@ -254,6 +255,18 @@ export function Zero3AppShell() {
   const nativeViewsMayShow = binding === null && !providerPickerOpen && renamingSession === null
   const workspaceSession = nativeViewsMayShow ? activeSession : null
 
+  const openProviderPicker = useCallback(async () => {
+    try {
+      // A native web view is above every renderer z-index. Wait for Electron
+      // main to detach it before mounting the picker into the renderer.
+      await hideNativeWebSession(activeSession)
+      setProviderPickerOpen(true)
+      setSessionError(null)
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [activeSession])
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <AppTitleBar />
@@ -268,7 +281,7 @@ export function Zero3AppShell() {
           projects={projects}
           projectError={projectError}
           onSelectSession={selectSession}
-          onCreateSession={() => setProviderPickerOpen(true)}
+          onCreateSession={() => void openProviderPicker()}
           onDeleteSession={session => void deleteSession(session)}
           onRenameSession={setRenamingSession}
           onSelectProjectScope={selectProjectScope}

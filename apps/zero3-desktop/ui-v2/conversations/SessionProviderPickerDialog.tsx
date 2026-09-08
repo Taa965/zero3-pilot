@@ -170,12 +170,15 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/35 p-6" onMouseDown={onCancel}>
       <div
-        className="max-h-[88vh] w-[860px] max-w-[96vw] overflow-y-auto rounded-xl border border-(--ui-border) bg-(--ui-pane-background) p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="session-provider-picker-title"
+        className="max-h-[88vh] w-[860px] max-w-[96vw] overflow-y-auto rounded-xl border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) p-5 shadow-md"
         onMouseDown={event => event.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
-            <div className="text-lg font-semibold">新建会话</div>
+            <div id="session-provider-picker-title" className="text-lg font-semibold">新建会话</div>
             <div className="mt-1 text-xs text-(--ui-text-tertiary)">
               先选择运行平台。{project ? `当前项目：${project.name}` : '当前未选择项目。'}
             </div>

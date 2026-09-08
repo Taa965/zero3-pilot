@@ -179,3 +179,40 @@ test('context menu offers rename; dialog preserves draft on failure and blocks d
     Object.assign(globalThis, before)
   }
 })
+
+test('native web view is fully hidden before a renderer overlay may open', async () => {
+  const calls = []
+  let releaseGpt
+  const gptHidden = new Promise(resolve => { releaseGpt = resolve })
+  const window = {
+    zero3GptWeb: {
+      hide: async request => {
+        calls.push(['gpt', request.id])
+        await gptHidden
+      }
+    },
+    zero3GeminiWeb: {
+      hide: async request => calls.push(['gemini', request.id])
+    }
+  }
+  const { hideNativeWebSession } = load(
+    'ui-v2/conversations/native-overlay-visibility.ts',
+    {},
+    { window }
+  )
+
+  let completed = false
+  const pending = hideNativeWebSession({ id: 'gpt-1', provider: 'gpt', source: 'web' }).then(() => {
+    completed = true
+  })
+  await Promise.resolve()
+  assert.equal(completed, false)
+  assert.deepEqual(calls, [['gpt', 'gpt-1']])
+  releaseGpt()
+  await pending
+  assert.equal(completed, true)
+
+  await hideNativeWebSession({ id: 'gemini-1', provider: 'gemini', source: 'web' })
+  await hideNativeWebSession({ id: 'local-1', provider: 'codex', source: 'local' })
+  assert.deepEqual(calls, [['gpt', 'gpt-1'], ['gemini', 'gemini-1']])
+})
