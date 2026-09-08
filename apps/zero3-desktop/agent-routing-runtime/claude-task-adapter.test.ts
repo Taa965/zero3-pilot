@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import path from 'node:path'
 import test from 'node:test'
 
 import {
@@ -79,9 +80,9 @@ test('Claude project MCP config is strictly scoped to the TaskSpec project', () 
   const server = config.mcpServers.zero3_project_context
   assert.equal(server.type, 'stdio')
   assert.equal(server.command, process.execPath)
-  assert.deepEqual(server.args, ['/opt/zero3/project-context-server.mjs'])
+  assert.deepEqual(server.args, [path.resolve('/opt/zero3/project-context-server.mjs')])
   assert.equal(server.env.ZERO3_ACTIVE_PROJECT_ID, 'project-a')
-  assert.equal(server.env.ZERO3_PROJECT_CONTEXT_DIR, '/var/lib/zero3/project-context')
+  assert.equal(server.env.ZERO3_PROJECT_CONTEXT_DIR, path.resolve('/var/lib/zero3/project-context'))
   assert.equal(server.env.ELECTRON_RUN_AS_NODE, '1')
 })
 
