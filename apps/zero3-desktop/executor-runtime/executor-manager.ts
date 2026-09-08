@@ -1,6 +1,10 @@
-import { isExecutorFailure } from './failure-normalizer.ts'
+import { buildHandoffCheckpoint } from './handoff/handoff-builder.ts'
+import type { HandoffStore } from './handoff/handoff-store.ts'
+import { failurePolicyFor, isExecutorFailure } from './failure-normalizer.ts'
+import { Zero3ExecutorRouter, type ExecutorRoutePlan } from './executor-router.ts'
 import type {
   ExecutorEvent,
+  ExecutorFailure,
   ExecutorHandoffCheckpointRef,
   ExecutorId,
   ExecutorInput,
@@ -17,6 +21,18 @@ import type { Zero3ExecutorRegistry } from './executor-registry.ts'
 
 export class ExecutorManagerError extends Error {}
 
+export interface ExecutorManagerOptions {
+  routePlan?: ExecutorRoutePlan
+  handoffStore?: HandoffStore
+}
+
+export interface ExecutorFailoverResult {
+  fromExecutorId: ExecutorId
+  toExecutorId: ExecutorId
+  session: ExecutorSession
+  checkpoint: ExecutorHandoffCheckpointRef
+}
+
 export interface ExecutorBindingSnapshot {
   identity: ExecutorTaskIdentity
   policy: ExecutorPolicyContext
@@ -29,10 +45,21 @@ interface ExecutorBinding extends ExecutorBindingSnapshot {
   pendingPermissions: Map<string, boolean>
 }
 
+function constraintValue(constraints: readonly string[], prefix: string): string | undefined {
+  const value = constraints.find(candidate => candidate.startsWith(prefix))?.slice(prefix.length).trim()
+  return value || undefined
+}
+
 export class Zero3ExecutorManager {
   readonly #bindings = new Map<string, ExecutorBinding>()
+  readonly #router?: Zero3ExecutorRouter
 
-  constructor(private readonly registry: Zero3ExecutorRegistry) {}
+  constructor(
+    private readonly registry: Zero3ExecutorRegistry,
+    private readonly options: ExecutorManagerOptions = {}
+  ) {
+    if (options.routePlan) this.#router = new Zero3ExecutorRouter(registry, options.routePlan)
+  }
 
   async start(
     executorId: ExecutorId,
@@ -117,6 +144,96 @@ export class Zero3ExecutorManager {
       }
       if (event.type === 'completed') binding.pendingPermissions.clear()
       yield event
+    }
+  }
+
+  async failoverAfterFailure(
+    taskId: string,
+    executionId: string,
+    failure: ExecutorFailure
+  ): Promise<ExecutorFailoverResult | null> {
+    if (!isExecutorFailure(failure)) {
+      throw new ExecutorManagerError('failover requires a failure from the frozen Zero3 taxonomy')
+    }
+    if (failurePolicyFor(failure.code).failover !== 'eligible') return null
+    if (!this.#router || !this.options.handoffStore) return null
+
+    const key = this.bindingKey(taskId, executionId)
+    const binding = this.requireBinding(taskId, executionId)
+    if (failure.source !== binding.executorId) {
+      throw new ExecutorManagerError('failover failure source does not match the active executor')
+    }
+    if (binding.pendingPermissions.size > 0) return null
+
+    const candidates = this.#router.fallbackCandidatesAfter(binding.executorId, failure)
+    let targetExecutorId: ExecutorId | undefined
+    for (const candidate of candidates) {
+      try {
+        const probe = await this.registry.require(candidate).probe()
+        if (probe.status === 'ready') {
+          targetExecutorId = candidate
+          break
+        }
+      } catch {
+        // A failed probe is not authoritative evidence that the current task can
+        // safely transfer to that candidate. Continue to the next frozen route.
+      }
+    }
+    if (!targetExecutorId) return null
+
+    const baseSha = binding.identity.baseSha?.trim() || constraintValue(binding.identity.constraints, 'baseline=')
+    if (!baseSha) throw new ExecutorManagerError('checkpointed failover requires an authoritative baseline SHA')
+
+    const checkpoint = await buildHandoffCheckpoint({
+      taskId: binding.identity.taskId,
+      executionId: binding.identity.executionId,
+      workspace: binding.identity.workspace,
+      repoId: binding.identity.repoIdentity?.trim() || binding.identity.workspace,
+      baseSha,
+      objective: binding.identity.objective,
+      constraints: binding.identity.constraints,
+      acceptanceCriteria: binding.identity.acceptanceCriteria,
+      completed: [],
+      inProgress: ['executor stopped before authoritative completion'],
+      remaining: ['inspect the persisted workspace state and continue the objective'],
+      testsRun: [],
+      testResults: [],
+      pendingApprovals: [],
+      lastExecutor: binding.executorId,
+      lastSessionId: binding.session.sessionId,
+      stopReason: `executor_failure:${failure.code}`,
+      nextAction: `continue_with:${targetExecutorId}`,
+      previousGeneration: binding.session.generation - 1
+    })
+    await this.options.handoffStore.save(checkpoint)
+    const checkpointRef: ExecutorHandoffCheckpointRef = {
+      protocol: ZERO3_HANDOFF_PROTOCOL,
+      checkpointHash: checkpoint.checkpoint_hash,
+      generation: checkpoint.handoff_generation,
+      workspaceFingerprint: checkpoint.dirty_worktree_fingerprint
+    }
+    if (checkpointRef.generation !== binding.session.generation) {
+      throw new ExecutorManagerError('failover checkpoint generation does not match the active executor generation')
+    }
+
+    const previousExecutorId = binding.executorId
+    const previousExecutor = this.registry.require(previousExecutorId)
+    // Do not create the next writer until the old executor has positively closed.
+    // If close fails, keep the binding quarantined and fail closed.
+    await previousExecutor.close(binding.session)
+    this.#bindings.delete(key)
+
+    const session = await this.startFromHandoff(
+      targetExecutorId,
+      binding.identity,
+      binding.policy,
+      checkpointRef
+    )
+    return {
+      fromExecutorId: previousExecutorId,
+      toExecutorId: targetExecutorId,
+      session,
+      checkpoint: checkpointRef
     }
   }
 
