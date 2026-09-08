@@ -52,7 +52,7 @@ export function ProjectScopeSwitcher({ projects, activeProjectId, onSelectScope 
       </button>
 
       {open && (
-        <div className="absolute left-2 right-2 top-11 z-20 overflow-hidden rounded-lg border border-(--ui-border) bg-(--ui-pane-background) py-1 shadow-lg">
+        <div className="absolute left-2 right-2 top-11 z-20 overflow-hidden rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) py-1 shadow-lg">
           <button
             onClick={() => choose(null)}
             className={cn(
