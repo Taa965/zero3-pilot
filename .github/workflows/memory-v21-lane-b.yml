@@ -46,7 +46,11 @@ jobs:
             psql -v ON_ERROR_STOP=1 -f "$migration"
           done
       - name: Verify live authority semantics
-        run: psql -v ON_ERROR_STOP=1 -f deployment/memory/tests/authority_v2_1.sql
+        run: |
+          for test_file in deployment/memory/tests/*.sql; do
+            echo "Running $test_file"
+            psql -v ON_ERROR_STOP=1 -f "$test_file"
+          done
       - name: SQL static invariants
         run: |
           grep -q 'CREATE EXTENSION IF NOT EXISTS vector' deployment/memory/migrations/001_memory_authority_v2_1.sql
@@ -54,3 +58,4 @@ jobs:
           grep -q 'event_id UUID NOT NULL UNIQUE' deployment/memory/migrations/001_memory_authority_v2_1.sql
           grep -q 'entity_version_conflict' deployment/memory/migrations/001_memory_authority_v2_1.sql
           grep -q 'rebuild_project_memory_projection' deployment/memory/migrations/001_memory_authority_v2_1.sql
+          grep -q 'PRIMARY KEY (scope_key, entity_id)' deployment/memory/migrations/003_memory_authority_v2_1_scoped_entities.sql
