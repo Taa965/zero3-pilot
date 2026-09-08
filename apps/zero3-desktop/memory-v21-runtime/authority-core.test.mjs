@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { MemoryAuthorityState, MemoryConflictError } from './authority-core.mjs'
+import { MemoryAuthorityState, MemoryConflictError, memoryScopeKey } from './authority-core.mjs'
 
 function event(overrides = {}) {
   const id = overrides.event_id ?? crypto.randomUUID()
@@ -29,15 +29,34 @@ test('duplicate event id is idempotent', () => {
   assert.equal(second.status, 'duplicate')
   assert.equal(first.sequence, second.sequence)
   assert.equal(state.latestSequence, 1)
+  assert.equal(second.entity.scope_key, 'project:project-a')
 })
 
-test('entity version conflict is explicit', () => {
+test('entity version conflict is explicit within one scope', () => {
   const state = new MemoryAuthorityState()
   state.append(event({ memory: { class: 'project', entity_type: 'decision', entity_id: 'decision-1', authority: 60, expected_entity_version: 0 } }))
   assert.throws(
     () => state.append(event({ memory: { class: 'project', entity_type: 'decision', entity_id: 'decision-1', authority: 60, expected_entity_version: 0 } })),
-    error => error instanceof MemoryConflictError && error.code === 'entity_version_conflict'
+    error => error instanceof MemoryConflictError && error.code === 'entity_version_conflict' && error.details.scope_key === 'project:project-a'
   )
+})
+
+test('same entity id is isolated between projects', () => {
+  const state = new MemoryAuthorityState()
+  const a = state.append(event({
+    scope: { project_id: 'project-a', task_id: null, session_id: null, thread_id: null },
+    memory: { class: 'project', entity_type: 'decision', entity_id: 'decision-1', authority: 60, expected_entity_version: 0 },
+    payload: { text: 'A' }
+  }))
+  const b = state.append(event({
+    scope: { project_id: 'project-b', task_id: null, session_id: null, thread_id: null },
+    memory: { class: 'project', entity_type: 'decision', entity_id: 'decision-1', authority: 60, expected_entity_version: 0 },
+    payload: { text: 'B' }
+  }))
+  assert.equal(a.entity.version, 1)
+  assert.equal(b.entity.version, 1)
+  assert.equal(state.getEntity('decision-1', { memoryClass: 'project', projectId: 'project-a' }).content.text, 'A')
+  assert.equal(state.getEntity('decision-1', { memoryClass: 'project', projectId: 'project-b' }).content.text, 'B')
 })
 
 test('lower authority cannot replace current entity', () => {
@@ -55,6 +74,14 @@ test('agent cannot self-assert user authority', () => {
     () => state.append(event({ memory: { class: 'project', entity_type: 'decision', entity_id: 'decision-user', authority: 100 } })),
     error => error instanceof MemoryConflictError && error.code === 'user_authority_boundary'
   )
+})
+
+test('scope keys reject malformed project/task writes', () => {
+  assert.equal(memoryScopeKey('global'), 'global')
+  assert.equal(memoryScopeKey('project', { project_id: 'p' }), 'project:p')
+  assert.equal(memoryScopeKey('task', { task_id: 't' }), 'task:t')
+  assert.throws(() => memoryScopeKey('project', {}), /project memory requires project_id/)
+  assert.throws(() => memoryScopeKey('task', {}), /task memory requires task_id/)
 })
 
 test('events replay in monotonic sequence order', () => {
