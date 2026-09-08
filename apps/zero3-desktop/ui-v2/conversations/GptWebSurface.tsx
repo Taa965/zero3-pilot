@@ -46,7 +46,6 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
   const [status, setStatus] = useState<SurfaceStatus>('cold')
   const [detail, setDetail] = useState<string | null>(null)
   const [pageTitle, setPageTitle] = useState<string | null>(null)
-  const [railVisible, setRailVisible] = useState(false)
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null)
   const [showFallback, setShowFallback] = useState(false)
 
@@ -107,9 +106,6 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         // rect measured before it can already be stale.
         void window.zero3GptWeb.setBounds({ id: entryId, bounds: boundsOf(host) }).catch(() => {})
         setPageTitle(entry.pageTitle)
-        // Each view starts with ChatGPT's own rail suppressed, so a surface
-        // remounted after the toggle was flipped must not claim otherwise.
-        setRailVisible(false)
       } catch (error) {
         if (cancelled) return
         setStatus('error')
@@ -159,13 +155,6 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
     if (entryId) void window.zero3GptWeb.openExternal({ id: entryId }).catch(() => {})
   }, [entryId])
 
-  const toggleRail = useCallback(() => {
-    if (!entryId) return
-    const next = !railVisible
-    setRailVisible(next)
-    void window.zero3GptWeb.setChromeVisible({ id: entryId, visible: next }).catch(() => {})
-  }, [entryId, railVisible])
-
   if (!entryId) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-background text-(--ui-text-secondary)">
@@ -195,23 +184,20 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         </span>
         <div className="ml-auto flex items-center gap-2">
           <button
-            onClick={toggleRail}
-            title="ChatGPT 自带的会话栏默认隐藏，需要翻它的历史对话时可临时显示"
-            className="rounded-md border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background)"
-          >
-            {railVisible ? '隐藏 ChatGPT 会话栏' : '显示 ChatGPT 会话栏'}
-          </button>
-          <button
             onClick={reload}
-            className="rounded-md border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background)"
+            title="刷新"
+            aria-label="刷新"
+            className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
           >
-            刷新
+            <Codicon name="refresh" className="text-base" />
           </button>
           <button
             onClick={openExternal}
-            className="rounded-md border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background)"
+            title="在浏览器打开"
+            aria-label="在浏览器打开"
+            className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
           >
-            在浏览器打开
+            <Codicon name="link-external" className="text-base" />
           </button>
         </div>
       </div>
