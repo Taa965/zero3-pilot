@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Codicon } from '@/components/ui/codicon'
 
-type SurfaceStatus = 'idle' | 'loading' | 'ready' | 'error'
+type SurfaceStatus = 'cold' | 'warming' | 'warm' | 'visible' | 'suspended' | 'error'
 
 interface GptWebSurfaceProps {
   /** Workspace entry chosen in the session list; null until one is selected. */
@@ -19,25 +19,56 @@ function boundsOf(host: HTMLElement) {
   }
 }
 
+function normalizeState(state: string): SurfaceStatus | null {
+  if (state === 'cold' || state === 'created') return 'cold'
+  if (state === 'warming' || state === 'loading') return 'warming'
+  if (state === 'warm' || state === 'ready' || state === 'hidden') return 'warm'
+  if (state === 'visible' || state === 'shown') return 'visible'
+  if (state === 'suspended') return 'suspended'
+  if (state === 'error') return 'error'
+  return null
+}
+
+function statusText(status: SurfaceStatus) {
+  if (status === 'visible') return '已就绪'
+  if (status === 'warm') return '已预热'
+  if (status === 'warming') return '恢复中…'
+  if (status === 'suspended') return '已休眠'
+  if (status === 'error') return '加载失败'
+  return '准备中…'
+}
+
 export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
   // The ChatGPT page is a native WebContentsView owned by Electron main, not a
   // DOM node. It is positioned over this element's rectangle, so the element
   // stays empty and only serves as the geometry source.
   const hostRef = useRef<HTMLDivElement>(null)
-  const [status, setStatus] = useState<SurfaceStatus>('idle')
+  const [status, setStatus] = useState<SurfaceStatus>('cold')
   const [detail, setDetail] = useState<string | null>(null)
   const [pageTitle, setPageTitle] = useState<string | null>(null)
   const [railVisible, setRailVisible] = useState(false)
+  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null)
+  const [showFallback, setShowFallback] = useState(false)
 
   useEffect(() => {
     if (!entryId) {
-      setStatus('idle')
+      setStatus('cold')
+      setSnapshotUrl(null)
+      setShowFallback(false)
       return
     }
 
     let cancelled = false
-    setStatus('loading')
+    setStatus('cold')
     setDetail(null)
+    setSnapshotUrl(null)
+    setShowFallback(false)
+
+    // Warm sessions normally become visible well before this timer fires. The
+    // small delay keeps a fast hot-pool switch from flashing a fake loading UI.
+    const fallbackTimer = window.setTimeout(() => {
+      if (!cancelled) setShowFallback(true)
+    }, 120)
 
     const unsubscribe = window.zero3GptWeb.onEvent(event => {
       if (event.entryId !== entryId) return
@@ -45,13 +76,26 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         setPageTitle(event.pageTitle)
         return
       }
-      if (event.state === 'loading') setStatus('loading')
-      else if (event.state === 'ready' || event.state === 'shown') setStatus('ready')
-      else if (event.state === 'error') {
-        setStatus('error')
+      const next = normalizeState(event.state)
+      if (next) setStatus(next)
+      if (next === 'visible') {
+        setShowFallback(false)
+        setSnapshotUrl(null)
+      } else if (next === 'error') {
         setDetail(event.detail ?? null)
+        setShowFallback(true)
       }
     })
+
+    const restoreSnapshot = async () => {
+      try {
+        const snapshot = await window.zero3GptWeb.snapshot({ id: entryId })
+        if (!cancelled && snapshot.dataUrl) setSnapshotUrl(snapshot.dataUrl)
+      } catch {
+        // Snapshotting is a best-effort visual optimization. A missing snapshot
+        // should fall back to the normal lightweight restore surface.
+      }
+    }
 
     const show = async () => {
       try {
@@ -59,10 +103,8 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         if (!host) return
         const entry = await window.zero3GptWeb.show({ id: entryId, bounds: boundsOf(host) })
         if (cancelled) return
-        // show() spans an IPC round trip and a possible view creation, so the
-        // rect measured before it can already be stale -- and the bounds effect
-        // cannot cover for it because its first ResizeObserver callback fires
-        // while the view is not live yet, where setBounds rejects.
+        // show() spans an IPC round trip and a possible cold-page warmup, so the
+        // rect measured before it can already be stale.
         void window.zero3GptWeb.setBounds({ id: entryId, bounds: boundsOf(host) }).catch(() => {})
         setPageTitle(entry.pageTitle)
         // Each view starts with ChatGPT's own rail suppressed, so a surface
@@ -71,17 +113,21 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
       } catch (error) {
         if (cancelled) return
         setStatus('error')
+        setShowFallback(true)
         setDetail(error instanceof Error ? error.message : String(error))
       }
     }
 
+    void restoreSnapshot()
     void show()
 
     return () => {
       cancelled = true
+      window.clearTimeout(fallbackTimer)
       unsubscribe()
       // Native views sit above the whole renderer, so leaving one visible would
-      // cover the Codex and Gemini surfaces after switching away.
+      // cover the Codex and Gemini surfaces after switching away. Main captures
+      // a small in-memory JPEG before detaching it for future cold restoration.
       void window.zero3GptWeb.hide({ id: entryId }).catch(() => {})
     }
   }, [entryId])
@@ -130,20 +176,22 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
     )
   }
 
+  const fallbackVisible = status !== 'visible' && (showFallback || Boolean(snapshotUrl))
+
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-(--ui-border) px-4 text-sm">
         <span className="truncate text-(--ui-text-secondary)">{pageTitle ?? 'ChatGPT'}</span>
         <span
           className={
-            status === 'ready'
+            status === 'visible'
               ? 'text-xs text-green-600'
               : status === 'error'
                 ? 'text-xs text-red-600'
                 : 'text-xs text-(--ui-text-tertiary)'
           }
         >
-          {status === 'ready' ? '已就绪' : status === 'error' ? '加载失败' : '加载中…'}
+          {statusText(status)}
         </span>
         <div className="ml-auto flex items-center gap-2">
           <button
@@ -167,11 +215,26 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
           </button>
         </div>
       </div>
-      <div ref={hostRef} className="relative min-h-0 flex-1">
-        {status !== 'ready' && (
+      <div ref={hostRef} className="relative min-h-0 flex-1 overflow-hidden">
+        {fallbackVisible && snapshotUrl && (
+          <div className="absolute inset-0 bg-background">
+            <img
+              src={snapshotUrl}
+              alt="上次会话画面"
+              className="h-full w-full object-cover object-top"
+              draggable={false}
+            />
+            {status !== 'error' && (
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-(--ui-border) bg-(--ui-pane-background) px-3 py-1 text-xs text-(--ui-text-secondary) shadow-sm">
+                正在恢复实时页面…
+              </div>
+            )}
+          </div>
+        )}
+        {fallbackVisible && !snapshotUrl && (
           <div className="flex h-full flex-col items-center justify-center text-(--ui-text-secondary)">
             <Codicon name="globe" className="mb-4 size-12 text-blue-500 opacity-50" />
-            <div>{status === 'error' ? 'ChatGPT 视图加载失败' : '正在加载 ChatGPT…'}</div>
+            <div>{status === 'error' ? 'ChatGPT 视图加载失败' : '正在恢复 ChatGPT…'}</div>
             {detail && <div className="mt-2 max-w-md text-center text-xs text-(--ui-text-tertiary)">{detail}</div>}
           </div>
         )}
