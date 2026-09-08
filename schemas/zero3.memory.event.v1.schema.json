@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zero3.local/schemas/zero3.memory.event.v1.schema.json",
+  "title": "Zero3 Memory Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "event_id", "created_at", "scope", "actor", "event_type", "memory", "source", "supersedes", "payload"],
+  "properties": {
+    "schema": {"const": "zero3.memory.event.v1"},
+    "event_id": {"type": "string", "format": "uuid"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_id"],
+      "properties": {
+        "project_id": {"type": ["string", "null"], "maxLength": 256},
+        "task_id": {"type": ["string", "null"], "maxLength": 256},
+        "session_id": {"type": ["string", "null"], "maxLength": 256},
+        "thread_id": {"type": ["string", "null"], "maxLength": 256}
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "agent_type"],
+      "properties": {
+        "agent_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "agent_type": {"type": "string", "enum": ["zero3", "codex", "claude", "antigravity", "gpt_web", "system", "migration"]},
+        "device_id": {"type": ["string", "null"], "maxLength": 256}
+      }
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "decision.recorded", "decision.superseded", "constraint.recorded",
+        "pitfall.recorded", "pitfall.resolved", "glossary.updated",
+        "policy.recorded", "policy.revoked", "focus.changed",
+        "fact.verified", "fact.contradicted", "task.created",
+        "task.requirement.updated", "task.assigned", "task.progress",
+        "task.blocked", "task.unblocked", "task.verified", "task.completed",
+        "task.failed", "handoff.published", "artifact.recorded",
+        "sync.client_connected", "sync.client_recovered",
+        "sync.conflict_detected", "sync.offline_batch_ingested",
+        "memory.corrected", "memory.superseded", "memory.revoked"
+      ]
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "entity_type", "entity_id", "authority"],
+      "properties": {
+        "class": {"type": "string", "enum": ["scratch", "task", "project", "global", "personal", "audit"]},
+        "entity_type": {"type": "string", "minLength": 1, "maxLength": 128},
+        "entity_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "authority": {"type": "integer", "minimum": 0, "maximum": 100},
+        "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "expected_entity_version": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {"type": "string", "enum": ["task", "chat", "git", "artifact", "migration", "system", "github_inbox"]},
+        "ref": {"type": ["string", "null"], "maxLength": 2048},
+        "hash": {"type": ["string", "null"], "maxLength": 256}
+      }
+    },
+    "supersedes": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"type": "string", "format": "uuid"}
+    },
+    "payload": {"type": "object"}
+  }
+}

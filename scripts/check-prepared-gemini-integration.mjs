@@ -30,6 +30,7 @@ const staged = [
   'electron/zero3/artifacts/antigravity-mcp-lease.ts',
   'electron/zero3/mcp/task-mcp-server.mjs',
   'electron/zero3/mcp/project-context-server.mjs',
+  'electron/zero3/mcp/project-context-core.mjs',
   'electron/zero3/remote-host/remote-task-runner.ts',
   'src/app/chat/sidebar/gpt-web-handoff-actions.tsx',
   'src/app/chat/sidebar/gemini-session-section.tsx'
@@ -88,7 +89,7 @@ requireAll(preload, preloadPath, ["contextBridge.exposeInMainWorld('zero3AgentTa
 
 const globalPath = 'src/global.d.ts'
 const global = read(globalPath)
-requireAll(global, globalPath, ["type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'AUTO'",'zero3AgentTask: {','zero3AgentTasks: {','recoveryInspect:','recoveryResolve:'])
+requireAll(global, globalPath, ["type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'AUTO'",'zero3AgentTask: {','zero3AgentTasks: {','recoveryInspect:','recoveryResolve:'])
 
 const handoffPath = 'src/app/chat/sidebar/gpt-web-handoff-actions.tsx'
 const handoff = read(handoffPath)
@@ -113,8 +114,10 @@ const packagedLease = read('electron/zero3/artifacts/antigravity-mcp-lease.ts')
 requireAll(packagedLease, 'electron/zero3/artifacts/antigravity-mcp-lease.ts', ["createHash('sha256')",'storageName(taskId)','this.taskSnapshotPath = null','await fs.unlink(taskSnapshotPath)','already installed or pending cleanup'])
 const packagedTaskMcp = read('electron/zero3/mcp/task-mcp-server.mjs')
 requireAll(packagedTaskMcp, 'electron/zero3/mcp/task-mcp-server.mjs', ["import { createHash } from 'node:crypto'",'storageName(id)','Zero3 task snapshot identity mismatch','artifact index task identity mismatch','review record task identity mismatch'])
-const packagedProjectMcp = read('electron/zero3/mcp/project-context-server.mjs')
-requireAll(packagedProjectMcp, 'electron/zero3/mcp/project-context-server.mjs', ["createHash('sha256')",'storageName(id)','invalid persisted project context','invalid persisted handoff'])
+const packagedProjectServer = read('electron/zero3/mcp/project-context-server.mjs')
+requireAll(packagedProjectServer, 'electron/zero3/mcp/project-context-server.mjs', ['createProjectContextCore','resolveContextRoot',"from './project-context-core.mjs'"])
+const packagedProjectCore = read('electron/zero3/mcp/project-context-core.mjs')
+requireAll(packagedProjectCore, 'electron/zero3/mcp/project-context-core.mjs', ["createHash('sha256')",'storageName(logicalId)','invalid persisted project context','invalid persisted handoff'])
 
 console.log('Prepared Gemini/Antigravity desktop composition gate passed.')
 console.log(`Verified ${staged.length} staged runtime/UI files plus Electron main/preload/global/MCP composition.`)
