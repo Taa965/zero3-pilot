@@ -269,8 +269,9 @@ jobs:
         run: |
           $installer = Get-ChildItem 'dist\Zero3Pilot-Setup.exe' -ErrorAction Stop | Select-Object -First 1
           $installDir = Join-Path $env:RUNNER_TEMP 'zero3-pilot-installed'
-          & $installer.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="$installDir"
-          if ($LASTEXITCODE -ne 0) { throw "Installer failed with exit code $LASTEXITCODE" }
+          $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$installDir`"")
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed with exit code $($process.ExitCode)" }
           if (-not (Test-Path (Join-Path $installDir 'zero3-pilot.exe'))) { throw 'Installed desktop binary missing' }
       - uses: actions/upload-artifact@v4
         with:
