@@ -15,14 +15,16 @@ interface UnifiedSessionListProps {
   onSelectProjectContext: (projectId: string | null) => void
   onCreate: () => void
   onDelete: (session: WorkspaceSession) => void
+  onArchive: (session: WorkspaceSession, archived: boolean) => void
   onRename: (session: WorkspaceSession) => void
   error: string | null
 }
 
 const CONTEXT_MENU_WIDTH = 184
-const CONTEXT_MENU_HEIGHT = 112
+const CONTEXT_MENU_HEIGHT = 152
 const GPT_PREWARM_DELAY_MS = 150
-const FILTERS: Array<'all' | WorkspaceProvider> = ['all', 'gpt', 'gemini', 'codex', 'claude', 'antigravity', 'zero3']
+type SessionFilter = 'all' | 'archived' | WorkspaceProvider
+const FILTERS: SessionFilter[] = ['all', 'gpt', 'gemini', 'codex', 'claude', 'antigravity', 'zero3', 'archived']
 
 const PROVIDER_MARKS: Record<WorkspaceProvider, { symbol: string; color: string; label: string }> = {
   gpt: { symbol: '◎', color: 'text-blue-500', label: 'GPT' },
@@ -43,10 +45,11 @@ export function UnifiedSessionList({
   onSelectProjectContext,
   onCreate,
   onDelete,
+  onArchive,
   onRename,
   error
 }: UnifiedSessionListProps) {
-  const [filter, setFilter] = useState<'all' | WorkspaceProvider>('all')
+  const [filter, setFilter] = useState<SessionFilter>('all')
   const [query, setQuery] = useState('')
   const [menu, setMenu] = useState<{ session: WorkspaceSession; x: number; y: number } | null>(null)
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(() => new Set())
@@ -86,7 +89,7 @@ export function UnifiedSessionList({
   }
 
   const queuePrewarm = (session: WorkspaceSession) => {
-    if (session.provider !== 'gpt' || session.source !== 'web' || session.id === activeId) return
+    if (session.archived || session.provider !== 'gpt' || session.source !== 'web' || session.id === activeId) return
     cancelPrewarm(session.id)
     const timer = window.setTimeout(() => {
       prewarmTimersRef.current.delete(session.id)
@@ -111,7 +114,12 @@ export function UnifiedSessionList({
     const needle = query.trim().toLowerCase()
     return sessions.filter(session => {
       if (activeProjectId !== null && session.projectId !== activeProjectId) return false
-      if (filter !== 'all' && session.provider !== filter) return false
+      if (filter === 'archived') {
+        if (!session.archived) return false
+      } else {
+        if (session.archived) return false
+        if (filter !== 'all' && session.provider !== filter) return false
+      }
       if (!needle) return true
       return session.title.toLowerCase().includes(needle) || session.subtitle.toLowerCase().includes(needle)
     })
@@ -140,13 +148,14 @@ export function UnifiedSessionList({
 
   const renderSession = (session: WorkspaceSession) => {
     const active = session.id === activeId
+    const archived = session.archived === true
     const mark = PROVIDER_MARKS[session.provider]
     return (
       <button
         key={session.id}
         onClick={() => {
           cancelPrewarm(session.id)
-          onSelect(session)
+          if (!archived) onSelect(session)
         }}
         onMouseEnter={() => queuePrewarm(session)}
         onMouseLeave={() => cancelPrewarm(session.id)}
@@ -162,6 +171,7 @@ export function UnifiedSessionList({
           <div className="flex min-w-0 items-center gap-1.5 font-medium">
             <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
             <span className="truncate">{session.title}</span>
+            {archived && <Codicon name="archive" className="size-3.5 shrink-0 text-(--ui-text-tertiary)" />}
           </div>
           <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
         </div>
@@ -209,7 +219,7 @@ export function UnifiedSessionList({
                 filter === value && 'bg-(--ui-control-active-background) font-medium text-foreground'
               )}
             >
-              {value === 'all' ? '全部' : PROVIDER_MARKS[value].label}
+              {value === 'all' ? '\u5168\u90e8' : value === 'archived' ? '\u5f52\u6863' : PROVIDER_MARKS[value].label}
             </button>
           ))}
         </div>
@@ -275,6 +285,18 @@ export function UnifiedSessionList({
             onClick={() => {
               const target = menu.session
               setMenu(null)
+              onArchive(target, !target.archived)
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-(--ui-control-hover-background)"
+          >
+            <Codicon name="archive" className="size-4" />
+            {menu.session.archived ? '\u53d6\u6d88\u5f52\u6863' : '\u5f52\u6863\u4f1a\u8bdd'}
+          </button>
+          <button
+            role="menuitem"
+            onClick={() => {
+              const target = menu.session
+              setMenu(null)
               onDelete(target)
             }}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-red-600 hover:bg-(--ui-control-hover-background)"
@@ -283,7 +305,7 @@ export function UnifiedSessionList({
             删除会话
           </button>
           <div className="px-2 pb-1 pt-0.5 text-[11px] leading-tight text-(--ui-text-tertiary)">
-            网页会话仅从 Zero3 移除；本地会话会删除本机记录
+            {'\u5f52\u6863\u4f1a\u540c\u6b65\u5230\u652f\u6301\u539f\u751f\u5f52\u6863\u7684\u5e73\u53f0'}
           </div>
         </div>
       )}

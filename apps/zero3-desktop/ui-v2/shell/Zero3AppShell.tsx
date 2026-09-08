@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
 import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdapter'
+import { SessionArchiveAdapter } from '../adapters/SessionArchiveAdapter'
 import { WebWorkspaceAdapter } from '../adapters/WebWorkspaceAdapter'
 import { ChatGptProjectBindingDialog } from '../conversations/ChatGptProjectBindingDialog'
 import { hideNativeWebSession } from '../conversations/native-overlay-visibility'
@@ -132,6 +133,18 @@ export function Zero3AppShell() {
     }
   }, [refreshLocalSessions, refreshWebSessions])
 
+  const archiveSession = useCallback(async (session: WorkspaceSession, archived: boolean) => {
+    try {
+      if (archived && activeSessionId === session.id) await hideNativeWebSession(session)
+      await SessionArchiveAdapter.setArchived(session, archived)
+      if (session.source === 'local') refreshLocalSessions()
+      else await refreshWebSessions()
+      if (archived) setActiveSessionId(current => (current === session.id ? null : current))
+      setSessionError(null)
+    } catch (error) {
+      setSessionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [refreshLocalSessions, refreshWebSessions])
   const renameSession = async (session: WorkspaceSession, title: string) => {
     if (session.source === 'local') {
       LocalSessionAdapter.rename(session.id, title)
@@ -259,7 +272,7 @@ export function Zero3AppShell() {
     : null
   const activeProject = projects.find(project => project.id === (activeProjectId ?? activeSession?.projectId)) ?? null
   const activeProjectSessionCount = useMemo(
-    () => activeProjectId ? sessions.filter(session => session.projectId === activeProjectId).length : 0,
+    () => activeProjectId ? sessions.filter(session => session.projectId === activeProjectId && !session.archived).length : 0,
     [sessions, activeProjectId]
   )
   const nativeViewsMayShow = binding === null && !providerPickerOpen && renamingSession === null
@@ -295,6 +308,7 @@ export function Zero3AppShell() {
           onSelectProjectContext={setFocusedProjectId}
           onCreateSession={() => void openProviderPicker()}
           onDeleteSession={session => void deleteSession(session)}
+          onArchiveSession={(session, archived) => void archiveSession(session, archived)}
           onRenameSession={setRenamingSession}
           onSelectProjectScope={selectProjectScope}
           onSelectProject={selectProject}

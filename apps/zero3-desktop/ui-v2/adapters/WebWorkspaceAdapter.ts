@@ -47,7 +47,8 @@ function toSession(entry: WorkspaceEntry): WorkspaceSession {
     subtitle: sessionSubtitle(entry),
     updatedAt: relativeTime(entry.lastActiveAt),
     projectId: entry.projectId,
-    source: 'web'
+    source: 'web',
+    archived: entry.archived === true
   }
 }
 
@@ -86,6 +87,17 @@ export const WebWorkspaceAdapter = {
       await window.zero3GptWeb.rename({ id: session.id, title: normalized })
     } else {
       await window.zero3Workspace.rename({ id: session.id, title: normalized })
+    }
+  },
+
+  async setArchived(session: Pick<WorkspaceSession, 'id' | 'provider'>, archived: boolean): Promise<void> {
+    if (session.provider === 'gpt') {
+      if (!window.zero3GptWeb.setArchived) throw new Error('GPT web archive support is not loaded; restart Zero3 and retry')
+      await window.zero3GptWeb.setArchived({ id: session.id, archived })
+      return
+    }
+    if (session.provider === 'gemini') {
+      await window.zero3Workspace.setArchived({ id: session.id, archived })
     }
   },
 

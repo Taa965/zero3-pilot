@@ -15,7 +15,7 @@ import {
   type Zero3GptWebWorkspaceEntry
 } from '../workspace/workspace-entry-types'
 import { ChatGptSignedOutError, readChatGptProjectCatalog, withChatGptContents } from './chatgpt-project-catalog'
-import { chatGptConversationId, renameChatGptConversation } from './chatgpt-conversation-name'
+import { chatGptConversationId, renameChatGptConversation, setChatGptConversationArchived } from './chatgpt-conversation-name'
 import {
   ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS,
   ZERO3_GPT_WEB_BASE_LIVE_VIEWS,
@@ -231,7 +231,7 @@ export class Zero3GptWebProvider {
   private loginWindow: BrowserWindow | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
   private catalogTail: Promise<unknown> = Promise.resolve()
-  private renameTail: Promise<unknown> = Promise.resolve()
+  private conversationMutationTail: Promise<unknown> = Promise.resolve()
   private maintenanceTimer: NodeJS.Timeout | null = null
 
   constructor(
@@ -376,7 +376,7 @@ export class Zero3GptWebProvider {
 
   rename(id: string, title: unknown): Promise<Zero3GptWebWorkspaceEntry> {
     const normalized = requiredText(title, '会话名称', 200)
-    const task = this.renameTail.then(async () => {
+    const task = this.conversationMutationTail.then(async () => {
       await this.persistenceTail
       const entry = await this.requireEntry(id)
       const conversationUrl = entry.conversationUrl ?? entry.currentUrl
@@ -394,7 +394,48 @@ export class Zero3GptWebProvider {
         currentUrl: renamed.currentUrl, conversationUrl: renamed.conversationUrl, pageTitle: renamed.pageTitle })
       return renamed
     })
-    this.renameTail = task.catch(() => undefined)
+    this.conversationMutationTail = task.catch(() => undefined)
+    return task
+  }
+
+  setArchived(id: string, archived: unknown): Promise<Zero3GptWebWorkspaceEntry> {
+    if (typeof archived !== 'boolean') throw new Error('archive state must be a boolean')
+    const task = this.conversationMutationTail.then(async () => {
+      await this.persistenceTail
+      const entry = await this.requireEntry(id)
+      const conversationUrl = canonicalConversationUrl(entry.conversationUrl ?? entry.currentUrl)
+      const conversationId = conversationUrl ? chatGptConversationId(conversationUrl) : null
+
+      // An untouched new-chat page has no remote conversation yet. In that one
+      // case there is nothing for ChatGPT to archive, so only the Zero3 entry is
+      // moved. Saved conversations must succeed and verify remotely first.
+      if (conversationUrl && conversationId) {
+        await withChatGptContents(this.getProfileSession(), this.reusableContents(), contents =>
+          setChatGptConversationArchived(contents, conversationUrl, archived)
+        )
+        const current = await this.requireEntry(id)
+        const currentUrl = canonicalConversationUrl(current.conversationUrl ?? current.currentUrl)
+        if (!currentUrl || chatGptConversationId(currentUrl) !== conversationId) {
+          throw new Error('ChatGPT archive state changed remotely but the Zero3 conversation identity changed; refresh and retry')
+        }
+      }
+
+      const updated = await this.entries.setArchived({ id, archived }) as Zero3GptWebWorkspaceEntry
+      if (archived) {
+        this.destroyLive(id, 'suspended')
+        this.snapshots.delete(id)
+      }
+      this.emitEvent({
+        kind: 'navigation',
+        entryId: id,
+        previousEntryId: null,
+        currentUrl: updated.currentUrl,
+        conversationUrl: updated.conversationUrl,
+        pageTitle: updated.pageTitle
+      })
+      return updated
+    })
+    this.conversationMutationTail = task.catch(() => undefined)
     return task
   }
 

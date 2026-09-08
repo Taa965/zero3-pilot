@@ -827,6 +827,79 @@ async function zero3ProbeCodexCli() {
     })
   })
 }
+async function zero3SetSessionProviderArchived(requestValue: unknown) {
+  const request = zero3SessionRecord(requestValue)
+  const provider = zero3SessionProvider(request.provider)
+  if (typeof request.archived !== 'boolean') throw new Error('archived must be a boolean')
+  const archived = request.archived
+  const runtimeId = zero3SessionOptionalText(request.runtimeId, 512)
+
+  if (provider === 'gpt' || provider === 'gemini') {
+    throw new Error('Web sessions must use their web provider archive path')
+  }
+  if (!runtimeId) {
+    return { native: false, detail: 'No provider runtime exists yet; only Zero3 archive metadata will change' }
+  }
+  if (provider === 'zero3') {
+    await zero3CodexAppServer.request(archived ? 'thread/archive' : 'thread/unarchive', { threadId: runtimeId })
+    return { native: true, detail: archived ? 'Zero3 Agent Kernel thread archived' : 'Zero3 Agent Kernel thread unarchived' }
+  }
+  if (provider === 'claude') {
+    // Claude Code 2.x exposes resume/delete/project-purge but no supported
+    // archive/unarchive command. Keep its transcript untouched and resumable;
+    // Zero3 owns only the archive visibility flag for this provider.
+    return { native: false, detail: 'Claude Code CLI has no supported session archive API; its local transcript remains intact' }
+  }
+  if (provider === 'antigravity') {
+    return { native: false, detail: 'Antigravity currently has no persistent session archive API' }
+  }
+
+  const command = process.env.ZERO3_CODEX_CLI_BIN?.trim() || 'codex'
+  const action = archived ? 'archive' : 'unarchive'
+  const { spawn } = await import('node:child_process')
+  return new Promise<{ native: boolean; detail: string }>((resolve, reject) => {
+    const resolved = resolveWindowsCommand(command)
+    const child = spawn(resolved.command, [...resolved.args, action, runtimeId], {
+      env: zero3OfficialCodexCliEnv(),
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    const chunks: Buffer[] = []
+    let bytes = 0
+    let settled = false
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) reject(error)
+      else resolve({ native: true, detail: archived ? 'Codex session archived' : 'Codex session unarchived' })
+    }
+    const capture = (chunk: Buffer) => {
+      if (settled) return
+      bytes += chunk.byteLength
+      if (bytes > 1024 * 1024) {
+        child.kill()
+        finish(new Error('Codex archive command output exceeded 1 MiB'))
+        return
+      }
+      chunks.push(Buffer.from(chunk))
+    }
+    const timer = setTimeout(() => {
+      child.kill()
+      finish(new Error('Codex archive command timed out'))
+    }, 30_000)
+    child.stdout.on('data', chunk => capture(Buffer.from(chunk)))
+    child.stderr.on('data', chunk => capture(Buffer.from(chunk)))
+    child.once('error', error => finish(error))
+    child.once('close', code => {
+      if (settled) return
+      if (code === 0) return finish()
+      const output = Buffer.concat(chunks).toString('utf8').trim()
+      finish(new Error(output || 'Codex ' + action + ' exited with code ' + String(code)))
+    })
+  })
+}
+
 async function zero3SessionProviderStatus() {
   const codexCli = await zero3ProbeCodexCli()
   const codexAvailable = codexCli.available
@@ -923,6 +996,7 @@ ipcMain.handle('zero3:session-providers:zero3-turn', async (_event, requestValue
   if (!profile) throw new Error('Zero3 API Profile 不存在')
   return zero3ApiAgentTurn(profile, request)
 })
+ipcMain.handle('zero3:session-providers:set-archived', (_event, request: unknown) => zero3SetSessionProviderArchived(request))
 ipcMain.handle('zero3:session-providers:claude-turn', (_event, request: unknown) => zero3RunClaudeTurn(request))
 ipcMain.handle('zero3:session-providers:codex-turn', (_event, request: unknown) => zero3RunCodexCliTurn(request))
 app.on('before-quit', () => zero3ApiAgentBridge.stop())
@@ -935,6 +1009,7 @@ const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionP
   saveZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:save', request),
   removeZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:remove', request),
   zero3Turn: request => ipcRenderer.invoke('zero3:session-providers:zero3-turn', request),
+  setArchived: request => ipcRenderer.invoke('zero3:session-providers:set-archived', request),
   claudeTurn: request => ipcRenderer.invoke('zero3:session-providers:claude-turn', request),
   codexTurn: request => ipcRenderer.invoke('zero3:session-providers:codex-turn', request)
 })
@@ -970,6 +1045,7 @@ const globalSurface = String.raw`    zero3SessionProviders: {
       saveZero3Profile: (request: { id: string; name: string; protocol: Zero3ApiProfileProtocol; baseUrl: string; model: string; apiKey?: string | null }) => Promise<Zero3ApiProfile>
       removeZero3Profile: (request: { id: string }) => Promise<{ removed: boolean }>
       zero3Turn: (request: { profileId: string; text: string; cwd: string; projectId: string; threadId?: string | null; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) => Promise<{ text: string; model: string; profileId: string; threadId: string }>
+      setArchived: (request: { provider: Exclude<Zero3SessionProviderId, 'gpt' | 'gemini'>; runtimeId?: string | null; archived: boolean }) => Promise<{ native: boolean; detail: string }>
       claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null }) => Promise<{ text: string; sessionId: string | null }>
       codexTurn: (request: { text: string; cwd?: string | null; threadId?: string | null }) => Promise<{ text: string; threadId: string | null }>
     }

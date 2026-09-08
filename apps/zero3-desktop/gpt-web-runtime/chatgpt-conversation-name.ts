@@ -43,6 +43,50 @@ export function chatGptRenameScript(conversationUrl: string, title: string): str
   })()`
 }
 
+export function chatGptArchiveScript(conversationUrl: string, archived: boolean): string {
+  const id = chatGptConversationId(conversationUrl)
+  if (typeof archived !== 'boolean') throw new Error('archive state must be a boolean')
+  return `(async () => {
+    const { id, archived } = ${JSON.stringify({ id, archived })};
+    if (location.origin !== 'https://chatgpt.com') throw new Error('Sign in to ChatGPT in Zero3 and retry');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    let saved = false;
+    try {
+      const options = { credentials: 'include', redirect: 'error', signal: controller.signal };
+      const auth = await fetch('/api/auth/session', options);
+      const session = auth.ok ? await auth.json() : null;
+      if (!session || typeof session.accessToken !== 'string' || !session.accessToken) throw new Error('Sign in to ChatGPT in Zero3 and retry');
+      const headers = { Authorization: 'Bearer ' + session.accessToken, 'Content-Type': 'application/json' };
+      const endpoint = '/backend-api/conversation/' + encodeURIComponent(id);
+      const response = await fetch(endpoint, { ...options, headers, method: 'PATCH', body: JSON.stringify({ is_archived: archived }) });
+      if (!response.ok) throw new Error('ChatGPT archive update failed (HTTP ' + response.status + ')');
+      saved = true;
+      const verification = await fetch(endpoint, { ...options, headers, cache: 'no-store' });
+      if (!verification.ok) throw new Error('ChatGPT archive verification failed (HTTP ' + verification.status + ')');
+      const conversation = await verification.json();
+      if (conversation.is_archived !== archived) throw new Error('ChatGPT returned a different archive state');
+      return { archived: conversation.is_archived };
+    } catch (error) {
+      const message = error instanceof Error && error.name === 'AbortError'
+        ? 'Archive synchronization timed out'
+        : error instanceof Error ? error.message : 'Archive synchronization failed';
+      throw new Error((saved ? 'ChatGPT accepted the archive change but verification did not complete. ' : '') + message);
+    } finally { clearTimeout(timer); }
+  })()`
+}
+
+export async function setChatGptConversationArchived(
+  contents: Pick<WebContents, 'executeJavaScript'>,
+  conversationUrl: string,
+  archived: boolean
+): Promise<void> {
+  const result: unknown = await contents.executeJavaScript(chatGptArchiveScript(conversationUrl, archived), false)
+  if (!result || typeof result !== 'object' || !('archived' in result) || result.archived !== archived) {
+    throw new Error('ChatGPT did not confirm the archive state; Zero3 was not changed')
+  }
+}
+
 export async function renameChatGptConversation(
   contents: Pick<WebContents, 'executeJavaScript'>,
   conversationUrl: string,

@@ -81,6 +81,10 @@ ipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.rename(zero3GptWebId(input), input.title)
 })
+ipcMain.handle('zero3:gpt-web:set-archived', (_event, request: unknown) => {
+  const input = zero3GptWebRecord(request)
+  return zero3GptWeb.setArchived(zero3GptWebId(input), input.archived)
+})
 ipcMain.handle('zero3:gpt-web:show', (event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.show(zero3GptWebParent(event), {
@@ -120,6 +124,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3GptWeb', 
   create: request => ipcRenderer.invoke('zero3:gpt-web:create', request),
   listRemoteProjects: () => ipcRenderer.invoke('zero3:gpt-web:list-remote-projects'),
   rename: request => ipcRenderer.invoke('zero3:gpt-web:rename', request),
+  setArchived: request => ipcRenderer.invoke('zero3:gpt-web:set-archived', request),
   show: request => ipcRenderer.invoke('zero3:gpt-web:show', request),
   warm: request => ipcRenderer.invoke('zero3:gpt-web:warm', request),
   snapshot: request => ipcRenderer.invoke('zero3:gpt-web:snapshot', request),
@@ -177,6 +182,7 @@ const globalWindowSurface = String.raw`    zero3GptWeb: {
       create: (request?: { projectId?: string | null }) => Promise<Zero3WorkspaceEntry>
       listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>
       rename: (request: { id: string; title: string }) => Promise<Zero3WorkspaceEntry>
+      setArchived: (request: { id: string; archived: boolean }) => Promise<Zero3WorkspaceEntry>
       show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>
       warm: (request: { id: string }) => Promise<{ state: 'warming' | 'warm' | 'visible' }>
       snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>
