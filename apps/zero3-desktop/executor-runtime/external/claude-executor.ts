@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 
 import { createExecutorFailure } from '../failure-normalizer.ts'
+import { resolveWindowsCommand } from './windows-command.ts'
 import {
   ZERO3_EXECUTOR_CONTRACT,
   ZERO3_HANDOFF_PROTOCOL,
@@ -81,7 +82,8 @@ function capturedText(chunks: Buffer[]): string {
 export class NodeClaudeCliRunner implements ClaudeCliRunner {
   run(request: ClaudeCliRunRequest): Promise<ClaudeCliRunResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(request.command, request.args, {
+      const resolved = resolveWindowsCommand(request.command)
+      const child = spawn(resolved.command, [...resolved.args, ...request.args], {
         ...(request.cwd ? { cwd: request.cwd } : {}),
         env: process.env,
         windowsHide: true,
