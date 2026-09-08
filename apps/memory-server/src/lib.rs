@@ -1,3 +1,5 @@
+pub mod auth;
+
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -10,7 +12,7 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, State,
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -20,6 +22,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::{broadcast, Mutex};
 use tokio_postgres::NoTls;
+
+pub use auth::AuthPolicy;
+use auth::{AuthFailure, AuthGrant};
 
 pub const EVENT_SCHEMA: &str = "zero3.memory.event.v1";
 pub const SYNC_PROTOCOL: &str = "zero3.memory.sync.v1";
@@ -446,11 +451,12 @@ impl MemoryRepository for PostgresRepository {
 struct AppState {
     repo: Arc<dyn MemoryRepository>,
     bus: broadcast::Sender<CommittedEvent>,
+    auth: AuthPolicy,
 }
 
-pub fn router(repo: Arc<dyn MemoryRepository>) -> Router {
+pub fn router(repo: Arc<dyn MemoryRepository>, auth: AuthPolicy) -> Router {
     let (bus, _) = broadcast::channel(1024);
-    let state = AppState { repo, bus };
+    let state = AppState { repo, bus, auth };
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
@@ -476,7 +482,40 @@ async fn ready(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn append_event(State(state): State<AppState>, Json(event): Json<MemoryEvent>) -> Response {
+fn auth_failure_response(failure: AuthFailure) -> Response {
+    (failure.status, Json(json!({"error": failure.code}))).into_response()
+}
+
+fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<AuthGrant, Response> {
+    state
+        .auth
+        .authenticate(headers)
+        .map_err(auth_failure_response)
+}
+
+fn authorize_event(grant: &AuthGrant, event: &MemoryEvent) -> Result<(), Response> {
+    grant
+        .authorize_event(
+            event.scope.project_id.as_deref(),
+            &event.memory.class,
+            &event.actor.agent_type,
+            event.memory.authority,
+        )
+        .map_err(auth_failure_response)
+}
+
+async fn append_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(event): Json<MemoryEvent>,
+) -> Response {
+    let grant = match authenticate(&state, &headers) {
+        Ok(grant) => grant,
+        Err(response) => return response,
+    };
+    if let Err(response) = authorize_event(&grant, &event) {
+        return response;
+    }
     match state.repo.append(event.clone()).await {
         Ok(outcome) => {
             if outcome.status == AppendStatus::Accepted {
@@ -502,10 +541,26 @@ struct BatchRequest {
 
 async fn append_batch(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(batch): Json<BatchRequest>,
-) -> Json<Value> {
+) -> Response {
+    let grant = match authenticate(&state, &headers) {
+        Ok(grant) => grant,
+        Err(response) => return response,
+    };
     let mut results = Vec::with_capacity(batch.events.len());
     for event in batch.events {
+        if let Err(failure) = grant.authorize_event(
+            event.scope.project_id.as_deref(),
+            &event.memory.class,
+            &event.actor.agent_type,
+            event.memory.authority,
+        ) {
+            results.push(
+                json!({"event_id": event.event_id, "status":"rejected", "error": failure.code}),
+            );
+            continue;
+        }
         match state.repo.append(event.clone()).await {
             Ok(outcome) => {
                 if outcome.status == AppendStatus::Accepted {
@@ -521,13 +576,24 @@ async fn append_batch(
             ),
         }
     }
-    Json(json!({"results":results}))
+    Json(json!({"results":results})).into_response()
 }
 
 async fn project_context(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(project_id): Path<String>,
 ) -> Response {
+    let grant = match authenticate(&state, &headers) {
+        Ok(grant) => grant,
+        Err(response) => return response,
+    };
+    if !grant.allows_project(&project_id) {
+        return auth_failure_response(AuthFailure {
+            status: StatusCode::FORBIDDEN,
+            code: "project_denied",
+        });
+    }
     match state.repo.project_context(&project_id).await {
         Ok(context) => (StatusCode::OK, Json(json!(context))).into_response(),
         Err(error) => (
@@ -538,8 +604,17 @@ async fn project_context(
     }
 }
 
-async fn sync_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| sync_socket(socket, state))
+async fn sync_upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let grant = match authenticate(&state, &headers) {
+        Ok(grant) => grant,
+        Err(response) => return response,
+    };
+    ws.on_upgrade(move |socket| sync_socket(socket, state, grant))
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -553,7 +628,7 @@ struct SyncHello {
     projects: Vec<String>,
 }
 
-async fn sync_socket(mut socket: WebSocket, state: AppState) {
+async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
     let Some(Ok(Message::Text(text))) = socket.recv().await else {
         return;
     };
@@ -571,6 +646,22 @@ async fn sync_socket(mut socket: WebSocket, state: AppState) {
             .send(Message::Text(
                 json!({"type":"error","code":"invalid_hello","message":"invalid sync hello"})
                     .to_string(),
+            ))
+            .await;
+        return;
+    }
+    if hello.client_id != &*grant.client_id {
+        let _ = socket
+            .send(Message::Text(
+                json!({"type":"error","code":"client_id_mismatch","message":"sync client_id is not bound to this bearer grant"}).to_string(),
+            ))
+            .await;
+        return;
+    }
+    if let Err(failure) = grant.authorize_projects(&hello.projects) {
+        let _ = socket
+            .send(Message::Text(
+                json!({"type":"error","code": failure.code,"message":"sync project subscription is not authorized"}).to_string(),
             ))
             .await;
         return;
@@ -652,6 +743,19 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
+    const TEST_TOKEN: &str = "abcdefghijklmnopqrstuvwxyz123456";
+
+    fn test_auth() -> AuthPolicy {
+        AuthPolicy::from_json(
+            r#"[{"token":"abcdefghijklmnopqrstuvwxyz123456","client_id":"pilot-test","projects":["project-a"],"agent_types":["codex"],"max_authority":60,"allow_global":false,"allow_personal":false}]"#,
+        )
+        .unwrap()
+    }
+
+    fn authorized(builder: axum::http::request::Builder) -> axum::http::request::Builder {
+        builder.header("authorization", format!("Bearer {TEST_TOKEN}"))
+    }
+
     fn sample_event(id: &str, event_type: &str) -> MemoryEvent {
         MemoryEvent {
             schema: EVENT_SCHEMA.into(),
@@ -689,13 +793,13 @@ mod tests {
 
     #[tokio::test]
     async fn append_is_idempotent_and_context_is_projected() {
-        let app = router(Arc::new(InMemoryRepository::default()));
+        let app = router(Arc::new(InMemoryRepository::default()), test_auth());
         let event = sample_event("11111111-1111-4111-8111-111111111111", "decision.recorded");
         for expected in ["accepted", "duplicate"] {
             let response = app
                 .clone()
                 .oneshot(
-                    Request::post("/v1/memory/events")
+                    authorized(Request::post("/v1/memory/events"))
                         .header("content-type", "application/json")
                         .body(Body::from(serde_json::to_vec(&event).unwrap()))
                         .unwrap(),
@@ -710,7 +814,7 @@ mod tests {
         }
         let response = app
             .oneshot(
-                Request::get("/v1/projects/project-a/context")
+                authorized(Request::get("/v1/projects/project-a/context"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -724,8 +828,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn missing_bearer_token_is_rejected() {
+        let app = router(Arc::new(InMemoryRepository::default()), test_auth());
+        let event = sample_event("33333333-3333-4333-8333-333333333333", "decision.recorded");
+        let response = app
+            .oneshot(
+                Request::post("/v1/memory/events")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&event).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn user_authority_boundary_is_fail_closed() {
-        let app = router(Arc::new(InMemoryRepository::default()));
+        let app = router(Arc::new(InMemoryRepository::default()), test_auth());
         let mut event = sample_event("22222222-2222-4222-8222-222222222222", "decision.recorded");
         event.memory.authority = 100;
         let response = app

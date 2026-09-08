@@ -1,4 +1,7 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use anyhow::Context;
 use axum::http::{header::AUTHORIZATION, HeaderMap, StatusCode};
@@ -83,7 +86,8 @@ pub struct AuthPolicy {
 
 impl AuthPolicy {
     pub fn from_json(value: &str) -> anyhow::Result<Self> {
-        let configs: Vec<AuthGrantConfig> = serde_json::from_str(value).context("parse memory auth JSON")?;
+        let configs: Vec<AuthGrantConfig> =
+            serde_json::from_str(value).context("parse memory auth JSON")?;
         if configs.is_empty() {
             anyhow::bail!("memory auth policy must contain at least one grant");
         }
@@ -119,7 +123,9 @@ impl AuthPolicy {
                 anyhow::bail!("duplicate memory bearer token");
             }
         }
-        Ok(Self { grants: Arc::new(grants) })
+        Ok(Self {
+            grants: Arc::new(grants),
+        })
     }
 
     pub fn authenticate(&self, headers: &HeaderMap) -> Result<AuthGrant, AuthFailure> {
@@ -147,11 +153,17 @@ pub struct AuthFailure {
 
 impl AuthFailure {
     fn unauthorized(code: &'static str) -> Self {
-        Self { status: StatusCode::UNAUTHORIZED, code }
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code,
+        }
     }
 
     fn forbidden(code: &'static str) -> Self {
-        Self { status: StatusCode::FORBIDDEN, code }
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+        }
     }
 }
 
@@ -161,7 +173,8 @@ mod tests {
     use axum::http::HeaderValue;
 
     fn policy() -> AuthPolicy {
-        AuthPolicy::from_json(r#"[{
+        AuthPolicy::from_json(
+            r#"[{
           "token":"abcdefghijklmnopqrstuvwxyz123456",
           "client_id":"pilot-test",
           "projects":["project-a"],
@@ -169,21 +182,55 @@ mod tests {
           "max_authority":60,
           "allow_global":false,
           "allow_personal":false
-        }]"#).unwrap()
+        }]"#,
+        )
+        .unwrap()
     }
 
     #[test]
     fn bearer_auth_and_acl_are_fail_closed() {
         let policy = policy();
         let mut headers = HeaderMap::new();
-        assert_eq!(policy.authenticate(&headers).unwrap_err().status, StatusCode::UNAUTHORIZED);
-        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer abcdefghijklmnopqrstuvwxyz123456"));
+        assert_eq!(
+            policy.authenticate(&headers).unwrap_err().status,
+            StatusCode::UNAUTHORIZED
+        );
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer abcdefghijklmnopqrstuvwxyz123456"),
+        );
         let grant = policy.authenticate(&headers).unwrap();
         assert_eq!(&*grant.client_id, "pilot-test");
-        assert!(grant.authorize_event(Some("project-a"), "project", "codex", 60).is_ok());
-        assert_eq!(grant.authorize_event(Some("project-b"), "project", "codex", 60).unwrap_err().code, "project_denied");
-        assert_eq!(grant.authorize_event(Some("project-a"), "project", "system", 60).unwrap_err().code, "agent_type_denied");
-        assert_eq!(grant.authorize_event(Some("project-a"), "project", "codex", 85).unwrap_err().code, "authority_denied");
-        assert_eq!(grant.authorize_event(Some("project-a"), "personal", "codex", 20).unwrap_err().code, "personal_denied");
+        assert!(grant
+            .authorize_event(Some("project-a"), "project", "codex", 60)
+            .is_ok());
+        assert_eq!(
+            grant
+                .authorize_event(Some("project-b"), "project", "codex", 60)
+                .unwrap_err()
+                .code,
+            "project_denied"
+        );
+        assert_eq!(
+            grant
+                .authorize_event(Some("project-a"), "project", "system", 60)
+                .unwrap_err()
+                .code,
+            "agent_type_denied"
+        );
+        assert_eq!(
+            grant
+                .authorize_event(Some("project-a"), "project", "codex", 85)
+                .unwrap_err()
+                .code,
+            "authority_denied"
+        );
+        assert_eq!(
+            grant
+                .authorize_event(Some("project-a"), "personal", "codex", 20)
+                .unwrap_err()
+                .code,
+            "personal_denied"
+        );
     }
 }

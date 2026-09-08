@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Context;
-use zero3_memory_server::{router, MemoryRepository, PostgresRepository};
+use zero3_memory_server::{router, AuthPolicy, MemoryRepository, PostgresRepository};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -13,6 +13,9 @@ async fn main() -> anyhow::Result<()> {
 
     let database_url = std::env::var("ZERO3_MEMORY_DATABASE_URL")
         .context("ZERO3_MEMORY_DATABASE_URL is required")?;
+    let auth_json =
+        std::env::var("ZERO3_MEMORY_AUTH_JSON").context("ZERO3_MEMORY_AUTH_JSON is required")?;
+    let auth = AuthPolicy::from_json(&auth_json).context("load memory auth policy")?;
     let bind: SocketAddr = std::env::var("ZERO3_MEMORY_BIND")
         .unwrap_or_else(|_| "127.0.0.1:8790".into())
         .parse()
@@ -24,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("bind memory server")?;
     tracing::info!(%bind, "Zero3 Memory Authority V2.1 listening");
-    axum::serve(listener, router(repo))
+    axum::serve(listener, router(repo, auth))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("serve memory authority")?;
