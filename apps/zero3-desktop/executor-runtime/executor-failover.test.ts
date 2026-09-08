@@ -102,7 +102,16 @@ function managerWithHandoff(
 ): Zero3ExecutorManager {
   const capture = new WorkspaceFailoverHandoffCapture(store)
   return new Zero3ExecutorManager(registry, {
-    routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
+    failoverConfig: {
+      candidates: ['native-codex', 'claude'],
+      automaticFailover: true,
+      maxRetries: 1,
+      providerCooldownMs: 60_000,
+      circuitFailureThreshold: 3,
+      circuitOpenMs: 120_000,
+      switchOnAuthRequired: false,
+      returnToPrimaryAfterStage: false
+    },
     captureFailoverHandoff: capture.capture
   })
 }
@@ -124,6 +133,7 @@ test('quota_exhausted closes the old writer, persists a handoff and starts Claud
     const result = await manager.failoverAfterFailure(
       'task-failover',
       'execution-failover',
+      'event-quota-success',
       createExecutorFailure('quota_exhausted', 'quota reached', 'native-codex')
     )
 
@@ -160,6 +170,7 @@ test('forbidden failures never switch executors', async () => {
     const result = await manager.failoverAfterFailure(
       'task-failover',
       'execution-failover',
+      'event-permission-denied',
       createExecutorFailure('permission_denied', 'denied', 'native-codex')
     )
     assert.equal(result, null)
@@ -184,6 +195,7 @@ test('unavailable fallback leaves the current binding intact', async () => {
     const result = await manager.failoverAfterFailure(
       'task-failover',
       'execution-failover',
+      'event-quota-unavailable',
       createExecutorFailure('quota_exhausted', 'quota reached', 'native-codex')
     )
     assert.equal(result, null)
@@ -209,6 +221,7 @@ test('old-writer close failure aborts failover before Claude starts', async () =
       manager.failoverAfterFailure(
         'task-failover',
         'execution-failover',
+        'event-quota-close-failure',
         createExecutorFailure('quota_exhausted', 'quota reached', 'native-codex')
       ),
       /cannot prove old writer closed/

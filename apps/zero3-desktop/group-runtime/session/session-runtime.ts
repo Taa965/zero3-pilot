@@ -45,6 +45,7 @@ export interface ExecutorManagerPort {
   failoverAfterFailure?(
     taskId: string,
     executionId: string,
+    eventId: string,
     failure: ExecutorFailure
   ): Promise<ExecutorManagerFailoverResult | null>
   respondPermission(taskId: string, executionId: string, response: ExecutorPermissionResponse): Promise<void>
@@ -252,9 +253,18 @@ export class DevelopmentSessionRunner {
             this.executorManager.failoverAfterFailure
           ) {
             try {
+              const failoverEventId = [
+                this.taskIdentity.taskId,
+                this.taskIdentity.executionId,
+                requestId,
+                String(this.#runtime.writerGeneration),
+                String(event.sequence),
+                event.failure.code
+              ].join(':')
               failover = await this.executorManager.failoverAfterFailure(
                 this.taskIdentity.taskId,
                 this.taskIdentity.executionId,
+                failoverEventId,
                 event.failure
               )
             } catch (error) {

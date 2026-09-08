@@ -209,7 +209,16 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     registry.register(new ClaudeExecutor())
     const failoverHandoff = new WorkspaceFailoverHandoffCapture(this.#handoffStore)
     this.executorManager = new Zero3ExecutorManager(registry, {
-      routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
+      failoverConfig: {
+        candidates: ['native-codex', 'claude'],
+        automaticFailover: true,
+        maxRetries: 1,
+        providerCooldownMs: 60_000,
+        circuitFailureThreshold: 3,
+        circuitOpenMs: 120_000,
+        switchOnAuthRequired: false,
+        returnToPrimaryAfterStage: false
+      },
       captureFailoverHandoff: failoverHandoff.capture
     })
   }

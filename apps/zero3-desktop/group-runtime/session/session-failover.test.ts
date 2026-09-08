@@ -126,7 +126,7 @@ class FailoverManager implements ExecutorManagerPort {
     yield { type: 'message', sequence: 1, at: '2026-09-08T00:00:02.000Z', text: 'continued safely' }
     yield { type: 'completed', sequence: 2, at: '2026-09-08T00:00:03.000Z', outcome: 'succeeded' }
   }
-  async failoverAfterFailure(_taskId: string, _executionId: string, failure: ExecutorFailure): Promise<ExecutorManagerFailoverResult | null> {
+  async failoverAfterFailure(_taskId: string, _executionId: string, _eventId: string, failure: ExecutorFailure): Promise<ExecutorManagerFailoverResult | null> {
     this.failoverCalls.push(failure)
     return {
       fromExecutorId: 'native-codex',
@@ -179,7 +179,7 @@ test('quota exhaustion continues the same Development Session on Claude generati
 
 test('quota failure remains failed when no fallback can be activated', async () => {
   const manager = new FailoverManager()
-  manager.failoverAfterFailure = async (_taskId, _executionId, failure) => {
+  manager.failoverAfterFailure = async (_taskId, _executionId, _eventId, failure) => {
     manager.failoverCalls.push(failure)
     return null
   }
