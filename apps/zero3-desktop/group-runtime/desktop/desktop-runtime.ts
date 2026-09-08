@@ -206,7 +206,10 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     const registry = new Zero3ExecutorRegistry()
     registry.register(new NativeCodexExecutor(new NativeCodexAppServerDriver({ transport: codexTransport })))
     registry.register(new ClaudeExecutor())
-    this.executorManager = new Zero3ExecutorManager(registry)
+    this.executorManager = new Zero3ExecutorManager(registry, {
+      routePlan: { primary: 'native-codex', fallbacks: ['claude'] },
+      handoffStore: this.#handoffStore
+    })
   }
 
   async runtimeCapabilities(): Promise<unknown> {
