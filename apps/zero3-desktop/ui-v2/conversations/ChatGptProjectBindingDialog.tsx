@@ -94,27 +94,41 @@ export function ChatGptProjectBindingDialog({
             </div>
           )}
 
-          {projects?.map(project => (
-            <button
-              key={project.id}
-              onClick={() => {
-                setSelected(project.url)
-                setManualUrl('')
-              }}
-              className={cn(
-                'mb-1 flex w-full items-center gap-2 rounded-lg border p-3 text-left text-sm transition-colors',
-                selected === project.url && !manualUrl.trim()
-                  ? 'border-blue-500 bg-(--ui-control-active-background)'
-                  : 'border-transparent hover:bg-(--ui-control-hover-background)'
-              )}
-            >
-              <Codicon name="folder" className="size-4 shrink-0 text-blue-500" />
-              <span className="min-w-0 flex-1 truncate font-medium">{project.name}</span>
-              {project.url === boundUrl && (
-                <span className="shrink-0 text-xs text-(--ui-text-tertiary)">当前</span>
-              )}
-            </button>
-          ))}
+          {projects && projects.length > 0 && (
+            <>
+              <div className="mb-2 flex items-center justify-between text-xs text-(--ui-text-tertiary)">
+                <span>ChatGPT 项目</span>
+                <span>{projects.length} 个</span>
+              </div>
+              <div
+                data-testid="chatgpt-project-list"
+                className="max-h-[42vh] overflow-y-scroll pr-1"
+                style={{ scrollbarGutter: 'stable' }}
+              >
+                {projects.map(project => (
+                  <button
+                    key={project.id}
+                    onClick={() => {
+                      setSelected(project.url)
+                      setManualUrl('')
+                    }}
+                    className={cn(
+                      'mb-1 flex w-full items-center gap-2 rounded-lg border p-3 text-left text-sm transition-colors',
+                      selected === project.url && !manualUrl.trim()
+                        ? 'border-blue-500 bg-(--ui-control-active-background)'
+                        : 'border-transparent hover:bg-(--ui-control-hover-background)'
+                    )}
+                  >
+                    <Codicon name="folder" className="size-4 shrink-0 text-blue-500" />
+                    <span className="min-w-0 flex-1 truncate font-medium">{project.name}</span>
+                    {project.url === boundUrl && (
+                      <span className="shrink-0 text-xs text-(--ui-text-tertiary)">当前</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
           {projects?.length === 0 && (
             <div className="py-8 text-center text-xs text-(--ui-text-tertiary)">

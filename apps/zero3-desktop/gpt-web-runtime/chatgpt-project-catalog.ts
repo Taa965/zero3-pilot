@@ -60,13 +60,36 @@ const CATALOG_SCRIPT = String.raw`(async () => {
     if (!token) {
       reason = 'signed-out'
     } else {
-      const sidebar = await fetch('/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=1', {
-        credentials: 'include',
-        headers: { Authorization: 'Bearer ' + token }
-      })
-      if (sidebar.ok) walk(await sidebar.json(), 0)
-      else if (sidebar.status === 401 || sidebar.status === 403) reason = 'signed-out'
-      else reason = 'sidebar-' + sidebar.status
+      let cursor = null
+      const seenCursors = new Set()
+      let page = 0
+      do {
+        const query = new URLSearchParams({
+          owned_only: 'true',
+          conversations_per_gizmo: '0'
+        })
+        if (cursor) query.set('cursor', cursor)
+        const sidebar = await fetch('/backend-api/gizmos/snorlax/sidebar?' + query.toString(), {
+          credentials: 'include',
+          headers: { Authorization: 'Bearer ' + token }
+        })
+        if (!sidebar.ok) {
+          if (sidebar.status === 401 || sidebar.status === 403) reason = 'signed-out'
+          else reason = 'sidebar-' + sidebar.status
+          break
+        }
+        const payload = await sidebar.json()
+        walk(payload, 0)
+        const nextCursor =
+          payload && typeof payload.cursor === 'string' && payload.cursor ? payload.cursor : null
+        if (!nextCursor || seenCursors.has(nextCursor) || found.size >= 400) {
+          cursor = null
+          break
+        }
+        seenCursors.add(nextCursor)
+        cursor = nextCursor
+        page += 1
+      } while (page < 100)
     }
   } catch (error) {
     reason = 'request-failed'
