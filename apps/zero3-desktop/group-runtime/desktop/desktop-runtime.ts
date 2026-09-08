@@ -209,6 +209,14 @@ export class DevelopmentGroupDesktopRuntime implements DevelopmentGroupDesktopPo
     this.executorManager = new Zero3ExecutorManager(registry)
   }
 
+  async runtimeCapabilities(): Promise<unknown> {
+    return {
+      platform: process.platform,
+      arch: process.arch,
+      executors: await this.executorManager.probeAll()
+    }
+  }
+
   async listGroups(): Promise<unknown> {
     const groupIds = await this.store.listGroupIds()
     return Promise.all(groupIds.map(groupId => this.getGroup(groupId)))

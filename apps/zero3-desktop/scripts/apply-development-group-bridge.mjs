@@ -58,6 +58,7 @@ app.on('before-quit', () => disposeZero3DevelopmentGroupIpc())
 `
 
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3DevelopmentGroup', {
+  runtimeCapabilities: () => ipcRenderer.invoke('zero3:development-group:runtime-capabilities'),
   listGroups: () => ipcRenderer.invoke('zero3:development-group:list'),
   getGroup: groupId => ipcRenderer.invoke('zero3:development-group:get', groupId),
   createGroup: (request, proposal) => ipcRenderer.invoke('zero3:development-group:create', request, proposal),
@@ -79,6 +80,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {`
 // properties, so the release-level bridge must not assume hermesDesktop is the
 // first member of `interface Window`.
 const globalBridgeProperty = String.raw`    zero3DevelopmentGroup: {
+      runtimeCapabilities: () => Promise<unknown>
       listGroups: () => Promise<unknown>
       getGroup: (groupId: string) => Promise<unknown>
       createGroup: (request: Record<string, unknown>, proposal: Record<string, unknown>) => Promise<unknown>

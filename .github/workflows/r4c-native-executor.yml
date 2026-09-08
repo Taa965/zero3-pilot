@@ -5,6 +5,12 @@ on:
     branches: [main]
     paths:
       - 'apps/zero3-desktop/executor-runtime/native/**'
+      - 'apps/zero3-desktop/executor-runtime/shell/**'
+      - 'apps/zero3-desktop/executor-runtime/executor-types.ts'
+      - 'apps/zero3-desktop/executor-runtime/executor-manager.ts'
+      - 'apps/zero3-desktop/group-runtime/desktop/**'
+      - 'apps/zero3-desktop/ui-v2/runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-development-group-bridge.mjs'
       - 'apps/zero3-desktop/scripts/apply-codex-transport.mjs'
       - 'scripts/check-r4c-native-executor-architecture.mjs'
       - '.github/workflows/r4c-native-executor.yml'
@@ -33,10 +39,14 @@ jobs:
       - name: Strict TypeScript check
         run: >-
           npx --no-install tsc --noEmit --strict --target ES2022 --module NodeNext --moduleResolution NodeNext --allowImportingTsExtensions --skipLibCheck
+          apps/zero3-desktop/executor-runtime/executor-types.ts
+          apps/zero3-desktop/executor-runtime/external/windows-command.ts
+          apps/zero3-desktop/executor-runtime/shell/shell-capabilities.ts
+          apps/zero3-desktop/executor-runtime/shell/shell-capabilities.test.ts
           apps/zero3-desktop/executor-runtime/native/native-driver.ts
           apps/zero3-desktop/executor-runtime/native/native-home.ts
           apps/zero3-desktop/executor-runtime/native/native-codex-executor.ts
           apps/zero3-desktop/executor-runtime/native/native-app-server-driver.ts
           apps/zero3-desktop/executor-runtime/native/native-codex-executor.test.ts
       - name: Native executor behavior tests
-        run: node --experimental-transform-types --test apps/zero3-desktop/executor-runtime/native/native-codex-executor.test.ts
+        run: node --experimental-transform-types --test apps/zero3-desktop/executor-runtime/shell/shell-capabilities.test.ts apps/zero3-desktop/executor-runtime/native/native-codex-executor.test.ts

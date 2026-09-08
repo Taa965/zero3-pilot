@@ -3,6 +3,7 @@ import type { ExecutorPermissionResponse } from '../../executor-runtime/executor
 export type DevelopmentGroupOutcomeResolution = 'failed' | 'cancelled' | 'superseded'
 
 export interface DevelopmentGroupDesktopPort {
+  runtimeCapabilities(): Promise<unknown>
   listGroups(): Promise<unknown>
   getGroup(groupId: string): Promise<unknown>
   createGroup(request: unknown, proposal: unknown): Promise<unknown>
@@ -18,6 +19,7 @@ export interface DevelopmentGroupDesktopPort {
 }
 
 export const DEVELOPMENT_GROUP_DESKTOP_CHANNELS = {
+  runtimeCapabilities: 'zero3:development-group:runtime-capabilities',
   listGroups: 'zero3:development-group:list',
   getGroup: 'zero3:development-group:get',
   createGroup: 'zero3:development-group:create',

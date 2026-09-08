@@ -4,6 +4,26 @@ export const ZERO3_HANDOFF_PROTOCOL = 'zero3.pilot.handoff.v1' as const
 export type ExecutorId = string
 export type ExecutorKind = 'native-codex' | 'external-agent' | 'api-provider'
 export type ExecutorPermissionProfile = 'read_only' | 'standard' | 'elevated' | 'full_control'
+export type ExecutorShellKind = 'pwsh' | 'powershell' | 'cmd' | 'wsl' | 'bash' | 'sh'
+export type ExecutorShellStatus = 'ready' | 'unavailable'
+
+export interface ExecutorShellCapability {
+  kind: ExecutorShellKind
+  command: string
+  resolvedCommand?: string
+  status: ExecutorShellStatus
+  version?: string
+}
+
+export interface ExecutorShellCapabilitySnapshot {
+  policy: 'codex-native'
+  preferred?: ExecutorShellKind
+  shells: readonly ExecutorShellCapability[]
+}
+
+export interface ExecutorCapabilities {
+  shell?: ExecutorShellCapabilitySnapshot
+}
 
 export type ExecutorFailureCode =
   | 'quota_exhausted'
@@ -90,6 +110,7 @@ export interface ExecutorProbe {
   executorId: ExecutorId
   status: ExecutorProbeStatus
   detail?: string
+  capabilities?: ExecutorCapabilities
 }
 
 export interface ExecutorFailure {

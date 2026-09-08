@@ -6,6 +6,7 @@ import type {
   ExecutorInput,
   ExecutorPermissionResponse,
   ExecutorPolicyContext,
+  ExecutorProbe,
   ExecutorSession,
   ExecutorSessionRef,
   ExecutorStartContext,
@@ -153,6 +154,10 @@ export class Zero3ExecutorManager {
     } finally {
       this.#bindings.delete(key)
     }
+  }
+
+  async probeAll(): Promise<ExecutorProbe[]> {
+    return this.registry.probeAll()
   }
 
   active(taskId: string, executionId: string): ExecutorBindingSnapshot | undefined {
