@@ -239,7 +239,7 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
     }, ZERO3_API_TIMEOUT_MS)
     const capture = (target: Buffer[], chunk: Buffer) => {
       bytes += chunk.byteLength
-      if (bytes > ZERO3_API_MAX_RESPONSE_BYTES)  {
+      if (bytes > ZERO3_API_MAX_RESPONSE_BYTES) {
         child.kill()
         reject(new Error('Claude CLI output exceeded 16 MiB'))
         return
@@ -266,4 +266,199 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
 async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) {
   if (provider === 'gpt' || provider === 'gemini') return { opened: false, detail: '网页会话会直接打开官方登录页' }
   if (provider === 'zero3') return { opened: false, detail: 'Zero3 本体使用 API Profile，不需要 CLI 登录' }
-  if (process.platform !== 'win32') return { opened: false, detail: '当前自动打开授权终֊wh���!�'��(�f�v��'^��{(u�e����/�׫rV�u�%j�^j�a��"��2r���Z�
+  if (process.platform !== 'win32') return { opened: false, detail: '当前自动打开授权终端仅支持 Windows，请在系统终端完成官方 CLI 登录' }
+  const command = provider === 'codex' ? 'codex login' : provider === 'claude' ? 'claude auth login' : 'agy'
+  const { spawn } = await import('node:child_process')
+  const comspec = process.env.ComSpec || 'cmd.exe'
+  const child = spawn(comspec, ['/d', '/s', '/c', 'start "" cmd.exe /k "' + command + '"'], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false
+  })
+  child.unref()
+  return { opened: true, detail: '已打开官方 CLI 授权终端；完成登录后回到 Zero3 点击刷新状态' }
+}
+async function zero3SessionProviderStatus() {
+  let codexAvailable = false
+  let codexAuthenticated: boolean | null = null
+  let codexDetail = 'Codex app-server 不可用'
+  try {
+    await zero3CodexAppServer.ensureStarted()
+    codexAvailable = true
+    try {
+      const accountRead = zero3SessionRecord(await zero3CodexAppServer.request('account/read', { refreshToken: false }))
+      const account = zero3SessionRecord(accountRead.account)
+      const type = typeof account.type === 'string' ? account.type : ''
+      codexAuthenticated = type === 'chatgpt'
+      codexDetail = codexAuthenticated ? '已复用本机 Codex 的 ChatGPT 登录' : 'Codex 已安装，但尚未完成 ChatGPT 登录'
+    } catch (error) {
+      codexAuthenticated = false
+      codexDetail = error instanceof Error ? error.message : String(error)
+    }
+  } catch (error) {
+    codexDetail = error instanceof Error ? error.message : String(error)
+  }
+
+  const claude = await zero3ClaudeTaskAdapter.availability()
+  const agy = zero3Antigravity.status()
+  let antigravityAuthenticated: boolean | null = null
+  let sawAuthFailure = false
+  for (const logicalSessionId of agy.activeSessions) {
+    try {
+      const binding = await zero3Antigravity.binding(logicalSessionId)
+      if (binding?.authState === 'AUTHENTICATED') {
+        antigravityAuthenticated = true
+        break
+      }
+      if (binding?.authState === 'AUTH_REQUIRED' || binding?.authState === 'AUTH_EXPIRED') sawAuthFailure = true
+    } catch {}
+  }
+  if (antigravityAuthenticated !== true && sawAuthFailure) antigravityAuthenticated = false
+  const profiles = await zero3ListApiProfiles()
+
+  return {
+    gpt: { available: true, authenticated: null, authMode: 'web' as const, detail: '使用内嵌 ChatGPT 官方网页登录' },
+    gemini: { available: true, authenticated: null, authMode: 'web' as const, detail: '使用内嵌 Gemini 官方网页登录' },
+    codex: { available: codexAvailable, authenticated: codexAuthenticated, authMode: 'cli' as const, detail: codexDetail },
+    claude: {
+      available: claude.available,
+      authenticated: claude.authenticated,
+      authMode: 'cli' as const,
+      detail: !claude.available ? '未检测到 Claude Code CLI' : claude.authenticated === true ? '已复用本机 Claude Code 登录' : 'Claude Code 已安装但未授权'
+    },
+    antigravity: {
+      available: agy.available,
+      authenticated: antigravityAuthenticated,
+      authMode: 'cli' as const,
+      detail: !agy.available ? '未检测到 Antigravity CLI (agy)' : antigravityAuthenticated === true ? '已验证 Antigravity 授权' : antigravityAuthenticated === false ? 'Antigravity 授权已失效或缺失' : '已安装；首次启动会验证官方授权'
+    },
+    zero3: {
+      available: true,
+      authenticated: profiles.length > 0 ? true : false,
+      authMode: 'api_profile' as const,
+      detail: profiles.length > 0 ? '已配置 ' + String(profiles.length) + ' 个 API 模型' : '尚未配置 API 模型'
+    }
+  }
+}
+
+ipcMain.handle('zero3:session-providers:status', () => zero3SessionProviderStatus())
+ipcMain.handle('zero3:session-providers:authorize', (_event, request: unknown) => zero3OpenProviderAuthorization(zero3SessionProvider(zero3SessionRecord(request).provider)))
+ipcMain.handle('zero3:session-providers:zero3-profiles:list', () => zero3ListApiProfiles())
+ipcMain.handle('zero3:session-providers:zero3-profiles:save', async (_event, requestValue: unknown) => {
+  const request = zero3SessionRecord(requestValue)
+  const id = zero3SessionText(request.id, 'profile id', 128)
+  const state = await zero3ApiProfileRead()
+  const existing = state.profiles[id]
+  const protocol = zero3ApiProtocol(request.protocol)
+  const apiKey = zero3SessionOptionalText(request.apiKey, 8192)
+  const timestamp = new Date().toISOString()
+  const profile: Zero3ApiProfileStored = {
+    id,
+    name: zero3SessionText(request.name, 'profile name', 128),
+    protocol,
+    baseUrl: zero3SessionSafeBaseUrl(request.baseUrl),
+    model: zero3SessionText(request.model, 'model', 256),
+    encryptedApiKey: apiKey ? await zero3EncryptApiKey(apiKey) : existing?.encryptedApiKey ?? null,
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp
+  }
+  if ((protocol === 'anthropic' || protocol === 'google_gemini') && !profile.encryptedApiKey) {
+    throw new Error('该 API 协议需要 API Key')
+  }
+  state.profiles[id] = profile
+  await zero3ApiProfileWrite(state)
+  return zero3PublicApiProfile(profile)
+})
+ipcMain.handle('zero3:session-providers:zero3-profiles:remove', async (_event, requestValue: unknown) => {
+  const request = zero3SessionRecord(requestValue)
+  const id = zero3SessionText(request.id, 'profile id', 128)
+  const state = await zero3ApiProfileRead()
+  const removed = Boolean(state.profiles[id])
+  delete state.profiles[id]
+  if (removed) await zero3ApiProfileWrite(state)
+  return { removed }
+})
+ipcMain.handle('zero3:session-providers:zero3-turn', async (_event, requestValue: unknown) => {
+  const request = zero3SessionRecord(requestValue)
+  const profileId = zero3SessionText(request.profileId, 'profileId', 128)
+  const state = await zero3ApiProfileRead()
+  const profile = state.profiles[profileId]
+  if (!profile) throw new Error('Zero3 API Profile 不存在')
+  return zero3ApiTurn(profile, request.messages)
+})
+ipcMain.handle('zero3:session-providers:claude-turn', (_event, request: unknown) => zero3RunClaudeTurn(request))
+`
+
+const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionProviders', {
+  status: () => ipcRenderer.invoke('zero3:session-providers:status'),
+  authorize: request => ipcRenderer.invoke('zero3:session-providers:authorize', request),
+  listZero3Profiles: () => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:list'),
+  saveZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:save', request),
+  removeZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:remove', request),
+  zero3Turn: request => ipcRenderer.invoke('zero3:session-providers:zero3-turn', request),
+  claudeTurn: request => ipcRenderer.invoke('zero3:session-providers:claude-turn', request)
+})
+
+contextBridge.exposeInMainWorld('zero3AgentTask', {`
+
+const globalTypes = String.raw`
+type Zero3SessionProviderId = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'zero3'
+type Zero3SessionProviderStatus = {
+  available: boolean
+  authenticated: boolean | null
+  authMode: 'web' | 'cli' | 'api_profile'
+  detail: string
+}
+type Zero3SessionProviderStatusMap = Record<Zero3SessionProviderId, Zero3SessionProviderStatus>
+type Zero3ApiProfileProtocol = 'openai_compatible' | 'anthropic' | 'google_gemini'
+type Zero3ApiProfile = {
+  id: string
+  name: string
+  protocol: Zero3ApiProfileProtocol
+  baseUrl: string
+  model: string
+  hasApiKey: boolean
+  createdAt: string
+  updatedAt: string
+}
+`
+
+const globalSurface = String.raw`    zero3SessionProviders: {
+      status: () => Promise<Zero3SessionProviderStatusMap>
+      authorize: (request: { provider: Zero3SessionProviderId }) => Promise<{ opened: boolean; detail: string }>
+      listZero3Profiles: () => Promise<Zero3ApiProfile[]>
+      saveZero3Profile: (request: { id: string; name: string; protocol: Zero3ApiProfileProtocol; baseUrl: string; model: string; apiKey?: string | null }) => Promise<Zero3ApiProfile>
+      removeZero3Profile: (request: { id: string }) => Promise<{ removed: boolean }>
+      zero3Turn: (request: { profileId: string; messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> }) => Promise<{ text: string; model: string; profileId: string }>
+      claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null }) => Promise<{ text: string; sessionId: string | null }>
+    }
+    zero3AgentTask: {`
+
+export function applyZero3SessionProviderRuntime() {
+  patchFile('electron/main.ts', [
+    {
+      label: 'session provider IPC before Agent orchestrator',
+      from: 'const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({',
+      to: mainRuntime + '\nconst zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({'
+    }
+  ])
+  patchFile('electron/preload.ts', [
+    {
+      label: 'session provider preload before Agent Task bridge',
+      from: "contextBridge.exposeInMainWorld('zero3AgentTask', {",
+      to: preloadSurface
+    }
+  ])
+  patchFile('src/global.d.ts', [
+    {
+      label: 'session provider renderer types',
+      from: 'type Zero3AgentTaskTarget =',
+      to: globalTypes + '\ntype Zero3AgentTaskTarget ='
+    },
+    {
+      label: 'session provider renderer surface',
+      from: '    zero3AgentTask: {',
+      to: globalSurface
+    }
+  ])
+}
