@@ -45,6 +45,7 @@ export function UnifiedSessionList({
   const [filter, setFilter] = useState<'all' | WorkspaceProvider>('all')
   const [query, setQuery] = useState('')
   const [menu, setMenu] = useState<{ session: WorkspaceSession; x: number; y: number } | null>(null)
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(() => new Set())
   const paneRef = useRef<HTMLDivElement>(null)
   const prewarmTimersRef = useRef(new Map<string, number>())
 
@@ -112,6 +113,61 @@ export function UnifiedSessionList({
     })
   }, [sessions, activeProjectId, filter, query])
 
+  const projectGroups = useMemo(() => {
+    const names = new Map(projects.map(project => [project.id, project.name]))
+    const groups = new Map<string, { key: string; projectId: string | null; name: string; sessions: WorkspaceSession[] }>()
+    for (const session of projectSessions) {
+      const key = session.projectId ?? '__unassigned__'
+      const existing = groups.get(key)
+      if (existing) existing.sessions.push(session)
+      else groups.set(key, { key, projectId: session.projectId, name: session.projectId ? (names.get(session.projectId) ?? '未知项目') : '未归属项目', sessions: [session] })
+    }
+    return [...groups.values()]
+  }, [projectSessions, projects])
+
+  const toggleProjectGroup = (key: string) => {
+    setCollapsedProjectIds(current => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const renderSession = (session: WorkspaceSession) => {
+    const active = session.id === activeId
+    const mark = PROVIDER_MARKS[session.provider]
+    return (
+      <button
+        key={session.id}
+        onClick={() => {
+          cancelPrewarm(session.id)
+          onSelect(session)
+        }}
+        onMouseEnter={() => queuePrewarm(session)}
+        onMouseLeave={() => cancelPrewarm(session.id)}
+        onFocus={() => queuePrewarm(session)}
+        onBlur={() => cancelPrewarm(session.id)}
+        onContextMenu={event => openMenu(session, event)}
+        className={cn(
+          'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
+          active ? 'border-(--ui-border) bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'
+        )}
+      >
+        <div className="flex w-full items-center justify-between">
+          <div className="flex min-w-0 items-center gap-1.5 font-medium">
+            <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
+            <span className="truncate">{session.title}</span>
+          </div>
+          <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
+        </div>
+        <div className="flex w-full items-center gap-1.5 text-xs text-(--ui-text-secondary)">
+          <span className="truncate">{session.subtitle}</span>
+        </div>
+      </button>
+    )
+  }
+
   return (
     <div ref={paneRef} className="flex h-full flex-col">
       <div className="flex flex-col gap-2 p-3">
@@ -157,43 +213,26 @@ export function UnifiedSessionList({
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {error && <div className="px-2 py-3 text-xs text-red-600">{error}</div>}
-        {projectSessions.map(session => {
-          const active = session.id === activeId
-          const mark = PROVIDER_MARKS[session.provider]
-          const ownerLabel = activeProjectId !== null ? null : (projects.find(project => project.id === session.projectId)?.name ?? '未归属')
-          return (
-            <button
-              key={session.id}
-              onClick={() => {
-                cancelPrewarm(session.id)
-                onSelect(session)
-              }}
-              onMouseEnter={() => queuePrewarm(session)}
-              onMouseLeave={() => cancelPrewarm(session.id)}
-              onFocus={() => queuePrewarm(session)}
-              onBlur={() => cancelPrewarm(session.id)}
-              onContextMenu={event => openMenu(session, event)}
-              className={cn(
-                'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
-                active ? 'border-(--ui-border) bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'
-              )}
-            >
-              <div className="flex w-full items-center justify-between">
-                <div className="flex min-w-0 items-center gap-1.5 font-medium">
-                  <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
-                  <span className="truncate">{session.title}</span>
-                </div>
-                <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
-              </div>
-              <div className="flex w-full items-center gap-1.5 text-xs text-(--ui-text-secondary)">
-                {ownerLabel && (
-                  <span className="shrink-0 rounded bg-(--ui-control-background) px-1.5 py-0.5 text-(--ui-text-tertiary)">{ownerLabel}</span>
-                )}
-                <span className="truncate">{session.subtitle}</span>
-              </div>
-            </button>
-          )
-        })}
+        {activeProjectId === null
+          ? projectGroups.map(group => {
+              const collapsed = collapsedProjectIds.has(group.key)
+              return (
+                <section key={group.key} data-project-group={group.key} className="mb-2">
+                  <button
+                    type="button"
+                    aria-expanded={!collapsed}
+                    onClick={() => toggleProjectGroup(group.key)}
+                    className="mb-1 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs font-medium text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-foreground"
+                  >
+                    <Codicon name={collapsed ? 'chevron-right' : 'chevron-down'} className="size-3.5 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{group.name}</span>
+                    <span className="shrink-0 text-[11px] font-normal text-(--ui-text-tertiary)">{group.sessions.length}</span>
+                  </button>
+                  {!collapsed && <div>{group.sessions.map(renderSession)}</div>}
+                </section>
+              )
+            })
+          : projectSessions.map(renderSession)}
 
         {!error && projectSessions.length === 0 && (
           <div className="px-2 py-6 text-center text-xs text-(--ui-text-tertiary)">
