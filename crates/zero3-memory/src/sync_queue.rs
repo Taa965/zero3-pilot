@@ -112,7 +112,9 @@ impl SqliteSyncQueue {
             );
             ",
         )?;
-        Ok(Self { connection: Mutex::new(connection) })
+        Ok(Self {
+            connection: Mutex::new(connection),
+        })
     }
 
     pub fn enqueue(&self, event_id: &str, payload: &Value) -> anyhow::Result<bool> {
@@ -188,7 +190,12 @@ impl SqliteSyncQueue {
         self.mark_terminal(event_id, PendingState::Rejected, error)
     }
 
-    fn mark_terminal(&self, event_id: &str, state: PendingState, error: &str) -> anyhow::Result<bool> {
+    fn mark_terminal(
+        &self,
+        event_id: &str,
+        state: PendingState,
+        error: &str,
+    ) -> anyhow::Result<bool> {
         let now = Utc::now().to_rfc3339();
         Ok(self.connection.lock().unwrap().execute(
             "UPDATE pending_memory_events SET state = ?2, last_error = ?3, updated_at = ?4 WHERE event_id = ?1",
@@ -222,7 +229,12 @@ impl SqliteSyncQueue {
         ).optional().map_err(Into::into)
     }
 
-    pub fn upsert_cursor(&self, client_id: &str, device_id: &str, last_sequence: i64) -> anyhow::Result<()> {
+    pub fn upsert_cursor(
+        &self,
+        client_id: &str,
+        device_id: &str,
+        last_sequence: i64,
+    ) -> anyhow::Result<()> {
         if client_id.trim().is_empty() || device_id.trim().is_empty() || last_sequence < 0 {
             anyhow::bail!("invalid sync cursor");
         }
@@ -253,7 +265,12 @@ impl SqliteSyncQueue {
         ).optional().map_err(Into::into)
     }
 
-    pub fn cache_server_event(&self, sequence: i64, event_id: &str, payload: &Value) -> anyhow::Result<bool> {
+    pub fn cache_server_event(
+        &self,
+        sequence: i64,
+        event_id: &str,
+        payload: &Value,
+    ) -> anyhow::Result<bool> {
         if sequence < 1 || event_id.trim().is_empty() {
             anyhow::bail!("invalid server event");
         }
@@ -267,7 +284,11 @@ impl SqliteSyncQueue {
         Ok(changed > 0)
     }
 
-    pub fn cached_events_after(&self, sequence: i64, limit: usize) -> anyhow::Result<Vec<CachedServerEvent>> {
+    pub fn cached_events_after(
+        &self,
+        sequence: i64,
+        limit: usize,
+    ) -> anyhow::Result<Vec<CachedServerEvent>> {
         if sequence < 0 || limit == 0 {
             return Ok(Vec::new());
         }
@@ -280,8 +301,10 @@ impl SqliteSyncQueue {
             let payload_json: String = row.get(2)?;
             let received_at: String = row.get(3)?;
             Ok(CachedServerEvent {
-                sequence: row.get(0)?, event_id: row.get(1)?,
-                payload: serde_json::from_str(&payload_json).map_err(|error| convert_error(2, error))?,
+                sequence: row.get(0)?,
+                event_id: row.get(1)?,
+                payload: serde_json::from_str(&payload_json)
+                    .map_err(|error| convert_error(2, error))?,
                 received_at: parse_datetime(3, &received_at)?,
             })
         })?;
@@ -299,9 +322,12 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingMemoryEven
         event_id: row.get(0)?,
         payload: serde_json::from_str(&payload_json).map_err(|error| convert_error(1, error))?,
         state: PendingState::parse(&state).map_err(|error| convert_boxed(2, Box::new(error)))?,
-        retry_count: u32::try_from(retry_count).map_err(|error| convert_boxed(3, Box::new(error)))?,
-        last_error: row.get(4)?, server_sequence: row.get(5)?,
-        created_at: parse_datetime(6, &created_at)?, updated_at: parse_datetime(7, &updated_at)?,
+        retry_count: u32::try_from(retry_count)
+            .map_err(|error| convert_boxed(3, Box::new(error)))?,
+        last_error: row.get(4)?,
+        server_sequence: row.get(5)?,
+        created_at: parse_datetime(6, &created_at)?,
+        updated_at: parse_datetime(7, &updated_at)?,
     })
 }
 
@@ -321,14 +347,18 @@ fn convert_boxed(index: usize, error: Box<dyn std::error::Error + Send + Sync>) 
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn enqueue_is_idempotent_and_crash_recovery_resets_sending() {
         let queue = SqliteSyncQueue::open_in_memory().unwrap();
-        assert!(queue.enqueue("evt-1", &json!({"event_id":"evt-1"})).unwrap());
-        assert!(!queue.enqueue("evt-1", &json!({"event_id":"evt-1"})).unwrap());
+        assert!(queue
+            .enqueue("evt-1", &json!({"event_id":"evt-1"}))
+            .unwrap());
+        assert!(!queue
+            .enqueue("evt-1", &json!({"event_id":"evt-1"}))
+            .unwrap());
         let batch = queue.next_batch(10).unwrap();
         assert_eq!(batch.len(), 1);
         queue.mark_sending(&["evt-1".into()]).unwrap();
@@ -342,17 +372,28 @@ mod tests {
         let queue = SqliteSyncQueue::open_in_memory().unwrap();
         queue.upsert_cursor("client", "device", 10).unwrap();
         queue.upsert_cursor("client", "device", 7).unwrap();
-        assert_eq!(queue.get_cursor("client").unwrap().unwrap().last_sequence, 10);
-        assert!(queue.cache_server_event(11, "evt-11", &json!({"v":11})).unwrap());
-        assert!(!queue.cache_server_event(11, "evt-11", &json!({"v":11})).unwrap());
+        assert_eq!(
+            queue.get_cursor("client").unwrap().unwrap().last_sequence,
+            10
+        );
+        assert!(queue
+            .cache_server_event(11, "evt-11", &json!({"v":11}))
+            .unwrap());
+        assert!(!queue
+            .cache_server_event(11, "evt-11", &json!({"v":11}))
+            .unwrap());
         assert_eq!(queue.cached_events_after(10, 10).unwrap().len(), 1);
     }
 
     #[test]
     fn conflicts_are_materialized_instead_of_silently_retried() {
         let queue = SqliteSyncQueue::open_in_memory().unwrap();
-        queue.enqueue("evt-conflict", &json!({"event_id":"evt-conflict"})).unwrap();
-        queue.mark_conflict("evt-conflict", "authority_conflict").unwrap();
+        queue
+            .enqueue("evt-conflict", &json!({"event_id":"evt-conflict"}))
+            .unwrap();
+        queue
+            .mark_conflict("evt-conflict", "authority_conflict")
+            .unwrap();
         let item = queue.get_pending("evt-conflict").unwrap().unwrap();
         assert_eq!(item.state, PendingState::Conflict);
         assert_eq!(item.last_error.as_deref(), Some("authority_conflict"));
