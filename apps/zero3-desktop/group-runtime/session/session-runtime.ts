@@ -37,6 +37,7 @@ export interface ExecutorManagerPort {
   respondPermission(taskId: string, executionId: string, response: ExecutorPermissionResponse): Promise<void>
   cancel(taskId: string, executionId: string): Promise<void>
   close(taskId: string, executionId: string): Promise<void>
+  active?(taskId: string, executionId: string): { executorId: string; session: ExecutorSessionRef } | undefined
 }
 
 export interface SessionRuntimeStorePort {
@@ -210,6 +211,7 @@ export class DevelopmentSessionRunner {
     const input: ExecutorInput = { kind: 'prompt', clientRequestId: clientRequestId.trim(), text }
     try {
       for await (const event of this.executorManager.prompt(this.taskIdentity, input)) {
+        this.syncActiveExecutorAuthority()
         await this.applyExecutorEvent(event)
         await this.sink?.onExecutorEvent(event, this.snapshot())
       }
@@ -287,6 +289,21 @@ export class DevelopmentSessionRunner {
       else await this.transition('failed')
     }
     await this.persist()
+  }
+
+  private syncActiveExecutorAuthority(): void {
+    const active = this.executorManager.active?.(this.taskIdentity.taskId, this.taskIdentity.executionId)
+    if (!active) return
+    if (active.executorId !== active.session.executorId) {
+      throw new DevelopmentSessionRuntimeError('active executor authority snapshot is inconsistent')
+    }
+    if (!Number.isSafeInteger(active.session.generation) || active.session.generation < 1) {
+      throw new DevelopmentSessionRuntimeError('active executor generation must be a positive safe integer')
+    }
+    this.#runtime.executorId = active.executorId
+    this.#runtime.executorSessionId = active.session.sessionId
+    this.#runtime.executorGeneration = active.session.generation
+    this.#runtime.writerGeneration = active.session.generation
   }
 
   private bindExecutorSession(session: ExecutorSession): void {

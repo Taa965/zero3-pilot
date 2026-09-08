@@ -78,6 +78,7 @@ for (const command of verificationPolicy.commands) {
 const desktopPort = read('apps/zero3-desktop/group-runtime/desktop/desktop-port.ts')
 const desktopIpc = read('apps/zero3-desktop/group-runtime/desktop/desktop-ipc.ts')
 const desktopRuntime = read('apps/zero3-desktop/group-runtime/desktop/desktop-runtime.ts')
+const sessionRuntime = read('apps/zero3-desktop/group-runtime/session/session-runtime.ts')
 const bridgeOverlay = read('apps/zero3-desktop/scripts/apply-development-group-bridge.mjs')
 const prepareCodex = read('apps/zero3-desktop/scripts/prepare-codex-upstream.mjs')
 const expectedChannels = [
@@ -105,6 +106,9 @@ requireText(desktopIpc, 'permissionResponse(response)', 'permission response all
 requireText(desktopIpc, 'outcomeResolution(resolution)', 'OutcomeUnknown resolution allowlist validation')
 
 requireText(desktopRuntime, 'new NativeCodexAppServerDriver({ transport: codexTransport })', 'reuse of existing pinned Codex transport')
+requireText(desktopRuntime, 'new Zero3FailoverExecutorManager(baseExecutorManager,', 'production automatic failover composition')
+requireText(desktopRuntime, "candidates: ['native-codex', 'claude']", 'Codex to Claude failover candidate order')
+requireText(desktopRuntime, "-executor-failover-handoffs", 'dedicated failover handoff storage')
 requireText(desktopRuntime, 'new DevelopmentGroupRuntimeFacade({', 'Electron-owned Runtime Facade composition')
 requireText(desktopRuntime, 'new IntegrationGitAdapter(repositoryRoot)', 'repository-bound Integration Git adapter')
 requireText(desktopRuntime, 'GitSessionWorkspaceProvisioner', 'Session Git worktree provisioning')
@@ -114,6 +118,8 @@ requireText(desktopRuntime, 'refusing to recreate from baseline', 'retry worktre
 requireText(desktopRuntime, 'this.executorManager.close(taskId', 'post-recovery quarantined Executor binding release')
 requireText(desktopRuntime, 'shell: false', 'shellless verification execution')
 requireText(desktopRuntime, 'JSON.parse(command)', 'argv-only verification command parsing')
+requireText(sessionRuntime, 'active?(taskId: string, executionId: string)', 'active executor authority snapshot port')
+requireText(sessionRuntime, 'this.syncActiveExecutorAuthority()', 'durable executor authority synchronization after failover')
 forbid(desktopRuntime, /spawn\s*\(|createZero3CodexAppServer|codex\s+app-server/iu, 'second Codex process/kernel in Desktop runtime composition')
 
 requireText(bridgeOverlay, 'copyProductionTree(executorSource', 'authoritative Executor runtime staging')

@@ -9,6 +9,7 @@ on:
       - '.zero3/verification-policy.json'
       - 'apps/zero3-desktop/group-runtime/**'
       - 'apps/zero3-desktop/executor-runtime/handoff/**'
+      - 'apps/zero3-desktop/executor-runtime/router/**'
       - 'plugins/zero3-development-group/**'
       - 'apps/zero3-desktop/scripts/apply-development-group-bridge.mjs'
       - 'apps/zero3-desktop/scripts/prepare-codex-upstream.mjs'
@@ -62,6 +63,7 @@ jobs:
           apps/zero3-desktop/group-runtime/runtime/runtime-facade.test.ts
           apps/zero3-desktop/group-runtime/runtime/closeout.test.ts
           apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts
+          apps/zero3-desktop/executor-runtime/router/failover-runtime.test.ts
 
       - name: Review package syntax
         run: >-
