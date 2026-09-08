@@ -95,6 +95,10 @@ ipcMain.handle('zero3:gpt-web:set-chrome-visible', (_event, request: unknown) =>
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.setChromeVisible(zero3GptWebId(input), input.visible)
 })
+ipcMain.handle('zero3:gpt-web:toolbar-action', (_event, request: unknown) => {
+  const input = zero3GptWebRecord(request)
+  return zero3GptWeb.invokeToolbarAction(zero3GptWebId(input), input.action)
+})
 ipcMain.handle('zero3:gpt-web:set-bounds', (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.setBounds(zero3GptWebId(input), input.bounds)
@@ -121,6 +125,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3GptWeb', 
   snapshot: request => ipcRenderer.invoke('zero3:gpt-web:snapshot', request),
   hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),
   setChromeVisible: request => ipcRenderer.invoke('zero3:gpt-web:set-chrome-visible', request),
+  toolbarAction: request => ipcRenderer.invoke('zero3:gpt-web:toolbar-action', request),
   setBounds: request => ipcRenderer.invoke('zero3:gpt-web:set-bounds', request),
   navigate: request => ipcRenderer.invoke('zero3:gpt-web:navigate', request),
   reload: request => ipcRenderer.invoke('zero3:gpt-web:reload', request),
@@ -139,6 +144,7 @@ contextBridge.exposeInMainWorld('zero3Workspace', {`
 const globalTypeDefinitions = String.raw`
 type Zero3ChatGptRemoteProject = { id: string; name: string; url: string }
 type Zero3GptWebBounds = { x: number; y: number; width: number; height: number }
+type Zero3GptWebToolbarAction = 'sidebar' | 'new_chat' | 'share' | 'more'
 type Zero3GptWebEvent =
   | {
       kind: 'state'
@@ -176,6 +182,7 @@ const globalWindowSurface = String.raw`    zero3GptWeb: {
       snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>
       hide: (request: { id: string }) => Promise<{ hidden: boolean }>
       setChromeVisible: (request: { id: string; visible: boolean }) => Promise<{ visible: boolean }>
+      toolbarAction: (request: { id: string; action: Zero3GptWebToolbarAction }) => Promise<{ action: Zero3GptWebToolbarAction; invoked: true }>
       setBounds: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<{ ok: true }>
       navigate: (request: { id: string; url: string }) => Promise<{ url: string }>
       reload: (request: { id: string }) => Promise<{ ok: true }>

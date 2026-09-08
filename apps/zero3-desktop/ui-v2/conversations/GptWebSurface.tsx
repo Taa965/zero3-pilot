@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Codicon } from '@/components/ui/codicon'
 
 type SurfaceStatus = 'cold' | 'warming' | 'warm' | 'visible' | 'suspended' | 'error'
+type ToolbarAction = 'sidebar' | 'new_chat' | 'share' | 'more'
 
 interface GptWebSurfaceProps {
   /** Workspace entry chosen in the session list; null until one is selected. */
@@ -155,6 +156,10 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
     if (entryId) void window.zero3GptWeb.openExternal({ id: entryId }).catch(() => {})
   }, [entryId])
 
+  const toolbarAction = useCallback((action: ToolbarAction) => {
+    if (entryId) void window.zero3GptWeb.toolbarAction({ id: entryId, action }).catch(() => {})
+  }, [entryId])
+
   if (!entryId) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-background text-(--ui-text-secondary)">
@@ -170,6 +175,14 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-(--ui-border) px-4 text-sm">
+        <button
+          onClick={() => toolbarAction('sidebar')}
+          title="ChatGPT 侧边栏"
+          aria-label="ChatGPT 侧边栏"
+          className="grid size-8 shrink-0 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
+        >
+          <Codicon name="menu" className="text-base" />
+        </button>
         <span className="truncate text-(--ui-text-secondary)">{pageTitle ?? 'ChatGPT'}</span>
         <span
           className={
@@ -182,7 +195,32 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         >
           {statusText(status)}
         </span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={() => toolbarAction('new_chat')}
+            title="新聊天"
+            aria-label="新聊天"
+            className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
+          >
+            <Codicon name="edit" className="text-base" />
+          </button>
+          <button
+            onClick={() => toolbarAction('share')}
+            title="分享聊天"
+            aria-label="分享聊天"
+            className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
+          >
+            <Codicon name="share" className="text-base" />
+          </button>
+          <button
+            onClick={() => toolbarAction('more')}
+            title="更多"
+            aria-label="更多"
+            className="grid size-8 place-items-center rounded-md text-(--ui-text-secondary) hover:bg-(--ui-control-hover-background) hover:text-(--ui-text-primary)"
+          >
+            <Codicon name="ellipsis" className="text-base" />
+          </button>
+          <div className="mx-1 h-4 w-px bg-(--ui-border)" aria-hidden="true" />
           <button
             onClick={reload}
             title="刷新"

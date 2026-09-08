@@ -40,6 +40,7 @@ type LiveGptWebView = {
   loadState: LiveGptWebLoadState
   chromeHidden: boolean
   chromeCssKey: string | null
+  headerCssKey: string | null
 }
 
 type SnapshotRecord = {
@@ -59,14 +60,31 @@ const SNAPSHOT_MAX_COUNT = 30
 const SNAPSHOT_MAX_WIDTH = 1_280
 const SNAPSHOT_JPEG_QUALITY = 55
 
-// ChatGPT ships its own conversation rail. Zero3's second column already lists
-// these sessions, so leaving it visible puts two navigation surfaces side by
-// side. The tiny collapsed rail is a descendant of the same element, so one
-// selector covers both states. These ids belong to chatgpt.com and can vanish
-// on any redeploy: insertCSS does not fail on a selector that matches nothing,
-// so a rename makes the rail reappear rather than breaking the view -- which is
-// why the renderer keeps a toggle for reaching ChatGPT's own history.
+// Zero3 owns the outer navigation and toolbar. Keep ChatGPT's own conversation
+// rail suppressed by default, and collapse its page header so the same controls
+// do not consume a second row. The hidden header remains in layout at zero
+// height (rather than display:none) so Zero3 can invoke its native buttons and
+// ChatGPT can still position portaled menus/dialogs relative to those triggers.
 const CHATGPT_CHROME_CSS = '#stage-slideover-sidebar{display:none !important}'
+const CHATGPT_HEADER_CSS = `#page-header{
+  height:0 !important;
+  min-height:0 !important;
+  padding:0 !important;
+  margin:0 !important;
+  opacity:0 !important;
+  pointer-events:none !important;
+  overflow:visible !important;
+  align-items:flex-start !important;
+}`
+
+const CHATGPT_TOOLBAR_ACTION_SELECTORS = {
+  sidebar: ['[data-testid="open-sidebar-button"]', '[data-testid="close-sidebar-button"]'],
+  new_chat: ['#page-header a[aria-label="新聊天"]', '#page-header a[aria-label="New chat"]', '#page-header a[href="/"]'],
+  share: ['[data-testid="share-chat-button"]'],
+  more: ['[data-testid="conversation-options-button"]']
+} as const
+
+type ChatGptToolbarAction = keyof typeof CHATGPT_TOOLBAR_ACTION_SELECTORS
 const GENERIC_TITLES = new Set(['ChatGPT', 'New chat', '新聊天', '新对话'])
 
 function requiredText(value: unknown, label: string, max: number): string {
@@ -367,6 +385,16 @@ export class Zero3GptWebProvider {
     return { hidden: true }
   }
 
+  private async applyHeaderSuppression(live: LiveGptWebView): Promise<void> {
+    const contents = live.view.webContents
+    if (contents.isDestroyed() || live.headerCssKey) return
+    try {
+      live.headerCssKey = await contents.insertCSS(CHATGPT_HEADER_CSS)
+    } catch {
+      live.headerCssKey = null
+    }
+  }
+
   private async applyChromeSuppression(live: LiveGptWebView): Promise<void> {
     const contents = live.view.webContents
     if (contents.isDestroyed() || live.chromeCssKey) return
@@ -398,6 +426,50 @@ export class Zero3GptWebProvider {
       await this.applyChromeSuppression(live)
     }
     return { visible: visibleValue }
+  }
+
+  async invokeToolbarAction(
+    idValue: unknown,
+    actionValue: unknown
+  ): Promise<{ action: ChatGptToolbarAction; invoked: true }> {
+    const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
+    if (
+      typeof actionValue !== 'string' ||
+      !Object.prototype.hasOwnProperty.call(CHATGPT_TOOLBAR_ACTION_SELECTORS, actionValue)
+    ) {
+      throw new Error('unsupported GPT Web toolbar action')
+    }
+    const action = actionValue as ChatGptToolbarAction
+    const live = this.live.get(id)
+    if (!live || live.view.webContents.isDestroyed()) throw new Error('GPT Web view is not live')
+
+    const selectors = CHATGPT_TOOLBAR_ACTION_SELECTORS[action]
+    live.view.webContents.focus()
+    let invoked = await live.view.webContents.executeJavaScript(
+      `(() => {
+        const selectors = ${JSON.stringify(selectors)}
+        for (const selector of selectors) {
+          const element = document.querySelector(selector)
+          if (element instanceof HTMLElement) {
+            element.click()
+            return true
+          }
+        }
+        return false
+      })()`,
+      true
+    )
+    // Some ChatGPT surfaces omit the pencil/new-chat control entirely. Keep
+    // Zero3's promoted toolbar action reliable by falling back to the same
+    // canonical ChatGPT home navigation used by a native new-chat link.
+    if (invoked !== true && action === 'new_chat') {
+      await live.view.webContents.loadURL(ZERO3_GPT_WEB_HOME)
+      invoked = true
+    }
+    if (invoked !== true) throw new Error(`ChatGPT toolbar action is unavailable: ${action}`)
+    live.lastUsedAt = Date.now()
+    this.bump(id)
+    return { action, invoked: true }
   }
 
   async setBounds(idValue: unknown, boundsValue: unknown): Promise<{ ok: true }> {
@@ -516,7 +588,8 @@ export class Zero3GptWebProvider {
       lastActivatedAt: null,
       loadState: 'warming',
       chromeHidden: true,
-      chromeCssKey: null
+      chromeCssKey: null,
+      headerCssKey: null
     }
     this.live.set(entry.id, live)
     this.installViewGuards(live)
@@ -598,6 +671,8 @@ export class Zero3GptWebProvider {
     // therefore the existing sheet.
     contents.on('dom-ready', () => {
       live.chromeCssKey = null
+      live.headerCssKey = null
+      void this.applyHeaderSuppression(live)
       if (live.chromeHidden) void this.applyChromeSuppression(live)
     })
 
