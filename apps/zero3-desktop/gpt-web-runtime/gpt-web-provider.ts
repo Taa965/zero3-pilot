@@ -16,20 +16,34 @@ import {
 } from '../workspace/workspace-entry-types'
 import { readChatGptProjectCatalog } from './chatgpt-project-catalog'
 import {
+  ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS,
+  ZERO3_GPT_WEB_BASE_LIVE_VIEWS,
   ZERO3_GPT_WEB_MAX_LIVE_VIEWS,
   ZERO3_GPT_WEB_PARTITION,
   type Zero3ChatGptRemoteProject,
   type Zero3GptWebBounds,
-  type Zero3GptWebEvent
+  type Zero3GptWebEvent,
+  type Zero3GptWebSnapshotResult,
+  type Zero3GptWebWarmResult
 } from './gpt-web-types'
+
+type LiveGptWebLoadState = 'warming' | 'warm' | 'error'
 
 type LiveGptWebView = {
   entryId: string
   view: WebContentsView
   parentWindowId: number | null
   lastUsedAt: number
+  warmedAt: number
+  lastActivatedAt: number | null
+  loadState: LiveGptWebLoadState
   chromeHidden: boolean
   chromeCssKey: string | null
+}
+
+type SnapshotRecord = {
+  dataUrl: string
+  capturedAt: number
 }
 
 type EventSink = (event: Zero3GptWebEvent) => void
@@ -38,6 +52,12 @@ const MAX_URL = 8_192
 const MAX_ENTRY_ID = 256
 const MAX_BOUND = 16_384
 const CHATGPT_HOST = 'chatgpt.com'
+const MAINTENANCE_INTERVAL_MS = 15_000
+const RENDER_WAIT_TIMEOUT_MS = 8_000
+const SNAPSHOT_MAX_COUNT = 30
+const SNAPSHOT_MAX_WIDTH = 1_280
+const SNAPSHOT_JPEG_QUALITY = 55
+
 // ChatGPT ships its own conversation rail. Zero3's second column already lists
 // these sessions, so leaving it visible puts two navigation surfaces side by
 // side. The tiny collapsed rail is a descendant of the same element, so one
@@ -174,15 +194,20 @@ function windowZoomFactor(window: BrowserWindow | null): number {
 
 export class Zero3GptWebProvider {
   private readonly live = new Map<string, LiveGptWebView>()
+  private readonly snapshots = new Map<string, SnapshotRecord>()
   private profileSession: Session | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
   private catalogTail: Promise<unknown> = Promise.resolve()
+  private maintenanceTimer: NodeJS.Timeout | null = null
 
   constructor(
     private readonly entries: Zero3WorkspaceEntryStore,
     private readonly projects: Zero3ProjectStore,
     private readonly emitEvent: EventSink
-  ) {}
+  ) {
+    this.maintenanceTimer = setInterval(() => this.maintainHotPool(), MAINTENANCE_INTERVAL_MS)
+    this.maintenanceTimer.unref?.()
+  }
 
   async create(projectId?: string | null): Promise<Zero3GptWebWorkspaceEntry> {
     const scope = projectId ?? null
@@ -190,7 +215,7 @@ export class Zero3GptWebProvider {
       projectId: scope,
       homeUrl: await this.boundProjectUrl(scope)
     })
-    this.emitEvent({ kind: 'state', entryId: entry.id, state: 'created' })
+    this.emitEvent({ kind: 'state', entryId: entry.id, state: 'cold' })
     return entry
   }
 
@@ -239,8 +264,20 @@ export class Zero3GptWebProvider {
     if (parent.isDestroyed()) throw new Error('GPT Web parent window is unavailable')
     const id = requiredText(input.id, 'workspace entry id', MAX_ENTRY_ID)
     const bounds = normalizeBounds(input.bounds)
+
+    // Never revive a hidden view that has already aged out of the five-minute
+    // activity window. A click on such an entry intentionally becomes a cold
+    // restore so the provider can reclaim memory predictably.
+    this.maintainHotPool()
+
     const entry = await this.requireEntry(id)
     const live = await this.ensureLive(entry)
+    this.markActivated(live)
+
+    // A cold or hover-prewarmed view stays detached while its first document is
+    // loading. This lets UI v2 keep a cached screenshot (or its lightweight
+    // placeholder) visible instead of flashing an empty native WebContentsView.
+    if (live.loadState === 'warming') await this.waitUntilRenderable(live)
 
     this.detachFromParent(live)
     this.hideOtherViewsInWindow(parent.id, id)
@@ -250,17 +287,57 @@ export class Zero3GptWebProvider {
     live.lastUsedAt = Date.now()
     live.view.webContents.focus()
     this.bump(id)
-    this.emitEvent({ kind: 'state', entryId: id, state: 'shown' })
+    this.maintainHotPool(id)
+
+    if (live.loadState === 'warm') {
+      this.emitEvent({ kind: 'state', entryId: id, state: 'visible' })
+    } else if (live.loadState === 'warming') {
+      this.emitEvent({ kind: 'state', entryId: id, state: 'warming' })
+    }
+
     return (await this.entries.get(id)) as Zero3GptWebWorkspaceEntry
+  }
+
+  /**
+   * Preloads a GPT session without attaching or focusing it. Hovering a session
+   * row uses this path. Prewarmed-but-never-opened views fit inside the normal
+   * ten-view LRU budget; only sessions actually activated in the last five
+   * minutes can expand the budget beyond ten, up to thirty.
+   */
+  async warm(idValue: unknown): Promise<Zero3GptWebWarmResult> {
+    const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
+    this.maintainHotPool()
+    const entry = await this.requireEntry(id)
+    const live = await this.ensureLive(entry)
+    const now = Date.now()
+    live.warmedAt = now
+    live.lastUsedAt = now
+    this.bump(id)
+    this.maintainHotPool()
+    return {
+      state: live.parentWindowId != null ? 'visible' : live.loadState === 'warm' ? 'warm' : 'warming'
+    }
+  }
+
+  snapshot(idValue: unknown): Zero3GptWebSnapshotResult {
+    const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
+    const record = this.snapshots.get(id)
+    if (!record) return { dataUrl: null }
+    // Reading the snapshot also refreshes its in-memory LRU order.
+    this.snapshots.delete(id)
+    this.snapshots.set(id, record)
+    return { dataUrl: record.dataUrl }
   }
 
   async hide(idValue: unknown): Promise<{ hidden: boolean }> {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     const live = this.live.get(id)
     if (!live) return { hidden: false }
+    void this.captureSnapshot(live)
     this.detachFromParent(live)
-    live.lastUsedAt = Date.now()
-    this.emitEvent({ kind: 'state', entryId: id, state: 'hidden' })
+    this.markActivated(live)
+    this.emitEvent({ kind: 'state', entryId: id, state: 'warm' })
+    this.maintainHotPool()
     return { hidden: true }
   }
 
@@ -313,9 +390,11 @@ export class Zero3GptWebProvider {
     const entry = await this.requireEntry(id)
     const url = chatGptNavigationUrl(urlValue)
     const live = await this.ensureLive(entry)
+    this.markActivated(live)
     await live.view.webContents.loadURL(url)
     live.lastUsedAt = Date.now()
     this.bump(live.entryId)
+    this.maintainHotPool(live.entryId)
     return { url: live.view.webContents.getURL() || url }
   }
 
@@ -323,9 +402,11 @@ export class Zero3GptWebProvider {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     const entry = await this.requireEntry(id)
     const live = await this.ensureLive(entry)
+    this.markActivated(live)
     live.view.webContents.reload()
     live.lastUsedAt = Date.now()
     this.bump(live.entryId)
+    this.maintainHotPool(live.entryId)
     return { ok: true }
   }
 
@@ -340,6 +421,7 @@ export class Zero3GptWebProvider {
   async remove(idValue: unknown): Promise<{ removed: boolean }> {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     this.destroyLive(id, 'suspended')
+    this.snapshots.delete(id)
     return this.entries.remove(id)
   }
 
@@ -353,7 +435,12 @@ export class Zero3GptWebProvider {
   }
 
   stop(): void {
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer)
+      this.maintenanceTimer = null
+    }
     for (const id of [...this.live.keys()]) this.destroyLive(id, 'suspended')
+    this.snapshots.clear()
   }
 
   private getProfileSession(): Session {
@@ -393,11 +480,15 @@ export class Zero3GptWebProvider {
         spellcheck: true
       }
     })
+    const now = Date.now()
     const live: LiveGptWebView = {
       entryId: entry.id,
       view,
       parentWindowId: null,
-      lastUsedAt: Date.now(),
+      lastUsedAt: now,
+      warmedAt: now,
+      lastActivatedAt: null,
+      loadState: 'warming',
       chromeHidden: true,
       chromeCssKey: null
     }
@@ -405,12 +496,12 @@ export class Zero3GptWebProvider {
     this.installViewGuards(live)
     this.installViewObservers(live)
     this.bump(entry.id)
-    this.evictIfNeeded(entry.id)
 
     const target = resumeChatGptUrl(entry)
-    this.emitEvent({ kind: 'state', entryId: entry.id, state: 'loading' })
+    this.emitEvent({ kind: 'state', entryId: entry.id, state: 'warming' })
     void view.webContents.loadURL(target).catch(error => {
       if (!view.webContents.isDestroyed()) {
+        live.loadState = 'error'
         this.emitEvent({
           kind: 'state',
           entryId: live.entryId,
@@ -488,14 +579,21 @@ export class Zero3GptWebProvider {
     contents.on('did-navigate-in-page', observe)
     contents.on('page-title-updated', () => observe())
     contents.on('did-start-loading', () => {
-      this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'loading' })
+      live.loadState = 'warming'
+      this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'warming' })
     })
     contents.on('did-stop-loading', () => {
       observe()
-      this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'ready' })
+      live.loadState = 'warm'
+      this.emitEvent({
+        kind: 'state',
+        entryId: live.entryId,
+        state: live.parentWindowId == null ? 'warm' : 'visible'
+      })
     })
     contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
       if (!isMainFrame || errorCode === -3) return
+      live.loadState = 'error'
       this.emitEvent({
         kind: 'state',
         entryId: live.entryId,
@@ -504,6 +602,7 @@ export class Zero3GptWebProvider {
       })
     })
     contents.on('render-process-gone', (_event, details) => {
+      live.loadState = 'error'
       this.emitEvent({
         kind: 'state',
         entryId: live.entryId,
@@ -541,6 +640,12 @@ export class Zero3GptWebProvider {
           live.lastUsedAt = Date.now()
           this.live.set(live.entryId, live)
           this.bump(live.entryId)
+
+          const sourceSnapshot = this.snapshots.get(sourceEntryId)
+          if (sourceSnapshot) {
+            this.snapshots.delete(sourceEntryId)
+            this.rememberSnapshot(live.entryId, sourceSnapshot)
+          }
         }
 
         this.emitEvent({
@@ -579,10 +684,19 @@ export class Zero3GptWebProvider {
   private hideOtherViewsInWindow(windowId: number, exceptEntryId: string): void {
     for (const live of this.live.values()) {
       if (live.entryId !== exceptEntryId && live.parentWindowId === windowId) {
+        void this.captureSnapshot(live)
         this.detachFromParent(live)
-        this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'hidden' })
+        this.markActivated(live)
+        this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'warm' })
       }
     }
+  }
+
+  private markActivated(live: LiveGptWebView): void {
+    const now = Date.now()
+    live.lastActivatedAt = now
+    live.lastUsedAt = now
+    this.bump(live.entryId)
   }
 
   private bump(entryId: string): void {
@@ -592,11 +706,107 @@ export class Zero3GptWebProvider {
     this.live.set(entryId, live)
   }
 
-  private evictIfNeeded(currentEntryId: string): void {
-    while (this.live.size > ZERO3_GPT_WEB_MAX_LIVE_VIEWS) {
-      const candidate = [...this.live.keys()].find(id => id !== currentEntryId)
+  private hotCapacity(now = Date.now()): number {
+    let recentlyActivated = 0
+    for (const live of this.live.values()) {
+      const activeNow = live.parentWindowId != null
+      const recentClick = live.lastActivatedAt != null && now - live.lastActivatedAt <= ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS
+      if (activeNow || recentClick) recentlyActivated += 1
+    }
+    return Math.min(
+      ZERO3_GPT_WEB_MAX_LIVE_VIEWS,
+      Math.max(ZERO3_GPT_WEB_BASE_LIVE_VIEWS, recentlyActivated)
+    )
+  }
+
+  private maintainHotPool(protectedEntryId?: string): void {
+    const now = Date.now()
+
+    // Five minutes after a hidden session was last selected/left (or prewarmed
+    // without ever being selected), its native renderer is removed from the hot
+    // pool. The cached screenshot remains in memory so a later cold restore can
+    // still appear instant while the page is loading.
+    for (const [id, live] of [...this.live.entries()]) {
+      if (id === protectedEntryId || live.parentWindowId != null) continue
+      const reference = live.lastActivatedAt ?? live.warmedAt
+      if (now - reference > ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS) {
+        this.destroyLive(id, 'suspended')
+      }
+    }
+
+    const capacity = this.hotCapacity(now)
+    while (this.live.size > capacity) {
+      const candidate = [...this.live.values()]
+        .filter(live => live.entryId !== protectedEntryId && live.parentWindowId == null)
+        .sort((left, right) => {
+          const leftRecent =
+            left.lastActivatedAt != null && now - left.lastActivatedAt <= ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS
+          const rightRecent =
+            right.lastActivatedAt != null && now - right.lastActivatedAt <= ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS
+          if (leftRecent !== rightRecent) return leftRecent ? 1 : -1
+          return left.lastUsedAt - right.lastUsedAt
+        })[0]
       if (!candidate) return
-      this.destroyLive(candidate, 'suspended')
+      this.destroyLive(candidate.entryId, 'suspended')
+    }
+  }
+
+  private async waitUntilRenderable(live: LiveGptWebView): Promise<void> {
+    if (live.loadState !== 'warming') return
+    const contents = live.view.webContents
+    if (contents.isDestroyed()) return
+
+    await new Promise<void>(resolve => {
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
+        contents.removeListener('did-stop-loading', onStop)
+        contents.removeListener('did-fail-load', onFail)
+        contents.removeListener('destroyed', onDestroyed)
+        resolve()
+      }
+      const onStop = () => finish()
+      const onFail = () => finish()
+      const onDestroyed = () => finish()
+      const timeout = setTimeout(finish, RENDER_WAIT_TIMEOUT_MS)
+      contents.once('did-stop-loading', onStop)
+      contents.once('did-fail-load', onFail)
+      contents.once('destroyed', onDestroyed)
+    })
+  }
+
+  private async captureSnapshot(live: LiveGptWebView): Promise<void> {
+    const contents = live.view.webContents
+    if (contents.isDestroyed()) return
+    try {
+      const image = await contents.capturePage()
+      if (image.isEmpty()) return
+      const size = image.getSize()
+      const snapshot =
+        size.width > SNAPSHOT_MAX_WIDTH
+          ? image.resize({ width: SNAPSHOT_MAX_WIDTH, quality: 'good' })
+          : image
+      const encoded = snapshot.toJPEG(SNAPSHOT_JPEG_QUALITY).toString('base64')
+      if (!encoded) return
+      this.rememberSnapshot(live.entryId, {
+        dataUrl: `data:image/jpeg;base64,${encoded}`,
+        capturedAt: Date.now()
+      })
+    } catch {
+      // Snapshotting is a visual optimization only. It must never interfere with
+      // session switching or with the authoritative workspace metadata.
+    }
+  }
+
+  private rememberSnapshot(entryId: string, record: SnapshotRecord): void {
+    this.snapshots.delete(entryId)
+    this.snapshots.set(entryId, record)
+    while (this.snapshots.size > SNAPSHOT_MAX_COUNT) {
+      const oldest = this.snapshots.keys().next().value as string | undefined
+      if (!oldest) return
+      this.snapshots.delete(oldest)
     }
   }
 
