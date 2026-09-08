@@ -332,7 +332,7 @@ async function zero3SessionProviderStatus() {
       available: agy.available,
       authenticated: antigravityAuthenticated,
       authMode: 'cli' as const,
-      detail: !agy.available ? '未检测到 Antigravity CLI (agy)' : antigravityAuthenticated === true ? '已验证 Antigravity 授权' : antigravityAuthenticated === false ? 'Antigravity 授权已失效或缺失' : '已安装；首次启动会验证官方授权'
+      detail: !agy.available ? '未检测到官方 agy CLI；桌面版 Antigravity 应用本身不含该命令行工具' : antigravityAuthenticated === true ? '已验证 Antigravity 授权' : antigravityAuthenticated === false ? 'Antigravity 授权已失效或缺失' : '已安装；首次启动会验证官方授权'
     },
     zero3: {
       available: true,

@@ -193,6 +193,14 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
             const itemStatus = status?.[provider.id]
             const badge = statusLabel(itemStatus)
             const disabledByProject = provider.requiresProject && !project
+            // A provider that cannot be used says why on its own card. The
+            // detail otherwise lives only in the panel below, one click away,
+            // so an installed Antigravity IDE reads as a flat 未安装 with no
+            // hint that the missing piece is the separate agy CLI.
+            const blockingDetail =
+              itemStatus && !disabledByProject && (!itemStatus.available || itemStatus.authenticated === false)
+                ? itemStatus.detail
+                : null
             return (
               <button
                 key={provider.id}
@@ -208,6 +216,11 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
                   </span>
                 </div>
                 <div className="mt-2 text-xs leading-5 text-(--ui-text-tertiary)">{provider.description}</div>
+                {blockingDetail && (
+                  <div className={`mt-1.5 line-clamp-3 text-[11px] leading-4 ${badge.className}`} title={blockingDetail}>
+                    {blockingDetail}
+                  </div>
+                )}
               </button>
             )
           })}
