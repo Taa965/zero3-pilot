@@ -103,7 +103,7 @@ function zero3StartProjectContextHttp() {
   const serverPath = path.join(app.getAppPath(), 'electron', 'zero3', 'mcp', 'project-context-http.mjs')
   zero3McpHttpToken()
   zero3ProjectContextHttpChild = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: path.join(app.getPath('userData'), 'zero3', 'project-context'), ZERO3_MCP_HTTP_STATE_DIR: zero3McpHttpStateDir(), ZERO3_MCP_HTTP_HOST: '127.0.0.1', ZERO3_MCP_HTTP_PORT: String(ZERO3_MCP_HTTP_PORT) },
+    env: { ...process.env, ...zero3MemoryAuthorityChildEnv('gpt_web'), ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: path.join(app.getPath('userData'), 'zero3', 'project-context'), ZERO3_MCP_HTTP_STATE_DIR: zero3McpHttpStateDir(), ZERO3_MCP_HTTP_HOST: '127.0.0.1', ZERO3_MCP_HTTP_PORT: String(ZERO3_MCP_HTTP_PORT) },
     stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true
   })
   zero3ProjectContextHttpChild.stderr?.on('data', chunk => console.error('[zero3-project-context-http]', String(chunk).trimEnd()))

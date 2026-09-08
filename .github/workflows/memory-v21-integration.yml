@@ -1,0 +1,87 @@
+name: Memory V2.1 Integration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deployment/memory/**'
+      - 'apps/memory-server/**'
+      - 'apps/zero3-desktop/mcp-runtime/**'
+      - 'apps/zero3-desktop/memory-sync-runtime/**'
+      - 'apps/zero3-desktop/agent-routing-runtime/claude-task-adapter*'
+      - 'apps/zero3-desktop/artifact-runtime/antigravity-mcp-lease.ts'
+      - 'apps/zero3-desktop/scripts/apply-memory-authority-v21.mjs'
+      - 'apps/zero3-desktop/scripts/apply-project-context-*.mjs'
+      - 'apps/zero3-desktop/scripts/apply-agent-claude-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-agent-mcp-lifecycle.mjs'
+      - 'schemas/zero3.memory.event.v1.schema.json'
+      - 'scripts/check-memory-v21-integration.mjs'
+      - '.github/workflows/memory-v21-integration.yml'
+
+jobs:
+  memory-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zero3_memory
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d zero3_memory"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: zero3_memory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '24.11.0' }
+      - name: Static deployment/inbox checks
+        run: node scripts/check-memory-v21-integration.mjs
+      - name: Memory Node tests
+        run: >-
+          node --test
+          apps/zero3-desktop/mcp-runtime/project-context-authority-adapter.test.mjs
+          apps/zero3-desktop/mcp-runtime/project-context-core.test.mjs
+          apps/zero3-desktop/mcp-runtime/project-context-http-policy.test.mjs
+          apps/zero3-desktop/memory-sync-runtime/memory-sync-client.test.mjs
+          apps/zero3-desktop/memory-sync-runtime/memory-sync-sqlite-store.test.mjs
+          apps/zero3-desktop/memory-sync-runtime/memory-sync-daemon.test.mjs
+      - name: Memory server Rust gates
+        run: |
+          rustup component add rustfmt clippy
+          cargo fmt --manifest-path apps/memory-server/Cargo.toml --check
+          cargo clippy --manifest-path apps/memory-server/Cargo.toml --locked -- -D warnings
+          cargo test --manifest-path apps/memory-server/Cargo.toml --locked
+      - name: Apply all Memory Authority migrations
+        run: |
+          for migration in deployment/memory/migrations/*.sql; do
+            echo "Applying $migration"
+            psql -v ON_ERROR_STOP=1 -f "$migration"
+          done
+      - name: Verify PostgreSQL authority semantics
+        run: |
+          for test_file in deployment/memory/tests/*.sql; do
+            echo "Running $test_file"
+            psql -v ON_ERROR_STOP=1 -f "$test_file"
+          done
+          bash deployment/memory/tests/concurrency_v2_1.sh
+      - name: Syntax-check overlay sources
+        run: |
+          node --check apps/zero3-desktop/mcp-runtime/project-context-authority-adapter.mjs
+          node --check apps/zero3-desktop/mcp-runtime/project-context-server.mjs
+          node --check apps/zero3-desktop/mcp-runtime/project-context-http.mjs
+          node --check apps/zero3-desktop/mcp-runtime/task-mcp-server.mjs
+          node --check apps/zero3-desktop/memory-sync-runtime/memory-sync-daemon.mjs
+          node --check apps/zero3-desktop/scripts/apply-memory-authority-v21.mjs
+          node --check apps/zero3-desktop/scripts/apply-project-context-mcp.mjs
+          node --check apps/zero3-desktop/scripts/apply-project-context-http.mjs
+# final integration retrigger after Antigravity gate fix

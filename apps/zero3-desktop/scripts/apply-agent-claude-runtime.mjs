@@ -40,7 +40,8 @@ appliedMarker: 'Zero3ClaudeTaskAdapter',
       to: `const zero3CodexTaskAdapter = new Zero3CodexTaskAdapter(zero3LocalCodexRunner)
 const zero3ClaudeTaskAdapter = new Zero3ClaudeTaskAdapter({
   serverPath: path.join(app.getAppPath(), 'electron', 'zero3', 'mcp', 'project-context-server.mjs'),
-  stateDir: path.join(app.getPath('userData'), 'zero3', 'project-context')
+  stateDir: path.join(app.getPath('userData'), 'zero3', 'project-context'),
+  memoryEnv: zero3MemoryAuthorityChildEnv('claude')
 })`
     },
     {

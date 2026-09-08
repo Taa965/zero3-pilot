@@ -19,6 +19,7 @@ import { renderZero3AgentTaskPrompt } from './task-prompt'
 export type Zero3ClaudeProjectMcpOptions = {
   serverPath: string
   stateDir: string
+  memoryEnv?: Record<string, string>
 }
 
 export type Zero3ClaudeExecutorPort = {
@@ -53,6 +54,7 @@ export function zero3ClaudeProjectMcpConfig(
         command: process.execPath,
         args: [serverPath],
         env: {
+          ...(options.memoryEnv ?? {}),
           ELECTRON_RUN_AS_NODE: '1',
           ZERO3_PROJECT_CONTEXT_DIR: stateDir,
           ZERO3_ACTIVE_PROJECT_ID: projectId

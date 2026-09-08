@@ -109,11 +109,11 @@ const taskMcp = read(paths.taskMcp)
 const tools = [...taskMcp.matchAll(/registerTool\('([^']+)'/g)].map(match => match[1])
 const expectedTools = ['task_get','project_get_context','artifact_list','artifact_get','review_get','task_publish_progress','task_publish_result']
 if (JSON.stringify(tools) !== JSON.stringify(expectedTools)) throw new Error(`${paths.taskMcp}: task-scoped MCP surface drifted: ${JSON.stringify(tools)}`)
-requireAll(taskMcp, paths.taskMcp, ['cannot mutate review decisions','Zero3 CompletionGate remains authoritative','assertTask(id)','assertProject(value)','storageName(id)','Zero3 task snapshot identity mismatch','artifact index task identity mismatch','review record task identity mismatch'])
+requireAll(taskMcp, paths.taskMcp, ['createProjectContextAuthorityAdapter','cannot mutate review decisions','Zero3 CompletionGate remains authoritative','assertTask(id)','assertProject(value)','storageName(id)','Zero3 task snapshot identity mismatch','artifact index task identity mismatch','review record task identity mismatch'])
 forbid(taskMcp, paths.taskMcp, ['review_set', 'review_decision', 'completion_gate_set', 'shell_exec', 'run_command'])
 
 const projectMcp = read(paths.projectMcp)
-requireAll(projectMcp, paths.projectMcp, ['createProjectContextCore','core.getProject(projectId)','core.putProject(projectId, expectedVersion, payload)','core.getHandoff(taskId)','core.putHandoff(taskId, expectedVersion, executionResult)'])
+requireAll(projectMcp, paths.projectMcp, ['createProjectContextAuthorityAdapter','core.getProject(projectId)','core.putProject(projectId, expectedVersion, payload)','core.getHandoff(taskId)','core.putHandoff(taskId, expectedVersion, executionResult)'])
 
 const projectMcpCore = read(paths.projectMcpCore)
 requireAll(projectMcpCore, paths.projectMcpCore, ["createHash('sha256')",'storageName(logicalId)','MAX_JSON_BYTES','mode: 0o600','await fs.rename(temporary, file)','invalid persisted project context','invalid persisted handoff','project context version conflict','handoff version conflict'])

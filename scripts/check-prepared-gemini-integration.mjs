@@ -113,9 +113,11 @@ requireAll(packagedArtifacts, 'electron/zero3/artifacts/artifact-store.ts', ["cr
 const packagedLease = read('electron/zero3/artifacts/antigravity-mcp-lease.ts')
 requireAll(packagedLease, 'electron/zero3/artifacts/antigravity-mcp-lease.ts', ["createHash('sha256')",'storageName(taskId)','this.taskSnapshotPath = null','await fs.unlink(taskSnapshotPath)','already installed or pending cleanup'])
 const packagedTaskMcp = read('electron/zero3/mcp/task-mcp-server.mjs')
-requireAll(packagedTaskMcp, 'electron/zero3/mcp/task-mcp-server.mjs', ["import { createHash } from 'node:crypto'",'storageName(id)','Zero3 task snapshot identity mismatch','artifact index task identity mismatch','review record task identity mismatch'])
+requireAll(packagedTaskMcp, 'electron/zero3/mcp/task-mcp-server.mjs', ["import { createHash } from 'node:crypto'",'createProjectContextAuthorityAdapter','storageName(id)','Zero3 task snapshot identity mismatch','artifact index task identity mismatch','review record task identity mismatch'])
 const packagedProjectServer = read('electron/zero3/mcp/project-context-server.mjs')
-requireAll(packagedProjectServer, 'electron/zero3/mcp/project-context-server.mjs', ['createProjectContextCore','resolveContextRoot',"from './project-context-core.mjs'"])
+requireAll(packagedProjectServer, 'electron/zero3/mcp/project-context-server.mjs', ['createProjectContextAuthorityAdapter','resolveContextRoot',"from './project-context-authority-adapter.mjs'"])
+const packagedProjectAdapter = read('electron/zero3/mcp/project-context-authority-adapter.mjs')
+requireAll(packagedProjectAdapter, 'electron/zero3/mcp/project-context-authority-adapter.mjs', ['createSqliteMemorySyncStore','project.context.replaced','handoff.published','legacy_local_offline'])
 const packagedProjectCore = read('electron/zero3/mcp/project-context-core.mjs')
 requireAll(packagedProjectCore, 'electron/zero3/mcp/project-context-core.mjs', ["createHash('sha256')",'storageName(logicalId)','invalid persisted project context','invalid persisted handoff'])
 

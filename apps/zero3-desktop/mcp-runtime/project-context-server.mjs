@@ -2,7 +2,8 @@ import { McpServer } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import * as z from 'zod/v4'
 
-import { createProjectContextCore, EXECUTION_RESULT_PROTOCOL, ID_PATTERN, resolveContextRoot } from './project-context-core.mjs'
+import { EXECUTION_RESULT_PROTOCOL, ID_PATTERN, resolveContextRoot } from './project-context-core.mjs'
+import { createProjectContextAuthorityAdapter } from './project-context-authority-adapter.mjs'
 
 const SERVER_NAME = 'zero3-project-context'
 const SERVER_VERSION = '0.2.0'
@@ -42,7 +43,7 @@ function serverFactory(core) {
 
 try {
   const root = resolveContextRoot()
-  const core = createProjectContextCore({ rootDir: root, activeProjectId: activeProjectId() })
+  const core = createProjectContextAuthorityAdapter({ rootDir: root, activeProjectId: activeProjectId() })
   await serveStdio(() => serverFactory(core))
 } catch (error) {
   console.error(`[${SERVER_NAME}] ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
