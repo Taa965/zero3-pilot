@@ -1,0 +1,19 @@
+name: Memory V2.1 Integration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deployment/memory/**'
+      - 'scripts/check-memory-v21-integration.mjs'
+      - '.github/workflows/memory-v21-integration.yml'
+
+jobs:
+  static-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - run: node scripts/check-memory-v21-integration.mjs
