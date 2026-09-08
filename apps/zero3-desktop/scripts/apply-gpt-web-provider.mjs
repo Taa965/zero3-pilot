@@ -21,7 +21,7 @@ function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = read(file)
   for (const replacement of replacements) {
-    if (source.includes(replacement.to)) continue
+    if ((replacement.already && source.includes(replacement.already)) || source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) {
       throw new Error(
         `Zero3 GPT Web overlay drift in ${relativePath}: could not find ${replacement.label}. ` +
@@ -84,6 +84,8 @@ ipcMain.handle('zero3:gpt-web:show', (event, request: unknown) => {
     bounds: input.bounds
   })
 })
+ipcMain.handle('zero3:gpt-web:warm', (_event, request: unknown) => zero3GptWeb.warm(zero3GptWebId(request)))
+ipcMain.handle('zero3:gpt-web:snapshot', (_event, request: unknown) => zero3GptWeb.snapshot(zero3GptWebId(request)))
 ipcMain.handle('zero3:gpt-web:hide', (_event, request: unknown) => zero3GptWeb.hide(zero3GptWebId(request)))
 ipcMain.handle('zero3:gpt-web:set-chrome-visible', (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
@@ -110,6 +112,8 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3GptWeb', 
   create: request => ipcRenderer.invoke('zero3:gpt-web:create', request),
   listRemoteProjects: () => ipcRenderer.invoke('zero3:gpt-web:list-remote-projects'),
   show: request => ipcRenderer.invoke('zero3:gpt-web:show', request),
+  warm: request => ipcRenderer.invoke('zero3:gpt-web:warm', request),
+  snapshot: request => ipcRenderer.invoke('zero3:gpt-web:snapshot', request),
   hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),
   setChromeVisible: request => ipcRenderer.invoke('zero3:gpt-web:set-chrome-visible', request),
   setBounds: request => ipcRenderer.invoke('zero3:gpt-web:set-bounds', request),
@@ -134,7 +138,18 @@ type Zero3GptWebEvent =
   | {
       kind: 'state'
       entryId: string
-      state: 'created' | 'loading' | 'ready' | 'shown' | 'hidden' | 'suspended' | 'error'
+      state:
+        | 'cold'
+        | 'warming'
+        | 'warm'
+        | 'visible'
+        | 'created'
+        | 'loading'
+        | 'ready'
+        | 'shown'
+        | 'hidden'
+        | 'suspended'
+        | 'error'
       detail?: string
     }
   | {
@@ -151,6 +166,8 @@ const globalWindowSurface = String.raw`    zero3GptWeb: {
       create: (request?: { projectId?: string | null }) => Promise<Zero3WorkspaceEntry>
       listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>
       show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>
+      warm: (request: { id: string }) => Promise<{ state: 'warming' | 'warm' | 'visible' }>
+      snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>
       hide: (request: { id: string }) => Promise<{ hidden: boolean }>
       setChromeVisible: (request: { id: string; visible: boolean }) => Promise<{ visible: boolean }>
       setBounds: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<{ ok: true }>
@@ -176,6 +193,7 @@ export function applyZero3GptWebProvider() {
     },
     {
       label: 'GPT Web provider handlers before Codex singleton',
+      already: 'const zero3GptWeb = new Zero3GptWebProvider',
       from: 'const zero3CodexAppServer = createZero3CodexAppServer()',
       to: mainHandlers + '\nconst zero3CodexAppServer = createZero3CodexAppServer()'
     }
@@ -184,6 +202,7 @@ export function applyZero3GptWebProvider() {
   patchFile('electron/preload.ts', [
     {
       label: 'GPT Web preload surface before workspace surface',
+      already: "contextBridge.exposeInMainWorld('zero3GptWeb'",
       from: "contextBridge.exposeInMainWorld('zero3Workspace', {",
       to: preloadBridge
     }
@@ -192,6 +211,7 @@ export function applyZero3GptWebProvider() {
   patchFile('src/global.d.ts', [
     {
       label: 'GPT Web renderer type definitions',
+      already: 'type Zero3GptWebEvent =',
       from: 'type Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry',
       to:
         globalTypeDefinitions +
@@ -199,8 +219,67 @@ export function applyZero3GptWebProvider() {
     },
     {
       label: 'GPT Web renderer window surface',
+      already: '    zero3GptWeb: {',
       from: '    zero3Workspace: {',
       to: globalWindowSurface
+    }
+  ])
+
+
+  // Upgrade an already-prepared pinned Hermes tree in place. The main overlay
+  // is intentionally rerunnable during development, so changing the generated
+  // bridge must not duplicate the entire provider block on the next prepare.
+  patchFile('electron/main.ts', [
+    {
+      label: 'GPT Web warm/snapshot IPC handlers',
+      already: "ipcMain.handle('zero3:gpt-web:warm'",
+      from: "ipcMain.handle('zero3:gpt-web:hide', (_event, request: unknown) => zero3GptWeb.hide(zero3GptWebId(request)))",
+      to:
+        "ipcMain.handle('zero3:gpt-web:warm', (_event, request: unknown) => zero3GptWeb.warm(zero3GptWebId(request)))\n" +
+        "ipcMain.handle('zero3:gpt-web:snapshot', (_event, request: unknown) => zero3GptWeb.snapshot(zero3GptWebId(request)))\n" +
+        "ipcMain.handle('zero3:gpt-web:hide', (_event, request: unknown) => zero3GptWeb.hide(zero3GptWebId(request)))"
+    }
+  ])
+
+  patchFile('electron/preload.ts', [
+    {
+      label: 'GPT Web warm/snapshot preload methods',
+      already: "  warm: request => ipcRenderer.invoke('zero3:gpt-web:warm'",
+      from: "  hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),",
+      to:
+        "  warm: request => ipcRenderer.invoke('zero3:gpt-web:warm', request),\n" +
+        "  snapshot: request => ipcRenderer.invoke('zero3:gpt-web:snapshot', request),\n" +
+        "  hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),"
+    }
+  ])
+
+  patchFile('src/global.d.ts', [
+    {
+      label: 'GPT Web lifecycle state expansion',
+      already: "        | 'cold'",
+      from: "      state: 'created' | 'loading' | 'ready' | 'shown' | 'hidden' | 'suspended' | 'error'",
+      to:
+        "      state:\n" +
+        "        | 'cold'\n" +
+        "        | 'warming'\n" +
+        "        | 'warm'\n" +
+        "        | 'visible'\n" +
+        "        | 'created'\n" +
+        "        | 'loading'\n" +
+        "        | 'ready'\n" +
+        "        | 'shown'\n" +
+        "        | 'hidden'\n" +
+        "        | 'suspended'\n" +
+        "        | 'error'"
+    },
+    {
+      label: 'GPT Web warm/snapshot renderer methods',
+      already: "      warm: (request: { id: string })",
+      from: "      hide: (request: { id: string }) => Promise<{ hidden: boolean }>",
+      to:
+        "      warm: (request: { id: string }) => Promise<{ state: 'warming' | 'warm' | 'visible' }>\n" +
+        "      snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>\n" +
+        "      hide: (request: { id: string }) => Promise<{ hidden: boolean }>"
     }
   ])
 
