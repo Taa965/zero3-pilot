@@ -14,7 +14,7 @@ requireText('commitVerifiedSwitch', 'switch must wait for verified handoff commi
 requireText('switch already pending handoff verification', 'recursive failover guard missing')
 requireText("version: 'zero3.pilot.failover.v1'", 'restart snapshot version missing')
 for (const forbidden of ['allowFailover', '@agentclientprotocol', 'acpx', 'Zero3CodexAppServer', 'child_process', 'ipcRenderer', 'http://', 'https://']) forbidText(forbidden, `R4F authority leak: ${forbidden}`)
-for (const text of ['Zero3FailoverExecutorManager', 'beginHandoff', 'captureWorkspaceState', 'verifyHandoff', 'startFromHandoff', 'acceptHandoff', 'commitVerifiedSwitch']) { if (!runtime.includes(text)) throw new Error(`missing R4F runtime safety anchor: ${text}`) }
+for (const text of ['Zero3FailoverExecutorManager', 'beginHandoff', 'captureWorkspaceState', 'verifyHandoff', 'startFromHandoff', 'acceptHandoff', 'commitVerifiedSwitch', 'probeAll']) { if (!runtime.includes(text)) throw new Error(`missing R4F runtime safety anchor: ${text}`) }
 for (const text of ['new Zero3FailoverExecutorManager(baseExecutorManager,', "candidates: ['native-codex', 'claude']", '-executor-failover-handoffs']) { if (!desktop.includes(text)) throw new Error(`R4F production wiring missing: ${text}`) }
 for (const text of ['active?(taskId: string, executionId: string)', 'this.syncActiveExecutorAuthority()']) { if (!session.includes(text)) throw new Error(`R4F durable authority sync missing: ${text}`) }
 console.log('Zero3 Pilot R4F failover architecture guard passed.')

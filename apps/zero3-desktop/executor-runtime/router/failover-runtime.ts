@@ -228,6 +228,10 @@ export class Zero3FailoverExecutorManager {
     }
   }
 
+  async probeAll() {
+    return this.manager.probeAll()
+  }
+
   active(taskId: string, executionId: string) {
     return this.manager.active(taskId, executionId)
   }

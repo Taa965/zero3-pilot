@@ -115,6 +115,22 @@ function identity(repo: string, sha: string) {
 
 const policy = { permissionProfile: 'standard' as const, approvalRequired: false }
 
+test('probeAll stays available through failover wrapper without acquiring workspace authority', async () => {
+  const fixture = await repoFixture()
+  try {
+    const native = new ScriptedExecutor('native-codex', 'native-codex', () => [])
+    const claude = new ScriptedExecutor('claude', 'external-agent', () => [])
+    const { runtime } = createRuntime(fixture.root, native, claude)
+    assert.deepEqual(await runtime.probeAll(), [
+      { executorId: 'native-codex', status: 'ready' },
+      { executorId: 'claude', status: 'ready' }
+    ])
+    assert.equal(await new WorkspaceWriterGate(fixture.repo).current(), undefined)
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test('quota exhaustion performs verified native-codex to claude handoff before generation advances', async () => {
   const fixture = await repoFixture()
   try {
