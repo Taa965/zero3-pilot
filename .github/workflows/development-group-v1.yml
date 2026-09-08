@@ -54,6 +54,7 @@ jobs:
           apps/zero3-desktop/group-runtime/planning/planning.test.ts
           apps/zero3-desktop/group-runtime/workspace/workspace.test.ts
           apps/zero3-desktop/group-runtime/session/session-runtime.test.ts
+          apps/zero3-desktop/group-runtime/session/session-failover.test.ts
           apps/zero3-desktop/group-runtime/controller/controller.test.ts
           apps/zero3-desktop/group-runtime/integration/integration.test.ts
           apps/zero3-desktop/group-runtime/verification/verification.test.ts
