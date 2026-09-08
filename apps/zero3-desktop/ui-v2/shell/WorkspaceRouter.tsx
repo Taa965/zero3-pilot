@@ -14,6 +14,8 @@ interface WorkspaceRouterProps {
   activeSessionId: string | null
   activeProject: Zero3ProjectRecord | null
   activeProjectSessionCount: number
+  onBindChatGptProject: (project: Zero3ProjectRecord) => void
+  onUnbindChatGptProject: (project: Zero3ProjectRecord) => void
   onToggleInspector: () => void
 }
 
@@ -24,6 +26,8 @@ export function WorkspaceRouter({
   activeSessionId,
   activeProject,
   activeProjectSessionCount,
+  onBindChatGptProject,
+  onUnbindChatGptProject,
   onToggleInspector
 }: WorkspaceRouterProps) {
   return (
@@ -59,7 +63,12 @@ export function WorkspaceRouter({
         ) : activeModule === 'groups' ? (
           <DevelopmentGroupWorkspace />
         ) : activeModule === 'projects' ? (
-          <ProjectWorkspace project={activeProject} sessionCount={activeProjectSessionCount} />
+          <ProjectWorkspace
+            project={activeProject}
+            sessionCount={activeProjectSessionCount}
+            onBindChatGptProject={onBindChatGptProject}
+            onUnbindChatGptProject={onUnbindChatGptProject}
+          />
         ) : activeModule === 'runtime' ? (
           <RuntimeWorkspace />
         ) : (

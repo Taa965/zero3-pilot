@@ -36,6 +36,12 @@ export type Zero3WorkspaceEntryFile = {
 
 export type Zero3CreateGptWebEntryInput = {
   projectId?: string | null
+  /**
+   * Where the session opens instead of the ChatGPT home page. A Zero3 project
+   * bound to a ChatGPT project passes that project's page here, which is what
+   * makes the first message land inside it rather than in an unfiled chat.
+   */
+  homeUrl?: string | null
 }
 
 export type Zero3CreateGeminiWebEntryInput = {

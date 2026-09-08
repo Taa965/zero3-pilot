@@ -116,7 +116,7 @@ export class Zero3WorkspaceEntryStore {
         projectId: optionalText(input.projectId, 'projectId', MAX_PROJECT_ID),
         browserProfileId: ZERO3_GPT_WEB_PROFILE_ID,
         conversationUrl: null,
-        currentUrl: ZERO3_GPT_WEB_HOME,
+        currentUrl: input.homeUrl ? safeHttpsUrl(input.homeUrl, 'homeUrl') : ZERO3_GPT_WEB_HOME,
         pageTitle: null,
         localDisplayTitle: null,
         createdAt: now,

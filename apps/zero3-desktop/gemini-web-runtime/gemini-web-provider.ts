@@ -87,6 +87,24 @@ function bounds(value: unknown): Zero3GeminiWebBounds {
   return { x: integer('x', 0), y: integer('y', 0), width: integer('width', 1), height: integer('height', 1) }
 }
 
+// The renderer measures its host element in CSS pixels while setBounds takes
+// device-independent pixels. They only match at zoom factor 1, and the desktop
+// ships a 90% default zoom, so an unconverted rect oversizes the view and
+// pushes its lower-right corner past the window edge. Same conversion as the
+// GPT Web provider.
+function dipBounds(value: Zero3GeminiWebBounds, window: BrowserWindow | null): Zero3GeminiWebBounds {
+  const raw =
+    !window || window.isDestroyed() || window.webContents.isDestroyed() ? 1 : window.webContents.getZoomFactor()
+  const scale = Number.isFinite(raw) && raw > 0 ? raw : 1
+  if (scale === 1) return value
+  return {
+    x: Math.round(value.x * scale),
+    y: Math.round(value.y * scale),
+    width: Math.max(1, Math.round(value.width * scale)),
+    height: Math.max(1, Math.round(value.height * scale))
+  }
+}
+
 export class Zero3GeminiWebProvider {
   private readonly live = new Map<string, LiveView>()
   private profile: Session | null = null
@@ -108,7 +126,7 @@ export class Zero3GeminiWebProvider {
     this.detach(live)
     for (const other of this.live.values()) if (other.entryId !== id && other.parentWindowId === parent.id) this.detach(other)
     parent.contentView.addChildView(live.view)
-    live.view.setBounds(bounds(input.bounds))
+    live.view.setBounds(dipBounds(bounds(input.bounds), parent))
     live.parentWindowId = parent.id
     live.lastUsedAt = Date.now()
     live.view.webContents.focus()
@@ -130,7 +148,8 @@ export class Zero3GeminiWebProvider {
     const id = text(idValue, 'Gemini entry id', MAX_ID)
     const live = this.live.get(id)
     if (!live) throw new Error('Gemini Web view is not live')
-    live.view.setBounds(bounds(value))
+    const parent = live.parentWindowId == null ? null : BrowserWindow.fromId(live.parentWindowId)
+    live.view.setBounds(dipBounds(bounds(value), parent))
     live.lastUsedAt = Date.now()
     return { ok: true as const }
   }

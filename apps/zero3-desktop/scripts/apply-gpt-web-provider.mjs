@@ -35,7 +35,7 @@ function patchFile(relativePath, replacements) {
 
 function copyRuntimeSources() {
   fs.mkdirSync(targetDir, { recursive: true })
-  for (const file of ['gpt-web-types.ts', 'gpt-web-provider.ts', 'index.ts']) {
+  for (const file of ['gpt-web-types.ts', 'chatgpt-project-catalog.ts', 'gpt-web-provider.ts', 'index.ts']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 GPT Web source template missing: ${source}`)
     write(path.join(targetDir, file), read(source))
@@ -51,7 +51,7 @@ function broadcastZero3GptWebEvent(event: unknown) {
   }
 }
 
-const zero3GptWeb = new Zero3GptWebProvider(zero3WorkspaceEntries, broadcastZero3GptWebEvent)
+const zero3GptWeb = new Zero3GptWebProvider(zero3WorkspaceEntries, zero3Projects, broadcastZero3GptWebEvent)
 
 function zero3GptWebRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
@@ -76,6 +76,7 @@ ipcMain.handle('zero3:gpt-web:create', (_event, request: unknown) => {
   if (projectId != null && typeof projectId !== 'string') throw new Error('projectId must be a string or null')
   return zero3GptWeb.create(projectId as string | null)
 })
+ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())
 ipcMain.handle('zero3:gpt-web:show', (event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.show(zero3GptWebParent(event), {
@@ -107,6 +108,7 @@ app.on('before-quit', () => zero3GptWeb.stop())
 
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3GptWeb', {
   create: request => ipcRenderer.invoke('zero3:gpt-web:create', request),
+  listRemoteProjects: () => ipcRenderer.invoke('zero3:gpt-web:list-remote-projects'),
   show: request => ipcRenderer.invoke('zero3:gpt-web:show', request),
   hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),
   setChromeVisible: request => ipcRenderer.invoke('zero3:gpt-web:set-chrome-visible', request),
@@ -126,6 +128,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3GptWeb', 
 contextBridge.exposeInMainWorld('zero3Workspace', {`
 
 const globalTypeDefinitions = String.raw`
+type Zero3ChatGptRemoteProject = { id: string; name: string; url: string }
 type Zero3GptWebBounds = { x: number; y: number; width: number; height: number }
 type Zero3GptWebEvent =
   | {
@@ -146,6 +149,7 @@ type Zero3GptWebEvent =
 
 const globalWindowSurface = String.raw`    zero3GptWeb: {
       create: (request?: { projectId?: string | null }) => Promise<Zero3WorkspaceEntry>
+      listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>
       show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>
       hide: (request: { id: string }) => Promise<{ hidden: boolean }>
       setChromeVisible: (request: { id: string; visible: boolean }) => Promise<{ visible: boolean }>

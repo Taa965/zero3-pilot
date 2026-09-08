@@ -101,8 +101,8 @@ export function applyZero3ControlRuntime() {
     },
     {
       label: 'control IPC before GPT Web provider',
-      from: 'const zero3GptWeb = new Zero3GptWebProvider(zero3WorkspaceEntries, broadcastZero3GptWebEvent)',
-      to: mainSurface + '\nconst zero3GptWeb = new Zero3GptWebProvider(zero3WorkspaceEntries, broadcastZero3GptWebEvent)'
+      from: 'const zero3GptWeb = new Zero3GptWebProvider(zero3WorkspaceEntries, zero3Projects, broadcastZero3GptWebEvent)',
+      to: mainSurface + '\nconst zero3GptWeb = new Zero3GptWebProvider(zero3WorkspaceEntries, zero3Projects, broadcastZero3GptWebEvent)'
     }
   ])
 

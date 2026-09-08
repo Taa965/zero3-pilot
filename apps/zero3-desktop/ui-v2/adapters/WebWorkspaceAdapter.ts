@@ -13,6 +13,9 @@ export type WebSession = {
 // name here; deriving it from the bridge keeps this in step with that contract.
 type WorkspaceEntry = Awaited<ReturnType<Window['zero3Workspace']['list']>>[number]
 
+/** A project as it exists on chatgpt.com, offered when binding a Zero3 project. */
+export type ChatGptRemoteProject = Awaited<ReturnType<Window['zero3GptWeb']['listRemoteProjects']>>[number]
+
 function bridgeAvailable(): boolean {
   return Boolean(window.zero3Workspace && window.zero3GptWeb)
 }
@@ -73,6 +76,14 @@ export const WebWorkspaceAdapter = {
   async createGptWeb(projectId: string | null = null): Promise<string> {
     const entry = await window.zero3GptWeb.create({ projectId })
     return entry.id
+  },
+
+  // The projects that exist on chatgpt.com, for binding a Zero3 project to one
+  // of them. Main reads them out of the signed-in ChatGPT page, so this rejects
+  // when nobody is signed in yet.
+  async listChatGptProjects(): Promise<ChatGptRemoteProject[]> {
+    if (!bridgeAvailable()) throw new Error('Zero3 GPT 网页运行时尚未加载')
+    return window.zero3GptWeb.listRemoteProjects()
   },
 
   async remove(id: string): Promise<void> {

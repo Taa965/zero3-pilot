@@ -6,9 +6,16 @@ import { McpHttpAccessCard } from './McpHttpAccessCard'
 interface ProjectWorkspaceProps {
   project: Zero3ProjectRecord | null
   sessionCount: number
+  onBindChatGptProject: (project: Zero3ProjectRecord) => void
+  onUnbindChatGptProject: (project: Zero3ProjectRecord) => void
 }
 
-export function ProjectWorkspace({ project, sessionCount }: ProjectWorkspaceProps) {
+export function ProjectWorkspace({
+  project,
+  sessionCount,
+  onBindChatGptProject,
+  onUnbindChatGptProject
+}: ProjectWorkspaceProps) {
   const [activeTab, setActiveTab] = useState('overview')
   const tabs = [
     { id: 'overview', label: '总览' }, { id: 'files', label: '文件' }, { id: 'git', label: 'Git' },
@@ -27,7 +34,18 @@ export function ProjectWorkspace({ project, sessionCount }: ProjectWorkspaceProp
         {activeTab === 'overview' && <div className="grid max-w-3xl gap-4 text-sm sm:grid-cols-2">
           <div className="rounded-lg border border-(--ui-border) bg-background p-4"><div className="text-xs text-(--ui-text-tertiary)">本地目录</div><div className="mt-2 break-all font-medium">{project.rootPath}</div></div>
           <div className="rounded-lg border border-(--ui-border) bg-background p-4"><div className="text-xs text-(--ui-text-tertiary)">归属会话</div><div className="mt-2 text-2xl font-semibold">{sessionCount}</div></div>
-          {project.chatGptProjectUrl && <div className="rounded-lg border border-(--ui-border) bg-background p-4 sm:col-span-2"><div className="text-xs text-(--ui-text-tertiary)">ChatGPT 项目 URL</div><div className="mt-2 break-all">{project.chatGptProjectUrl}</div></div>}
+          <div className="rounded-lg border border-(--ui-border) bg-background p-4 sm:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs text-(--ui-text-tertiary)">关联的 ChatGPT 项目</div>
+              <div className="flex shrink-0 items-center gap-2 text-xs">
+                <button onClick={() => onBindChatGptProject(project)} className="rounded-md border border-(--ui-border) px-2 py-1 hover:bg-(--ui-control-hover-background)">{project.chatGptProjectUrl ? '更换' : '关联'}</button>
+                {project.chatGptProjectUrl && <button onClick={() => onUnbindChatGptProject(project)} className="rounded-md border border-(--ui-border) px-2 py-1 hover:bg-(--ui-control-hover-background)">解除</button>}
+              </div>
+            </div>
+            {/* Bound: every new GPT web session in this project opens on that
+                project page, so ChatGPT files the conversation there itself. */}
+            <div className="mt-2 break-all">{project.chatGptProjectUrl ?? <span className="text-(--ui-text-tertiary)">尚未关联，新建 GPT 网页会话时会先询问</span>}</div>
+          </div>
           <McpHttpAccessCard projectId={project.id} />
         </div>}
         {activeTab === 'files' && <div className="text-sm text-(--ui-text-secondary)">文件树视图建设中...</div>}

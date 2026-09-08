@@ -42,3 +42,14 @@ export type Zero3GptWebNavigateInput = {
   id: string
   url: string
 }
+
+/**
+ * A project as it exists on chatgpt.com. `id` is the gizmo id ChatGPT assigns
+ * (`g-p-...`) and `url` is the project page a new conversation starts from, so
+ * binding a Zero3 project only has to remember the URL.
+ */
+export type Zero3ChatGptRemoteProject = {
+  id: string
+  name: string
+  url: string
+}

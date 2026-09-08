@@ -59,6 +59,11 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         if (!host) return
         const entry = await window.zero3GptWeb.show({ id: entryId, bounds: boundsOf(host) })
         if (cancelled) return
+        // show() spans an IPC round trip and a possible view creation, so the
+        // rect measured before it can already be stale -- and the bounds effect
+        // cannot cover for it because its first ResizeObserver callback fires
+        // while the view is not live yet, where setBounds rejects.
+        void window.zero3GptWeb.setBounds({ id: entryId, bounds: boundsOf(host) }).catch(() => {})
         setPageTitle(entry.pageTitle)
         // Each view starts with ChatGPT's own rail suppressed, so a surface
         // remounted after the toggle was flipped must not claim otherwise.

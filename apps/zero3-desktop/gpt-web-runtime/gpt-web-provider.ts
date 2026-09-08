@@ -3,18 +3,22 @@ import {
   WebContentsView,
   session as electronSession,
   shell,
-  type Session
+  type Session,
+  type WebContents
 } from 'electron'
 
+import type { Zero3ProjectStore } from '../workspace/project-store'
 import type { Zero3WorkspaceEntryStore } from '../workspace/workspace-entry-store'
 import {
   ZERO3_GPT_WEB_HOME,
   ZERO3_GPT_WEB_PROFILE_ID,
   type Zero3GptWebWorkspaceEntry
 } from '../workspace/workspace-entry-types'
+import { readChatGptProjectCatalog } from './chatgpt-project-catalog'
 import {
   ZERO3_GPT_WEB_MAX_LIVE_VIEWS,
   ZERO3_GPT_WEB_PARTITION,
+  type Zero3ChatGptRemoteProject,
   type Zero3GptWebBounds,
   type Zero3GptWebEvent
 } from './gpt-web-types'
@@ -145,20 +149,90 @@ function normalizeBounds(value: unknown): Zero3GptWebBounds {
   }
 }
 
+// The renderer measures its host element with getBoundingClientRect, which
+// reports CSS pixels, while WebContentsView.setBounds takes device-independent
+// pixels relative to the window's content view. Those units only coincide at
+// zoom factor 1, and the desktop ships a 90% default zoom -- so an unconverted
+// rect makes the ChatGPT view ~11% too large and offset down-right, pushing its
+// composer past the window edge. Deriving the factor per call also means a
+// Ctrl+/- zoom change corrects itself on the next bounds sync.
+function toDeviceIndependentBounds(bounds: Zero3GptWebBounds, zoomFactor: number): Zero3GptWebBounds {
+  const scale = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1
+  if (scale === 1) return bounds
+  return {
+    x: Math.round(bounds.x * scale),
+    y: Math.round(bounds.y * scale),
+    width: Math.max(1, Math.round(bounds.width * scale)),
+    height: Math.max(1, Math.round(bounds.height * scale))
+  }
+}
+
+function windowZoomFactor(window: BrowserWindow | null): number {
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return 1
+  return window.webContents.getZoomFactor()
+}
+
 export class Zero3GptWebProvider {
   private readonly live = new Map<string, LiveGptWebView>()
   private profileSession: Session | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
+  private catalogTail: Promise<unknown> = Promise.resolve()
 
   constructor(
     private readonly entries: Zero3WorkspaceEntryStore,
+    private readonly projects: Zero3ProjectStore,
     private readonly emitEvent: EventSink
   ) {}
 
   async create(projectId?: string | null): Promise<Zero3GptWebWorkspaceEntry> {
-    const entry = await this.entries.createGptWeb({ projectId: projectId ?? null })
+    const scope = projectId ?? null
+    const entry = await this.entries.createGptWeb({
+      projectId: scope,
+      homeUrl: await this.boundProjectUrl(scope)
+    })
     this.emitEvent({ kind: 'state', entryId: entry.id, state: 'created' })
     return entry
+  }
+
+  /**
+   * Lists the projects on chatgpt.com so a Zero3 project can be bound to one.
+   * Serialised because each miss opens a page: two pickers racing would load
+   * chatgpt.com twice for the same answer.
+   */
+  listRemoteProjects(): Promise<Zero3ChatGptRemoteProject[]> {
+    const task = this.catalogTail.then(
+      () => readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents()),
+      () => readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents())
+    )
+    this.catalogTail = task.then(
+      () => undefined,
+      () => undefined
+    )
+    return task
+  }
+
+  // A view the user already has open is signed in and warm, so the catalog can
+  // be read through it instead of paying for another chatgpt.com load.
+  private reusableContents(): WebContents | null {
+    for (const live of this.live.values()) {
+      const contents = live.view.webContents
+      if (!contents.isDestroyed() && observedChatGptUrl(contents.getURL())) return contents
+    }
+    return null
+  }
+
+  // A Zero3 project bound to a ChatGPT project opens new sessions on that
+  // project's page. A stored URL that no longer parses as a chatgpt.com address
+  // is ignored rather than fatal: the session still opens, just unfiled.
+  private async boundProjectUrl(projectId: string | null): Promise<string | null> {
+    if (!projectId) return null
+    const project = await this.projects.get(projectId).catch(() => null)
+    if (!project?.chatGptProjectUrl) return null
+    try {
+      return chatGptNavigationUrl(project.chatGptProjectUrl)
+    } catch {
+      return null
+    }
   }
 
   async show(parent: BrowserWindow, input: { id: string; bounds: unknown }): Promise<Zero3GptWebWorkspaceEntry> {
@@ -171,7 +245,7 @@ export class Zero3GptWebProvider {
     this.detachFromParent(live)
     this.hideOtherViewsInWindow(parent.id, id)
     parent.contentView.addChildView(live.view)
-    live.view.setBounds(bounds)
+    live.view.setBounds(toDeviceIndependentBounds(bounds, windowZoomFactor(parent)))
     live.parentWindowId = parent.id
     live.lastUsedAt = Date.now()
     live.view.webContents.focus()
@@ -227,7 +301,8 @@ export class Zero3GptWebProvider {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     const live = this.live.get(id)
     if (!live) throw new Error('GPT Web view is not live')
-    live.view.setBounds(normalizeBounds(boundsValue))
+    const parent = live.parentWindowId == null ? null : BrowserWindow.fromId(live.parentWindowId)
+    live.view.setBounds(toDeviceIndependentBounds(normalizeBounds(boundsValue), windowZoomFactor(parent)))
     live.lastUsedAt = Date.now()
     this.bump(id)
     return { ok: true }

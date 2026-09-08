@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { WebWorkspaceAdapter, type WebSession } from '../adapters/WebWorkspaceAdapter'
+import { ChatGptProjectBindingDialog } from '../conversations/ChatGptProjectBindingDialog'
 import { AppTitleBar } from './AppTitleBar'
 import { GlobalRail } from './GlobalRail'
 import { ContextPane } from './ContextPane'
@@ -23,6 +24,11 @@ export function Zero3AppShell() {
   const [projects, setProjects] = useState<Zero3ProjectRecord[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
+  // Set while the ChatGPT-project picker is open. It holds the Zero3 project
+  // whose binding is being decided, plus whether a session should be created
+  // once that is settled -- the same dialog serves "new session in an unbound
+  // project" and "change the binding from the project view".
+  const [binding, setBinding] = useState<{ project: Zero3ProjectRecord; thenCreate: boolean } | null>(null)
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -95,16 +101,63 @@ export function Zero3AppShell() {
     })
   }, [sessions])
 
-  const createGptSession = useCallback(async () => {
+  const openGptSession = useCallback(async (projectId: string | null) => {
     try {
-      const id = await WebWorkspaceAdapter.createGptWeb(activeProjectId)
+      const id = await WebWorkspaceAdapter.createGptWeb(projectId)
       setActiveSessionId(id)
       setProvider('gpt')
       await refreshSessions()
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
-  }, [activeProjectId, refreshSessions])
+  }, [refreshSessions])
+
+  // A scoped project that has never been bound gets the question once: which
+  // ChatGPT project do its conversations belong to? Every session after that
+  // inherits the answer, and an unscoped session never asks.
+  const createGptSession = useCallback(() => {
+    const project = projects.find(item => item.id === activeProjectId) ?? null
+    if (project && !project.chatGptProjectUrl) {
+      setBinding({ project, thenCreate: true })
+      return
+    }
+    void openGptSession(activeProjectId)
+  }, [projects, activeProjectId, openGptSession])
+
+  const applyBinding = useCallback(async (chatGptProjectUrl: string | null) => {
+    if (!binding) return
+    const { project, thenCreate } = binding
+    setBinding(null)
+    try {
+      const updated = await ProjectAdapter.update({ id: project.id, chatGptProjectUrl })
+      setProjects(current => current.map(item => (item.id === updated.id ? updated : item)))
+      setProjectError(null)
+      if (thenCreate) await openGptSession(updated.id)
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error))
+    }
+  }, [binding, openGptSession])
+
+  const skipBinding = useCallback(() => {
+    if (!binding) return
+    const { project, thenCreate } = binding
+    setBinding(null)
+    if (thenCreate) void openGptSession(project.id)
+  }, [binding, openGptSession])
+
+  const rebindProject = useCallback((project: Zero3ProjectRecord) => {
+    setBinding({ project, thenCreate: false })
+  }, [])
+
+  const unbindProject = useCallback(async (project: Zero3ProjectRecord) => {
+    try {
+      const updated = await ProjectAdapter.update({ id: project.id, chatGptProjectUrl: null })
+      setProjects(current => current.map(item => (item.id === updated.id ? updated : item)))
+      setProjectError(null)
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : String(error))
+    }
+  }, [])
 
   const createProject = useCallback(async () => {
     try {
@@ -139,7 +192,7 @@ export function Zero3AppShell() {
           projects={projects}
           projectError={projectError}
           onSelectSession={selectSession}
-          onCreateGptSession={() => void createGptSession()}
+          onCreateGptSession={createGptSession}
           onSelectProjectScope={selectProjectScope}
           onSelectProject={selectProject}
           onCreateProject={() => void createProject()}
@@ -148,13 +201,27 @@ export function Zero3AppShell() {
           activeModule={activeModule}
           provider={provider}
           onProviderChange={setProvider}
-          activeSessionId={activeSession?.provider === 'gpt' ? activeSession.id : null}
+          // The ChatGPT page is a native view stacked above the renderer, so it
+          // would cover the picker. Dropping the id unmounts the surface, which
+          // hides that view for as long as the dialog is up.
+          activeSessionId={binding === null && activeSession?.provider === 'gpt' ? activeSession.id : null}
           activeProject={activeProject}
           activeProjectSessionCount={activeProjectSessionCount}
+          onBindChatGptProject={rebindProject}
+          onUnbindChatGptProject={project => void unbindProject(project)}
           onToggleInspector={() => setInspectorOpen(!inspectorOpen)}
         />
         {inspectorOpen && <InspectorDrawer onClose={() => setInspectorOpen(false)} />}
       </div>
+      {binding && (
+        <ChatGptProjectBindingDialog
+          projectName={binding.project.name}
+          boundUrl={binding.project.chatGptProjectUrl}
+          onBind={url => void applyBinding(url)}
+          onSkip={skipBinding}
+          onCancel={() => setBinding(null)}
+        />
+      )}
     </div>
   )
 }
