@@ -1,4 +1,5 @@
 name: Memory V2.1 Lane B
+# Main-controller retrigger after PostgreSQL test sequencing fix.
 
 on:
   pull_request:
