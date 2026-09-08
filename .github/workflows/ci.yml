@@ -262,18 +262,19 @@ jobs:
       - name: Build legacy Zero3Pilot-Setup.exe
         shell: pwsh
         run: |
-          & $env:ZERO3_ISCC 'packaging\windows\Zero3Pilot.iss'
+          & $env:ZERO3_ISCC 'installer\Zero3Pilot.iss'
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup build failed' }
       - name: Silent legacy install smoke
         shell: pwsh
         run: |
-          $installer = Get-ChildItem 'dist\installer\Zero3Pilot-Setup.exe' -ErrorAction Stop | Select-Object -First 1
+          $installer = Get-ChildItem 'dist\Zero3Pilot-Setup.exe' -ErrorAction Stop | Select-Object -First 1
           $installDir = Join-Path $env:RUNNER_TEMP 'zero3-pilot-installed'
-          & $installer.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="$installDir"
-          if ($LASTEXITCODE -ne 0) { throw "Installer failed with exit code $LASTEXITCODE" }
+          $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$installDir`"")
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList $arguments -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed with exit code $($process.ExitCode)" }
           if (-not (Test-Path (Join-Path $installDir 'zero3-pilot.exe'))) { throw 'Installed desktop binary missing' }
       - uses: actions/upload-artifact@v4
         with:
           name: zero3-pilot-windows-installer
-          path: dist/installer/Zero3Pilot-Setup.exe
+          path: dist/Zero3Pilot-Setup.exe
           if-no-files-found: error
