@@ -84,4 +84,4 @@ jobs:
           node --check apps/zero3-desktop/scripts/apply-memory-authority-v21.mjs
           node --check apps/zero3-desktop/scripts/apply-project-context-mcp.mjs
           node --check apps/zero3-desktop/scripts/apply-project-context-http.mjs
-# final integration retrigger after Antigravity gate fix 
+# final integration retrigger after Antigravity gate fix

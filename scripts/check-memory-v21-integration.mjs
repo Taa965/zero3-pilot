@@ -44,8 +44,16 @@ assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:8791/)
 assert.match(nginx, /proxy_set_header Upgrade \$http_upgrade/)
 assert.doesNotMatch(nginx, /listen 8791/)
 
+const sharedLocation = read('deployment/memory/nginx/zero3-memory-authority-location.conf.template')
+assert.match(sharedLocation, /location \^~ \/memory-authority\//)
+assert.match(sharedLocation, /proxy_pass http:\/\/127\.0\.0\.1:8791\//)
+assert.match(sharedLocation, /proxy_set_header Upgrade \$http_upgrade/)
+
 const workflow = read('deployment/memory/github-inbox-template/.github/workflows/relay-memory-event.yml')
 assert.match(workflow, /ZERO3_MEMORY_INGRESS_TOKEN/)
+assert.match(workflow, /ZERO3_MEMORY_AUTHORITY_CA_PEM/)
+assert.match(workflow, /--cacert/)
+assert.doesNotMatch(workflow, /(?:^|\s)-k(?:\s|$)|--insecure/)
 assert.match(workflow, /status.*accepted.*duplicate/s)
 assert.match(workflow, /name-status/)
 

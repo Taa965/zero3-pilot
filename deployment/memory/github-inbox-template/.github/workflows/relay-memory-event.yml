@@ -57,16 +57,23 @@ jobs:
         env:
           ZERO3_MEMORY_AUTHORITY_URL: ${{ secrets.ZERO3_MEMORY_AUTHORITY_URL }}
           ZERO3_MEMORY_INGRESS_TOKEN: ${{ secrets.ZERO3_MEMORY_INGRESS_TOKEN }}
+          ZERO3_MEMORY_AUTHORITY_CA_PEM: ${{ secrets.ZERO3_MEMORY_AUTHORITY_CA_PEM }}
         shell: bash
         run: |
           set -euo pipefail
           : "${ZERO3_MEMORY_AUTHORITY_URL:?missing ZERO3_MEMORY_AUTHORITY_URL secret}"
           : "${ZERO3_MEMORY_INGRESS_TOKEN:?missing ZERO3_MEMORY_INGRESS_TOKEN secret}"
           endpoint="${ZERO3_MEMORY_AUTHORITY_URL%/}/v1/memory/events"
+          curl_tls=()
+          if [[ -n "${ZERO3_MEMORY_AUTHORITY_CA_PEM:-}" ]]; then
+            printf '%s\n' "$ZERO3_MEMORY_AUTHORITY_CA_PEM" > /tmp/zero3-memory-authority-ca.crt
+            curl_tls+=(--cacert /tmp/zero3-memory-authority-ca.crt)
+          fi
 
           while IFS= read -r file; do
             node scripts/validate-memory-event.mjs "$file"
             response="$(curl --fail-with-body --silent --show-error \
+              "${curl_tls[@]}" \
               -X POST "$endpoint" \
               -H "Authorization: Bearer ${ZERO3_MEMORY_INGRESS_TOKEN}" \
               -H 'Content-Type: application/json' \

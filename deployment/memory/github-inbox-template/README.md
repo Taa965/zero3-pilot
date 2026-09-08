@@ -53,3 +53,11 @@ The AWS Memory Authority performs its own authentication, project ACL, authority
 ## Idempotency
 
 GitHub Actions may be retried. This is safe because `event_id` is the Memory Authority idempotency key. An already committed event returns `status=duplicate` and is treated as success by the relay.
+
+## TLS pinning for a self-signed/private CA endpoint
+
+If the Memory Authority HTTPS endpoint uses a private or self-signed CA, add one additional repository secret:
+
+- `ZERO3_MEMORY_AUTHORITY_CA_PEM` — the **public CA/server certificate PEM only**. Never store the private key.
+
+The relay writes that PEM to an ephemeral runner file and calls `curl --cacert`. It never uses `-k` / `--insecure`. If the endpoint later uses a publicly trusted certificate, omit this secret and the runner uses the operating-system trust store normally.
