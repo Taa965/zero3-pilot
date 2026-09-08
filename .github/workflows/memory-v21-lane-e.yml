@@ -1,0 +1,19 @@
+name: Memory V2.1 Lane E
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/agent-memory-runtime/**'
+      - '.github/workflows/memory-v21-lane-e.yml'
+
+jobs:
+  agent-governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - run: node --check apps/zero3-desktop/agent-memory-runtime/agent-memory-governance.mjs
+      - run: node --test apps/zero3-desktop/agent-memory-runtime/agent-memory-governance.test.mjs
