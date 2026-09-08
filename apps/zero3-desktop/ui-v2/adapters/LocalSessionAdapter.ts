@@ -60,6 +60,7 @@ function normalizeRecord(value: unknown): LocalSessionRecord | null {
     title: typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim().slice(0, 200) : `新 ${providerLabel(provider)} 会话`,
     createdAt: typeof raw.createdAt === 'string' && raw.createdAt.trim() ? raw.createdAt : now(),
     updatedAt: typeof raw.updatedAt === 'string' && raw.updatedAt.trim() ? raw.updatedAt : now(),
+    titleIsCustom: raw.titleIsCustom === true,
     runtimeId: typeof raw.runtimeId === 'string' && raw.runtimeId.trim() ? raw.runtimeId.trim() : null,
     zero3ProfileId: typeof raw.zero3ProfileId === 'string' && raw.zero3ProfileId.trim() ? raw.zero3ProfileId.trim() : null,
     messages
@@ -153,6 +154,12 @@ export const LocalSessionAdapter = {
     write(read().filter(record => record.id !== id))
   },
 
+  rename(id: string, title: string): LocalSessionRecord {
+    const normalized = title.trim()
+    if (!normalized || normalized.length > 200) throw new Error('名称需为 1–200 个字符')
+    return mutate(id, record => ({ ...record, title: normalized, titleIsCustom: true, updatedAt: now() }))
+  },
+
   setRuntimeId(id: string, runtimeId: string): LocalSessionRecord {
     const normalized = runtimeId.trim()
     if (!normalized) throw new Error('runtimeId 不能为空')
@@ -171,7 +178,7 @@ export const LocalSessionAdapter = {
       const firstUser = messages.find(message => message.role === 'user')?.content
       return {
         ...record,
-        title: firstUser ? firstUser.replace(/\s+/g, ' ').slice(0, 42) : record.title,
+        title: !record.titleIsCustom && firstUser ? firstUser.replace(/\s+/g, ' ').slice(0, 42) : record.title,
         messages,
         updatedAt: now()
       }

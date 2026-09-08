@@ -35,7 +35,7 @@ function patchFile(relativePath, replacements) {
 
 function copyRuntimeSources() {
   fs.mkdirSync(targetDir, { recursive: true })
-  for (const file of ['gpt-web-types.ts', 'chatgpt-project-catalog.ts', 'gpt-web-provider.ts', 'index.ts']) {
+  for (const file of ['gpt-web-types.ts', 'chatgpt-project-catalog.ts', 'chatgpt-conversation-name.ts', 'gpt-web-provider.ts', 'index.ts']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 GPT Web source template missing: ${source}`)
     write(path.join(targetDir, file), read(source))
@@ -77,6 +77,10 @@ ipcMain.handle('zero3:gpt-web:create', (_event, request: unknown) => {
   return zero3GptWeb.create(projectId as string | null)
 })
 ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())
+ipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {
+  const input = zero3GptWebRecord(request)
+  return zero3GptWeb.rename(zero3GptWebId(input), input.title)
+})
 ipcMain.handle('zero3:gpt-web:show', (event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.show(zero3GptWebParent(event), {
@@ -111,6 +115,7 @@ app.on('before-quit', () => zero3GptWeb.stop())
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3GptWeb', {
   create: request => ipcRenderer.invoke('zero3:gpt-web:create', request),
   listRemoteProjects: () => ipcRenderer.invoke('zero3:gpt-web:list-remote-projects'),
+  rename: request => ipcRenderer.invoke('zero3:gpt-web:rename', request),
   show: request => ipcRenderer.invoke('zero3:gpt-web:show', request),
   warm: request => ipcRenderer.invoke('zero3:gpt-web:warm', request),
   snapshot: request => ipcRenderer.invoke('zero3:gpt-web:snapshot', request),
@@ -165,6 +170,7 @@ type Zero3GptWebEvent =
 const globalWindowSurface = String.raw`    zero3GptWeb: {
       create: (request?: { projectId?: string | null }) => Promise<Zero3WorkspaceEntry>
       listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>
+      rename: (request: { id: string; title: string }) => Promise<Zero3WorkspaceEntry>
       show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>
       warm: (request: { id: string }) => Promise<{ state: 'warming' | 'warm' | 'visible' }>
       snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>
@@ -274,14 +280,33 @@ export function applyZero3GptWebProvider() {
     },
     {
       label: 'GPT Web warm/snapshot renderer methods',
-      already: "      warm: (request: { id: string })",
-      from: "      hide: (request: { id: string }) => Promise<{ hidden: boolean }>",
+      from: "      show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>\n" +
+        "      hide: (request: { id: string }) => Promise<{ hidden: boolean }>",
       to:
+        "      show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>\n" +
         "      warm: (request: { id: string }) => Promise<{ state: 'warming' | 'warm' | 'visible' }>\n" +
         "      snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>\n" +
         "      hide: (request: { id: string }) => Promise<{ hidden: boolean }>"
     }
   ])
+
+  patchFile('electron/main.ts', [{
+    label: 'GPT Web verified rename handler',
+    already: "ipcMain.handle('zero3:gpt-web:rename'",
+    from: "ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())",
+    to: "ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())\nipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {\n  const input = zero3GptWebRecord(request)\n  return zero3GptWeb.rename(zero3GptWebId(input), input.title)\n})"
+  }])
+  patchFile('electron/preload.ts', [{
+    label: 'GPT Web rename preload method',
+    already: "  rename: request => ipcRenderer.invoke('zero3:gpt-web:rename'",
+    from: "  listRemoteProjects: () => ipcRenderer.invoke('zero3:gpt-web:list-remote-projects'),",
+    to: "  listRemoteProjects: () => ipcRenderer.invoke('zero3:gpt-web:list-remote-projects'),\n  rename: request => ipcRenderer.invoke('zero3:gpt-web:rename', request),"
+  }])
+  patchFile('src/global.d.ts', [{
+    label: 'GPT Web rename renderer method',
+    from: '      listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>',
+    to: '      listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>\n      rename: (request: { id: string; title: string }) => Promise<Zero3WorkspaceEntry>'
+  }])
 
   applyZero3GptWebUi()
   applyZero3ProjectContextMcp()

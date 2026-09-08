@@ -18,6 +18,7 @@ interface ContextPaneProps {
   onSelectSession: (session: WorkspaceSession) => void
   onCreateSession: () => void
   onDeleteSession: (session: WorkspaceSession) => void
+  onRenameSession: (session: WorkspaceSession) => void
   onSelectProject: (project: Zero3ProjectRecord) => void
   onSelectProjectScope: (projectId: string | null) => void
   onCreateProject: () => void
@@ -34,6 +35,7 @@ export function ContextPane({
   onSelectSession,
   onCreateSession,
   onDeleteSession,
+  onRenameSession,
   onSelectProject,
   onSelectProjectScope,
   onCreateProject
@@ -65,6 +67,7 @@ export function ContextPane({
             onSelect={onSelectSession}
             onCreate={onCreateSession}
             onDelete={onDeleteSession}
+            onRename={onRenameSession}
             error={sessionError}
           />
         ) : activeModule === 'tasks' ? (

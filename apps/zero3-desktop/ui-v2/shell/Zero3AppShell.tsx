@@ -4,6 +4,7 @@ import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
 import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { WebWorkspaceAdapter } from '../adapters/WebWorkspaceAdapter'
 import { ChatGptProjectBindingDialog } from '../conversations/ChatGptProjectBindingDialog'
+import { RenameSessionDialog } from '../conversations/RenameSessionDialog'
 import { SessionProviderPickerDialog } from '../conversations/SessionProviderPickerDialog'
 import type { LocalSessionRecord, WorkspaceProvider, WorkspaceSession } from '../conversations/session-types'
 import { AppTitleBar } from './AppTitleBar'
@@ -28,6 +29,7 @@ export function Zero3AppShell() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
   const [providerPickerOpen, setProviderPickerOpen] = useState(false)
+  const [renamingSession, setRenamingSession] = useState<WorkspaceSession | null>(null)
   const [binding, setBinding] = useState<{ project: Zero3ProjectRecord; thenCreate: boolean } | null>(null)
 
   const sessions = useMemo<WorkspaceSession[]>(() => {
@@ -119,6 +121,18 @@ export function Zero3AppShell() {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
   }, [refreshLocalSessions, refreshWebSessions])
+
+  const renameSession = async (session: WorkspaceSession, title: string) => {
+    if (session.source === 'local') {
+      LocalSessionAdapter.rename(session.id, title)
+      refreshLocalSessions()
+    } else {
+      await WebWorkspaceAdapter.rename(session, title)
+      await refreshWebSessions()
+    }
+    setSessionError(null)
+    setRenamingSession(null)
+  }
 
   const selectProject = useCallback((project: Zero3ProjectRecord) => {
     setActiveProjectId(project.id)
@@ -237,7 +251,7 @@ export function Zero3AppShell() {
     () => activeProjectId ? sessions.filter(session => session.projectId === activeProjectId).length : 0,
     [sessions, activeProjectId]
   )
-  const nativeViewsMayShow = binding === null && !providerPickerOpen
+  const nativeViewsMayShow = binding === null && !providerPickerOpen && renamingSession === null
   const workspaceSession = nativeViewsMayShow ? activeSession : null
 
   return (
@@ -256,6 +270,7 @@ export function Zero3AppShell() {
           onSelectSession={selectSession}
           onCreateSession={() => setProviderPickerOpen(true)}
           onDeleteSession={session => void deleteSession(session)}
+          onRenameSession={setRenamingSession}
           onSelectProjectScope={selectProjectScope}
           onSelectProject={selectProject}
           onCreateProject={() => void createProject()}
@@ -275,6 +290,14 @@ export function Zero3AppShell() {
         />
         {inspectorOpen && <InspectorDrawer onClose={() => setInspectorOpen(false)} />}
       </div>
+
+      {renamingSession && (
+        <RenameSessionDialog
+          session={renamingSession}
+          onSave={title => renameSession(renamingSession, title)}
+          onCancel={() => setRenamingSession(null)}
+        />
+      )}
 
       {providerPickerOpen && (
         <SessionProviderPickerDialog

@@ -1,3 +1,4 @@
+import { webSessionTitle } from './web-session-title'
 import type { WorkspaceSession } from '../conversations/session-types'
 
 // global.d.ts declares the entry union in module scope, so it is not visible by
@@ -12,9 +13,7 @@ function bridgeAvailable(): boolean {
 }
 
 function sessionTitle(entry: WorkspaceEntry): string {
-  const explicit = entry.localDisplayTitle || entry.pageTitle
-  if (explicit) return explicit
-  return entry.kind === 'gpt_web' ? '新 GPT 网页会话' : '新 Gemini 网页会话'
+  return webSessionTitle(entry)
 }
 
 function sessionSubtitle(entry: WorkspaceEntry): string {
@@ -77,6 +76,17 @@ export const WebWorkspaceAdapter = {
   async listChatGptProjects(): Promise<ChatGptRemoteProject[]> {
     if (!bridgeAvailable()) throw new Error('Zero3 GPT 网页运行时尚未加载')
     return window.zero3GptWeb.listRemoteProjects()
+  },
+
+  async rename(session: Pick<WorkspaceSession, 'id' | 'provider'>, title: string): Promise<void> {
+    const normalized = title.trim()
+    if (!normalized || normalized.length > 200) throw new Error('名称需为 1–200 个字符')
+    if (session.provider === 'gpt') {
+      if (!window.zero3GptWeb.rename) throw new Error('名称同步功能尚未加载，请重启零三后重试')
+      await window.zero3GptWeb.rename({ id: session.id, title: normalized })
+    } else {
+      await window.zero3Workspace.rename({ id: session.id, title: normalized })
+    }
   },
 
   async remove(session: Pick<WorkspaceSession, 'id' | 'provider'>): Promise<void> {

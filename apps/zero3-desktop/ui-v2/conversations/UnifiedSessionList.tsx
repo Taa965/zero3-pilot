@@ -13,11 +13,12 @@ interface UnifiedSessionListProps {
   onSelect: (session: WorkspaceSession) => void
   onCreate: () => void
   onDelete: (session: WorkspaceSession) => void
+  onRename: (session: WorkspaceSession) => void
   error: string | null
 }
 
 const CONTEXT_MENU_WIDTH = 184
-const CONTEXT_MENU_HEIGHT = 64
+const CONTEXT_MENU_HEIGHT = 112
 const GPT_PREWARM_DELAY_MS = 150
 const FILTERS: Array<'all' | WorkspaceProvider> = ['all', 'gpt', 'gemini', 'codex', 'claude', 'antigravity', 'zero3']
 
@@ -38,6 +39,7 @@ export function UnifiedSessionList({
   onSelect,
   onCreate,
   onDelete,
+  onRename,
   error
 }: UnifiedSessionListProps) {
   const [filter, setFilter] = useState<'all' | WorkspaceProvider>('all')
@@ -205,8 +207,20 @@ export function UnifiedSessionList({
           role="menu"
           style={{ left: menu.x, top: menu.y, width: CONTEXT_MENU_WIDTH }}
           onMouseDown={event => event.stopPropagation()}
-          className="fixed z-50 rounded-md border border-(--ui-border) bg-(--ui-pane-background) p-1 shadow-lg"
+          className="fixed z-50 rounded-md border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) p-1 shadow-lg"
         >
+          <button
+            role="menuitem"
+            onClick={() => {
+              const target = menu.session
+              setMenu(null)
+              onRename(target)
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-(--ui-control-hover-background)"
+          >
+            <Codicon name="edit" className="size-4" />
+            修改名称
+          </button>
           <button
             role="menuitem"
             onClick={() => {

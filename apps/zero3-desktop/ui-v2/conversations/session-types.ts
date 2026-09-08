@@ -26,6 +26,7 @@ export type LocalSessionRecord = {
   title: string
   createdAt: string
   updatedAt: string
+  titleIsCustom?: boolean
   runtimeId: string | null
   zero3ProfileId: string | null
   messages: LocalSessionMessage[]
