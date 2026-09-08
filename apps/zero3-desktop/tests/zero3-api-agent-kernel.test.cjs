@@ -27,3 +27,11 @@ test('Zero3 renderer binds API sessions to project cwd and persistent Codex thre
   assert.match(surface, /provider === 'antigravity' \|\| provider === 'zero3'/)
   assert.match(picker, /Zero3 本体.*Codex Agent Kernel.*requiresProject: true/)
 })
+
+test('provider picker removes the redundant selected-provider status panel', () => {
+  assert.doesNotMatch(picker, /刷新状态/)
+  assert.doesNotMatch(picker, /正在读取真实运行时状态/)
+  assert.doesNotMatch(picker, /mt-4 rounded-lg border border-\(--ui-border\) bg-background\/40 p-4/)
+  assert.match(picker, /打开官方 CLI 授权/)
+  assert.match(picker, /保存 API 配置/)
+})

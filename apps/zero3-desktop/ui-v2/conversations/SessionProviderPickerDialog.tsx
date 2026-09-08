@@ -226,85 +226,73 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
           })}
         </div>
 
-        <div className="mt-4 rounded-lg border border-(--ui-border) bg-background/40 p-4">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            {selectedDefinition.title}
-            <button onClick={() => void refresh()} className="ml-auto rounded-md border border-(--ui-border) px-2 py-1 text-xs hover:bg-(--ui-control-hover-background)">
-              刷新状态
+        {selected !== 'zero3' && selectedStatus?.authMode === 'cli' && selectedStatus.authenticated !== true && (
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || !selectedStatus.available}
+              onClick={() => void authorize()}
+              className="rounded-md bg-blue-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+            >
+              打开官方 CLI 授权
             </button>
+            <span className="text-xs text-(--ui-text-tertiary)">Zero3 不保存 Codex / Claude / Antigravity 的账号密码，只复用官方 CLI 登录。</span>
           </div>
-          <div className="mt-2 text-xs leading-5 text-(--ui-text-secondary)">
-            {selectedStatus?.detail ?? '正在读取真实运行时状态…'}
-          </div>
+        )}
 
-          {selected !== 'zero3' && selectedStatus?.authMode === 'cli' && selectedStatus.authenticated !== true && (
-            <div className="mt-3 flex items-center gap-2">
-              <button
-                type="button"
-                disabled={busy || !selectedStatus.available}
-                onClick={() => void authorize()}
-                className="rounded-md bg-blue-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+        {selected === 'zero3' && (
+          <div className="mt-4 space-y-3">
+            <div className="flex gap-2">
+              <select
+                value={profileId}
+                onChange={event => setProfileId(event.target.value)}
+                className="h-9 min-w-0 flex-1 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm"
               >
-                打开官方 CLI 授权
-              </button>
-              <span className="text-xs text-(--ui-text-tertiary)">Zero3 不保存 Codex / Claude / Antigravity 的账号密码，只复用官方 CLI 登录。</span>
+                <option value="">选择 API 模型配置…</option>
+                {profiles.map(profile => (
+                  <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>
+                ))}
+              </select>
+              <button onClick={newProfile} className="rounded-md border border-(--ui-border) px-3 text-xs hover:bg-(--ui-control-hover-background)">新配置</button>
+              {profileId && <button onClick={() => void removeProfile()} className="rounded-md border border-red-500/40 px-3 text-xs text-red-600">删除</button>}
             </div>
-          )}
-
-          {selected === 'zero3' && (
-            <div className="mt-4 space-y-3">
-              <div className="flex gap-2">
-                <select
-                  value={profileId}
-                  onChange={event => setProfileId(event.target.value)}
-                  className="h-9 min-w-0 flex-1 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm"
-                >
-                  <option value="">选择 API 模型配置…</option>
-                  {profiles.map(profile => (
-                    <option key={profile.id} value={profile.id}>{profile.name} · {profile.model}</option>
-                  ))}
-                </select>
-                <button onClick={newProfile} className="rounded-md border border-(--ui-border) px-3 text-xs hover:bg-(--ui-control-hover-background)">新配置</button>
-                {profileId && <button onClick={() => void removeProfile()} className="rounded-md border border-red-500/40 px-3 text-xs text-red-600">删除</button>}
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
-                  配置名称
-                  <input value={profileName} onChange={event => setProfileName(event.target.value)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground" />
-                </label>
-                <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
-                  API 协议
-                  <select value={protocol} onChange={event => applyProtocol(event.target.value as ApiProtocol)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground">
-                    <option value="openai_compatible">OpenAI-Compatible</option>
-                    <option value="anthropic">Anthropic Messages</option>
-                    <option value="google_gemini">Google Gemini API</option>
-                  </select>
-                </label>
-                <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
-                  Base URL
-                  <input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground" />
-                </label>
-                <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
-                  Model
-                  <input value={model} onChange={event => setModel(event.target.value)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground" />
-                </label>
-              </div>
+            <div className="grid grid-cols-2 gap-3">
               <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
-                API Key（留空会保留现有 Key；使用系统安全存储加密）
-                <input type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground" />
+                配置名称
+                <input value={profileName} onChange={event => setProfileName(event.target.value)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground" />
               </label>
-              <div className="flex items-center gap-2">
-                <button onClick={() => void saveProfile()} disabled={busy || !profileName.trim() || !baseUrl.trim() || !model.trim()} className="rounded-md border border-(--ui-border) px-3 py-1.5 text-xs hover:bg-(--ui-control-hover-background) disabled:opacity-50">保存 API 配置</button>
-                <span className="text-xs text-(--ui-text-tertiary)">DeepSeek / OpenRouter / GLM 等兼容接口请选择 OpenAI-Compatible 并填写对应 Base URL。</span>
-              </div>
+              <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
+                API 协议
+                <select value={protocol} onChange={event => applyProtocol(event.target.value as ApiProtocol)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground">
+                  <option value="openai_compatible">OpenAI-Compatible</option>
+                  <option value="anthropic">Anthropic Messages</option>
+                  <option value="google_gemini">Google Gemini API</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
+                Base URL
+                <input value={baseUrl} onChange={event => setBaseUrl(event.target.value)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground" />
+              </label>
+              <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
+                Model
+                <input value={model} onChange={event => setModel(event.target.value)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground" />
+              </label>
             </div>
-          )}
+            <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
+              API Key（留空会保留现有 Key；使用系统安全存储加密）
+              <input type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground" />
+            </label>
+            <div className="flex items-center gap-2">
+              <button onClick={() => void saveProfile()} disabled={busy || !profileName.trim() || !baseUrl.trim() || !model.trim()} className="rounded-md border border-(--ui-border) px-3 py-1.5 text-xs hover:bg-(--ui-control-hover-background) disabled:opacity-50">保存 API 配置</button>
+              <span className="text-xs text-(--ui-text-tertiary)">DeepSeek / OpenRouter / GLM 等兼容接口请选择 OpenAI-Compatible 并填写对应 Base URL。</span>
+            </div>
+          </div>
+        )}
 
-          {selectedDefinition.requiresProject && !project && (
-            <div className="mt-3 text-xs text-amber-600">该本地 Agent 会访问工作目录，请先在左上角选择或创建一个 Zero3 项目。</div>
-          )}
-          {message && <div className="mt-3 rounded-md bg-(--ui-control-background) px-3 py-2 text-xs text-(--ui-text-secondary)">{message}</div>}
-        </div>
+        {selectedDefinition.requiresProject && !project && (
+          <div className="mt-3 text-xs text-amber-600">该本地 Agent 会访问工作目录，请先在左上角选择或创建一个 Zero3 项目。</div>
+        )}
+        {message && <div className="mt-3 rounded-md bg-(--ui-control-background) px-3 py-2 text-xs text-(--ui-text-secondary)">{message}</div>}
 
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onCancel} className="rounded-md border border-(--ui-border) px-4 py-2 text-sm hover:bg-(--ui-control-hover-background)">取消</button>
