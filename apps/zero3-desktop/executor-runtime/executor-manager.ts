@@ -1,5 +1,3 @@
-import { buildHandoffCheckpoint } from './handoff/handoff-builder.ts'
-import type { HandoffStore } from './handoff/handoff-store.ts'
 import { failurePolicyFor, isExecutorFailure } from './failure-normalizer.ts'
 import { Zero3ExecutorRouter, type ExecutorRoutePlan } from './executor-router.ts'
 import type {
@@ -21,9 +19,21 @@ import type { Zero3ExecutorRegistry } from './executor-registry.ts'
 
 export class ExecutorManagerError extends Error {}
 
+export interface ExecutorFailoverHandoffRequest {
+  identity: ExecutorTaskIdentity
+  policy: ExecutorPolicyContext
+  session: ExecutorSessionRef
+  failure: ExecutorFailure
+  targetExecutorId: ExecutorId
+}
+
+export type ExecutorFailoverHandoffCapture = (
+  request: ExecutorFailoverHandoffRequest
+) => Promise<ExecutorHandoffCheckpointRef>
+
 export interface ExecutorManagerOptions {
   routePlan?: ExecutorRoutePlan
-  handoffStore?: HandoffStore
+  captureFailoverHandoff?: ExecutorFailoverHandoffCapture
 }
 
 export interface ExecutorFailoverResult {
@@ -43,11 +53,6 @@ export interface ExecutorBindingSnapshot {
 interface ExecutorBinding extends ExecutorBindingSnapshot {
   session: ExecutorSession
   pendingPermissions: Map<string, boolean>
-}
-
-function constraintValue(constraints: readonly string[], prefix: string): string | undefined {
-  const value = constraints.find(candidate => candidate.startsWith(prefix))?.slice(prefix.length).trim()
-  return value || undefined
 }
 
 export class Zero3ExecutorManager {
@@ -156,7 +161,7 @@ export class Zero3ExecutorManager {
       throw new ExecutorManagerError('failover requires a failure from the frozen Zero3 taxonomy')
     }
     if (failurePolicyFor(failure.code).failover !== 'eligible') return null
-    if (!this.#router || !this.options.handoffStore) return null
+    if (!this.#router || !this.options.captureFailoverHandoff) return null
 
     const key = this.bindingKey(taskId, executionId)
     const binding = this.requireBinding(taskId, executionId)
@@ -181,38 +186,19 @@ export class Zero3ExecutorManager {
     }
     if (!targetExecutorId) return null
 
-    const baseSha = binding.identity.baseSha?.trim() || constraintValue(binding.identity.constraints, 'baseline=')
-    if (!baseSha) throw new ExecutorManagerError('checkpointed failover requires an authoritative baseline SHA')
-
-    const checkpoint = await buildHandoffCheckpoint({
-      taskId: binding.identity.taskId,
-      executionId: binding.identity.executionId,
-      workspace: binding.identity.workspace,
-      repoId: binding.identity.repoIdentity?.trim() || binding.identity.workspace,
-      baseSha,
-      objective: binding.identity.objective,
-      constraints: binding.identity.constraints,
-      acceptanceCriteria: binding.identity.acceptanceCriteria,
-      completed: [],
-      inProgress: ['executor stopped before authoritative completion'],
-      remaining: ['inspect the persisted workspace state and continue the objective'],
-      testsRun: [],
-      testResults: [],
-      pendingApprovals: [],
-      lastExecutor: binding.executorId,
-      lastSessionId: binding.session.sessionId,
-      stopReason: `executor_failure:${failure.code}`,
-      nextAction: `continue_with:${targetExecutorId}`,
-      previousGeneration: binding.session.generation - 1
+    const checkpoint = await this.options.captureFailoverHandoff({
+      identity: this.snapshotIdentity(binding.identity),
+      policy: { ...binding.policy },
+      session: {
+        executorId: binding.session.executorId,
+        sessionId: binding.session.sessionId,
+        generation: binding.session.generation
+      },
+      failure: { ...failure },
+      targetExecutorId
     })
-    await this.options.handoffStore.save(checkpoint)
-    const checkpointRef: ExecutorHandoffCheckpointRef = {
-      protocol: ZERO3_HANDOFF_PROTOCOL,
-      checkpointHash: checkpoint.checkpoint_hash,
-      generation: checkpoint.handoff_generation,
-      workspaceFingerprint: checkpoint.dirty_worktree_fingerprint
-    }
-    if (checkpointRef.generation !== binding.session.generation) {
+    this.assertHandoffCheckpoint(checkpoint)
+    if (checkpoint.generation !== binding.session.generation) {
       throw new ExecutorManagerError('failover checkpoint generation does not match the active executor generation')
     }
 
@@ -227,13 +213,13 @@ export class Zero3ExecutorManager {
       targetExecutorId,
       binding.identity,
       binding.policy,
-      checkpointRef
+      checkpoint
     )
     return {
       fromExecutorId: previousExecutorId,
       toExecutorId: targetExecutorId,
       session,
-      checkpoint: checkpointRef
+      checkpoint
     }
   }
 
