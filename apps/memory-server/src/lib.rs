@@ -17,7 +17,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::{broadcast, Mutex};
@@ -486,22 +485,17 @@ fn auth_failure_response(failure: AuthFailure) -> Response {
     (failure.status, Json(json!({"error": failure.code}))).into_response()
 }
 
-fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<AuthGrant, Response> {
-    state
-        .auth
-        .authenticate(headers)
-        .map_err(auth_failure_response)
+fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<AuthGrant, AuthFailure> {
+    state.auth.authenticate(headers)
 }
 
-fn authorize_event(grant: &AuthGrant, event: &MemoryEvent) -> Result<(), Response> {
-    grant
-        .authorize_event(
-            event.scope.project_id.as_deref(),
-            &event.memory.class,
-            &event.actor.agent_type,
-            event.memory.authority,
-        )
-        .map_err(auth_failure_response)
+fn authorize_event(grant: &AuthGrant, event: &MemoryEvent) -> Result<(), AuthFailure> {
+    grant.authorize_event(
+        event.scope.project_id.as_deref(),
+        &event.memory.class,
+        &event.actor.agent_type,
+        event.memory.authority,
+    )
 }
 
 async fn append_event(
@@ -511,10 +505,10 @@ async fn append_event(
 ) -> Response {
     let grant = match authenticate(&state, &headers) {
         Ok(grant) => grant,
-        Err(response) => return response,
+        Err(failure) => return auth_failure_response(failure),
     };
-    if let Err(response) = authorize_event(&grant, &event) {
-        return response;
+    if let Err(failure) = authorize_event(&grant, &event) {
+        return auth_failure_response(failure);
     }
     match state.repo.append(event.clone()).await {
         Ok(outcome) => {
@@ -546,7 +540,7 @@ async fn append_batch(
 ) -> Response {
     let grant = match authenticate(&state, &headers) {
         Ok(grant) => grant,
-        Err(response) => return response,
+        Err(failure) => return auth_failure_response(failure),
     };
     let mut results = Vec::with_capacity(batch.events.len());
     for event in batch.events {
@@ -586,7 +580,7 @@ async fn project_context(
 ) -> Response {
     let grant = match authenticate(&state, &headers) {
         Ok(grant) => grant,
-        Err(response) => return response,
+        Err(failure) => return auth_failure_response(failure),
     };
     if !grant.allows_project(&project_id) {
         return auth_failure_response(AuthFailure {
@@ -611,7 +605,7 @@ async fn sync_upgrade(
 ) -> Response {
     let grant = match authenticate(&state, &headers) {
         Ok(grant) => grant,
-        Err(response) => return response,
+        Err(failure) => return auth_failure_response(failure),
     };
     ws.on_upgrade(move |socket| sync_socket(socket, state, grant))
         .into_response()
@@ -650,7 +644,7 @@ async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
             .await;
         return;
     }
-    if hello.client_id != &*grant.client_id {
+    if hello.client_id != *grant.client_id {
         let _ = socket
             .send(Message::Text(
                 json!({"type":"error","code":"client_id_mismatch","message":"sync client_id is not bound to this bearer grant"}).to_string(),
@@ -719,8 +713,9 @@ async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
             },
             published = receiver.recv() => match published {
                 Ok(item) => {
-                    if item.event.scope.project_id.as_ref().is_some_and(|id| projects.contains(id)) {
-                        if socket.send(Message::Text(json!({"type":"memory.changed","sequence":item.sequence,"event":item.event}).to_string())).await.is_err() { break; }
+                    if item.event.scope.project_id.as_ref().is_some_and(|id| projects.contains(id))
+                        && socket.send(Message::Text(json!({"type":"memory.changed","sequence":item.sequence,"event":item.event}).to_string())).await.is_err() {
+                        break;
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
@@ -850,13 +845,13 @@ mod tests {
         event.memory.authority = 100;
         let response = app
             .oneshot(
-                Request::post("/v1/memory/events")
+                authorized(Request::post("/v1/memory/events"))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&event).unwrap()))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
