@@ -192,3 +192,10 @@ test('CLI authorization opens one direct Windows command prompt without nested s
   assert.match(runtime, /spawn\(comspec, \['\/d', '\/k', command\]/)
   assert.doesNotMatch(runtime, /start "" cmd\.exe \/k/)
 })
+
+test('local Codex provider reuses the official CLI home instead of the isolated Agent Kernel home', () => {
+  const runtime = fs.readFileSync(path.join(root, 'scripts', 'apply-session-provider-runtime.mjs'), 'utf8')
+  assert.match(runtime, /function zero3OfficialCodexCliEnv\(\)[\s\S]*delete env\.CODEX_HOME/)
+  assert.ok((runtime.match(/env: zero3OfficialCodexCliEnv\(\)/g) || []).length >= 2)
+  assert.match(runtime, /provider === 'codex' \? zero3OfficialCodexCliEnv\(\) : process\.env/)
+})

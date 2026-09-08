@@ -699,6 +699,15 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
 // not the pinned open-source Agent Kernel that Zero3 itself is built on. It is
 // driven headlessly through 'codex exec', whose JSONL stream carries the thread
 // id and the agent's messages.
+function zero3OfficialCodexCliEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  // Electron owns an isolated CODEX_HOME for Zero3's pinned Agent Kernel.
+  // The user-selectable local Codex provider must instead reuse the official
+  // CLI's normal ~/.codex login and session store.
+  delete env.CODEX_HOME
+  return env
+}
+
 async function zero3RunCodexCliTurn(requestValue: unknown) {
   const request = zero3SessionRecord(requestValue)
   const text = zero3SessionText(request.text, 'Codex prompt', 128_000)
@@ -717,7 +726,7 @@ async function zero3RunCodexCliTurn(requestValue: unknown) {
     const resolved = resolveWindowsCommand(command)
     const child = spawn(resolved.command, [...resolved.args, ...args], {
       ...(cwd ? { cwd } : {}),
-      env: process.env,
+      env: zero3OfficialCodexCliEnv(),
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     })
@@ -780,6 +789,7 @@ async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) 
   // make Windows interpret the quote prefix as a bogus path.
   const child = spawn(comspec, ['/d', '/k', command], {
     detached: true,
+    env: provider === 'codex' ? zero3OfficialCodexCliEnv() : process.env,
     stdio: 'ignore',
     windowsHide: false
   })
@@ -797,7 +807,7 @@ async function zero3ProbeCodexCli() {
   return new Promise<{ available: boolean; authenticated: boolean | null; detail: string }>(resolve => {
     const resolved = resolveWindowsCommand(command)
     const child = spawn(resolved.command, [...resolved.args, 'login', 'status'], {
-      env: process.env,
+      env: zero3OfficialCodexCliEnv(),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
     })
