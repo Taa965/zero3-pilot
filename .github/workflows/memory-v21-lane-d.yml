@@ -7,6 +7,7 @@ on:
       - 'crates/zero3-memory/src/lib.rs'
       - 'crates/zero3-memory/src/sync_queue.rs'
       - 'crates/zero3-memory/tests/sync_queue.rs'
+      - 'apps/zero3-desktop/memory-sync-runtime/**'
       - '.github/workflows/memory-v21-lane-d.yml'
 
 jobs:
@@ -14,10 +15,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - run: node --check apps/zero3-desktop/memory-sync-runtime/memory-sync-client.mjs
+      - run: node --test apps/zero3-desktop/memory-sync-runtime/memory-sync-client.test.mjs
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked -p zero3-memory --all-targets -- -D warnings
       - run: cargo test --locked -p zero3-memory --test sync_queue
