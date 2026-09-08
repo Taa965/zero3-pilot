@@ -82,7 +82,8 @@ function capturedText(chunks: Buffer[]): string {
 export class NodeClaudeCliRunner implements ClaudeCliRunner {
   run(request: ClaudeCliRunRequest): Promise<ClaudeCliRunResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(resolveWindowsCommand(request.command), request.args, {
+      const resolved = resolveWindowsCommand(request.command)
+      const child = spawn(resolved.command, [...resolved.args, ...request.args], {
         ...(request.cwd ? { cwd: request.cwd } : {}),
         env: process.env,
         windowsHide: true,

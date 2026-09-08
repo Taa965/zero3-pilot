@@ -23,7 +23,7 @@ const PROVIDERS: Array<{
 }> = [
   { id: 'gpt', title: 'ChatGPT 网页', icon: 'globe', description: '内嵌 chatgpt.com，直接使用网页账号与订阅。' },
   { id: 'gemini', title: 'Gemini 网页', icon: 'globe', description: '内嵌 gemini.google.com，直接使用 Google 网页账号。' },
-  { id: 'codex', title: '本地 Codex', icon: 'terminal', description: '调用本机 Codex app-server，复用 Codex CLI 的 ChatGPT 登录。', requiresProject: true },
+  { id: 'codex', title: '本地 Codex', icon: 'terminal', description: '调用本机官方 Codex 客户端（codex exec），复用它的 ChatGPT 登录。', requiresProject: true },
   { id: 'claude', title: 'Claude Code', icon: 'terminal', description: '调用本机 Claude Code CLI，复用官方 Claude 登录。', requiresProject: true },
   { id: 'antigravity', title: 'Antigravity', icon: 'rocket', description: '调用本机官方 agy CLI，并保留 Antigravity 会话绑定。', requiresProject: true },
   { id: 'zero3', title: 'Zero3 本体', icon: 'hubot', description: '由 Zero3 直接调用你配置的 API Provider 与模型。' }
