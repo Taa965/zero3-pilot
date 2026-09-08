@@ -11,14 +11,46 @@ on:
 jobs:
   authority-core:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zero3_memory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d zero3_memory"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: zero3_memory
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24.11.0'
       - run: node --test apps/zero3-desktop/memory-v21-runtime/authority-core.test.mjs
-      - name: SQL invariants
+      - name: Install PostgreSQL client if missing
+        run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+      - name: Apply all Memory Authority migrations
+        run: |
+          for migration in deployment/memory/migrations/*.sql; do
+            echo "Applying $migration"
+            psql -v ON_ERROR_STOP=1 -f "$migration"
+          done
+      - name: Verify live authority semantics
+        run: psql -v ON_ERROR_STOP=1 -f deployment/memory/tests/authority_v2_1.sql
+      - name: SQL static invariants
         run: |
           grep -q 'CREATE EXTENSION IF NOT EXISTS vector' deployment/memory/migrations/001_memory_authority_v2_1.sql
           grep -q 'memory_events_append_only' deployment/memory/migrations/001_memory_authority_v2_1.sql
           grep -q 'event_id UUID NOT NULL UNIQUE' deployment/memory/migrations/001_memory_authority_v2_1.sql
+          grep -q 'entity_version_conflict' deployment/memory/migrations/001_memory_authority_v2_1.sql
+          grep -q 'rebuild_project_memory_projection' deployment/memory/migrations/001_memory_authority_v2_1.sql
