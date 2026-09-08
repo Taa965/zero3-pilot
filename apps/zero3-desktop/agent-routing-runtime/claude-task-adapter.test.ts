@@ -12,12 +12,12 @@ import {
 import {
   ZERO3_TASK_SPEC_V2,
   type Zero3TaskSpecV2
-} from './agent-contracts.ts'
+} from './agent-contracts'
 import {
   Zero3ClaudeTaskAdapter,
   zero3ClaudeProjectMcpConfig,
   type Zero3ClaudeExecutorPort
-} from './claude-task-adapter.ts'
+} from './claude-task-adapter'
 
 function task(): Zero3TaskSpecV2 {
   return {
