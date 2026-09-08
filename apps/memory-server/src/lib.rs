@@ -302,15 +302,22 @@ impl MemoryRepository for PostgresRepository {
         event.validate()?;
         let client = self.client().await?;
         let authority = i16::from(event.memory.authority);
+        let expected_entity_version = event
+            .memory
+            .expected_entity_version
+            .map(i64::try_from)
+            .transpose()
+            .context("expected entity version exceeds PostgreSQL bigint")?;
         let supersedes = event.supersedes.clone();
         let inserted = client.query_opt(
-            "INSERT INTO memory_events (event_id, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence, entity_type, entity_id, supersedes, payload, source_type, source_ref, source_hash, created_at) VALUES ($1::text::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::text[]::uuid[],$16,$17,$18,$19,$20::text::timestamptz) ON CONFLICT (event_id) DO NOTHING RETURNING sequence",
+            "INSERT INTO memory_events (event_id, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence, entity_type, entity_id, expected_entity_version, supersedes, payload, source_type, source_ref, source_hash, created_at) VALUES ($1::text::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::text[]::uuid[],$17,$18,$19,$20,$21::text::timestamptz) ON CONFLICT (event_id) DO NOTHING RETURNING sequence",
             &[
                 &event.event_id, &event.scope.project_id, &event.scope.task_id, &event.scope.session_id,
                 &event.scope.thread_id, &event.actor.agent_id, &event.actor.agent_type, &event.actor.device_id,
                 &event.event_type, &event.memory.class, &authority, &event.memory.confidence,
-                &event.memory.entity_type, &event.memory.entity_id, &supersedes, &event.payload,
-                &event.source.kind, &event.source.r#ref, &event.source.hash, &event.created_at,
+                &event.memory.entity_type, &event.memory.entity_id, &expected_entity_version, &supersedes,
+                &event.payload, &event.source.kind, &event.source.r#ref, &event.source.hash,
+                &event.created_at,
             ],
         ).await.context("append memory event")?;
 
