@@ -27,14 +27,17 @@ impl PendingState {
         }
     }
 
-    fn parse(value: &str) -> anyhow::Result<Self> {
+    fn parse(value: &str) -> Result<Self, std::io::Error> {
         match value {
             "pending" => Ok(Self::Pending),
             "sending" => Ok(Self::Sending),
             "acked" => Ok(Self::Acked),
             "conflict" => Ok(Self::Conflict),
             "rejected" => Ok(Self::Rejected),
-            other => anyhow::bail!("unknown pending memory state {other}"),
+            other => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unknown pending memory state {other}"),
+            )),
         }
     }
 }
