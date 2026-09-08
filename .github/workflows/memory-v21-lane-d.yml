@@ -1,0 +1,22 @@
+name: Memory V2.1 Lane D
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/zero3-memory/src/sync_queue.rs'
+      - 'crates/zero3-memory/tests/sync_queue.rs'
+      - '.github/workflows/memory-v21-lane-d.yml'
+
+jobs:
+  local-offline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p zero3-memory --all-targets -- -D warnings
+      - run: cargo test -p zero3-memory --test sync_queue
