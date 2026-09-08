@@ -7,14 +7,14 @@ import {
   type ExecutorProbe,
   type ExecutorSession,
   type ExecutorStartContext
-} from '../executor-runtime/executor-types.ts'
-import { ClaudeExecutor } from '../executor-runtime/external/claude-executor.ts'
+} from '../executor-runtime/executor-types'
+import { ClaudeExecutor } from '../executor-runtime/external/claude-executor'
 import {
   ZERO3_EXECUTION_RESULT_V2,
   type Zero3ExecutionResultV2,
   type Zero3TaskSpecV2
-} from './agent-contracts.ts'
-import { renderZero3AgentTaskPrompt } from './task-prompt.ts'
+} from './agent-contracts'
+import { renderZero3AgentTaskPrompt } from './task-prompt'
 
 export type Zero3ClaudeProjectMcpOptions = {
   serverPath: string
