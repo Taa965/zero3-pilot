@@ -26,6 +26,28 @@ function clone(value) {
   return value == null ? value : structuredClone(value)
 }
 
+export function memoryScopeKey(memoryClass, scope = {}) {
+  switch (memoryClass) {
+    case 'global': return 'global'
+    case 'project': {
+      const projectId = typeof scope.project_id === 'string' ? scope.project_id.trim() : ''
+      if (!projectId) throw new TypeError('project memory requires project_id')
+      return `project:${projectId}`
+    }
+    case 'task': {
+      const taskId = typeof scope.task_id === 'string' ? scope.task_id.trim() : ''
+      if (!taskId) throw new TypeError('task memory requires task_id')
+      return `task:${taskId}`
+    }
+    default:
+      return `${memoryClass}:${scope.project_id ?? ''}:${scope.task_id ?? ''}`
+  }
+}
+
+function entityStorageKey(event) {
+  return `${memoryScopeKey(event.memory.class, event.scope)}\u0000${event.memory.entity_id}`
+}
+
 export class MemoryAuthorityState {
   #sequence = 0
   #events = new Map()
@@ -39,8 +61,9 @@ export class MemoryAuthorityState {
     return clone(this.#events.get(eventId) ?? null)
   }
 
-  getEntity(entityId) {
-    return clone(this.#entities.get(entityId) ?? null)
+  getEntity(entityId, { memoryClass = 'global', projectId = null, taskId = null } = {}) {
+    const scopeKey = memoryScopeKey(memoryClass, { project_id: projectId, task_id: taskId })
+    return clone(this.#entities.get(`${scopeKey}\u0000${entityId}`) ?? null)
   }
 
   listEventsAfter(sequence, predicate = () => true) {
@@ -53,11 +76,13 @@ export class MemoryAuthorityState {
 
   append(event) {
     assertEvent(event)
+    const storageKey = entityStorageKey(event)
     const duplicate = this.#events.get(event.event_id)
-    if (duplicate) return { status: 'duplicate', sequence: duplicate.sequence, entity: this.getEntity(event.memory.entity_id) }
+    if (duplicate) return { status: 'duplicate', sequence: duplicate.sequence, entity: clone(this.#entities.get(storageKey) ?? null) }
 
     const entityId = event.memory.entity_id
-    const current = this.#entities.get(entityId) ?? null
+    const scopeKey = memoryScopeKey(event.memory.class, event.scope)
+    const current = this.#entities.get(storageKey) ?? null
     const expected = event.memory.expected_entity_version ?? null
 
     if (expected !== null) {
@@ -65,6 +90,7 @@ export class MemoryAuthorityState {
       const actual = current?.version ?? 0
       if (expected !== actual) {
         throw new MemoryConflictError('entity_version_conflict', `expected entity version ${expected}, current ${actual}`, {
+          scope_key: scopeKey,
           entity_id: entityId,
           expected_version: expected,
           current_version: actual
@@ -74,6 +100,7 @@ export class MemoryAuthorityState {
 
     if (current && event.memory.authority < current.authority) {
       throw new MemoryConflictError('authority_conflict', 'lower-authority event cannot replace current authoritative entity', {
+        scope_key: scopeKey,
         entity_id: entityId,
         incoming_authority: event.memory.authority,
         current_authority: current.authority
@@ -82,6 +109,7 @@ export class MemoryAuthorityState {
 
     if (event.memory.authority === USER_AUTHORITY && event.actor.agent_type !== 'system') {
       throw new MemoryConflictError('user_authority_boundary', 'agents cannot self-assert user authority', {
+        scope_key: scopeKey,
         entity_id: entityId,
         actor_type: event.actor.agent_type
       })
@@ -96,6 +124,7 @@ export class MemoryAuthorityState {
       : 'unverified'
 
     const entity = {
+      scope_key: scopeKey,
       entity_id: entityId,
       entity_type: event.memory.entity_type,
       project_id: event.scope?.project_id ?? null,
@@ -112,7 +141,7 @@ export class MemoryAuthorityState {
     }
 
     this.#events.set(event.event_id, { sequence, event: clone(event) })
-    this.#entities.set(entityId, entity)
+    this.#entities.set(storageKey, entity)
     return { status: 'accepted', sequence, entity: clone(entity) }
   }
 }
