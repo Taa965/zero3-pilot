@@ -7,6 +7,7 @@ on:
       - 'apps/memory-server/**'
       - '.github/workflows/memory-v21-lane-c.yml'
 
+# Strict compile gate: no autoformat or generated commit is allowed here.
 jobs:
   server-sync:
     runs-on: ubuntu-latest
