@@ -21,6 +21,7 @@ const manager = read('executor-manager.ts')
 const registry = read('executor-registry.ts')
 const router = read('executor-router.ts')
 const failures = read('failure-normalizer.ts')
+const claude = read('external/claude-executor.ts')
 
 requireText(types, "'zero3.pilot.executor.v1'", 'R4A executor contract version is missing.')
 requireText(types, 'interface Zero3Executor', 'Stable Zero3-owned executor interface is missing.')
@@ -88,6 +89,10 @@ forbidText(types, 'cause?: unknown', 'ExecutorFailure must not expose raw provid
 forbidText(failures, 'source, cause', 'Failure normalization must not retain raw provider exception objects.')
 requireText(failures, "'forbidden'", 'Forbidden automatic-failover disposition is missing.')
 requireText(failures, 'KNOWN_FAILURE_CODES.has', 'Provider-defined unknown failure codes must not enter core routing policy.')
+requireText(claude, "context.policy.permissionProfile === 'read_only'", 'Claude read-only policy must remain fail-closed.')
+requireText(claude, "return 'acceptEdits'", 'Claude writable profiles must use bounded edit permission mode.')
+forbidText(claude, 'bypassPermissions', 'Claude executor must never bypass permissions.')
+forbidText(claude, 'dangerously-skip-permissions', 'Claude executor must never use the dangerous permission bypass flag.')
 
 for (const [name, source] of [
   ['executor-types.ts', types],

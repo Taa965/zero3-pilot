@@ -69,15 +69,22 @@ class FakeManager implements ExecutorManagerPort {
   queues: Array<readonly ExecutorEvent[] | Error> = []
   responses: ExecutorPermissionResponse[] = []
   starts: ExecutorTaskIdentity[] = []
+  activeBinding?: { executorId: string; session: ExecutorSessionRef }
   async start(_executorId: string, identity: ExecutorTaskIdentity, _policy: ExecutorPolicyContext): Promise<ExecutorSession> {
     this.starts.push(identity)
-    return { executorId: 'native-codex', sessionId: 'thread-1', generation: 1, startedAt: '2026-09-03T00:00:00.000Z' }
+    const session = { executorId: 'native-codex', sessionId: 'thread-1', generation: 1, startedAt: '2026-09-03T00:00:00.000Z' }
+    this.activeBinding = { executorId: session.executorId, session }
+    return session
   }
   async startFromHandoff(_executorId: string, _identity: ExecutorTaskIdentity, _policy: ExecutorPolicyContext, checkpoint: ExecutorHandoffCheckpointRef) {
-    return { executorId: 'native-codex', sessionId: 'thread-2', generation: checkpoint.generation + 1, startedAt: '2026-09-03T00:00:00.000Z' }
+    const session = { executorId: 'native-codex', sessionId: 'thread-2', generation: checkpoint.generation + 1, startedAt: '2026-09-03T00:00:00.000Z' }
+    this.activeBinding = { executorId: session.executorId, session }
+    return session
   }
   async resume(_executorId: string, _identity: ExecutorTaskIdentity, _policy: ExecutorPolicyContext, ref: ExecutorSessionRef, _checkpoint: ExecutorHandoffCheckpointRef) {
-    return { ...ref, startedAt: '2026-09-03T00:00:00.000Z' }
+    const session = { ...ref, startedAt: '2026-09-03T00:00:00.000Z' }
+    this.activeBinding = { executorId: session.executorId, session }
+    return session
   }
   async *prompt(_identity: Pick<ExecutorTaskIdentity, 'taskId' | 'executionId'>, _input: ExecutorInput): AsyncIterable<ExecutorEvent> {
     const queue = this.queues.shift() ?? []
@@ -86,7 +93,16 @@ class FakeManager implements ExecutorManagerPort {
   }
   async respondPermission(_taskId: string, _executionId: string, response: ExecutorPermissionResponse) { this.responses.push(response) }
   async cancel() {}
-  async close() {}
+  async close() { this.activeBinding = undefined }
+  active() { return this.activeBinding }
+}
+
+class AuthoritySwitchingManager extends FakeManager {
+  async *prompt(): AsyncIterable<ExecutorEvent> {
+    this.activeBinding = { executorId: 'claude', session: { executorId: 'claude', sessionId: 'claude-2', generation: 2 } }
+    yield { type: 'message', sequence: 1, at: '2026-09-03T00:00:01.000Z', text: 'handoff accepted' }
+    yield { type: 'completed', sequence: 2, at: '2026-09-03T00:00:02.000Z', outcome: 'succeeded' }
+  }
 }
 
 async function runningRunner(manager = new FakeManager()) {
@@ -154,4 +170,16 @@ test('thrown active-prompt error fails closed to OutcomeUnknown rather than retr
   manager.queues.push(new Error('socket disappeared'))
   await assert.rejects(runner.sendInstruction('R1', 'side effecting work'))
   assert.equal(runner.snapshot().status, 'outcome_unknown')
+})
+
+test('automatic failover authority is persisted before delivery finalization', async () => {
+  const manager = new AuthoritySwitchingManager()
+  const { runner } = await runningRunner(manager)
+  await runner.sendInstruction('R1', 'continue after quota failover')
+  const runtime = runner.snapshot()
+  assert.equal(runtime.status, 'delivering')
+  assert.equal(runtime.executorId, 'claude')
+  assert.equal(runtime.executorSessionId, 'claude-2')
+  assert.equal(runtime.executorGeneration, 2)
+  assert.equal(runtime.writerGeneration, 2)
 })

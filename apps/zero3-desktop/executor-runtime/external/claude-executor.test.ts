@@ -66,13 +66,20 @@ test('Claude executor captures CLI session id and resumes subsequent prompts', a
   assert.equal(runner.requests[1]?.args[resumeIndex + 1], 'session-real')
 })
 
-test('Claude executor keeps approval-required sessions fail-closed', async () => {
-  const runner = new QueueRunner([{ exitCode: 0, stdout: '{"result":"ok","session_id":"session"}', stderr: '' }])
-  const executor = new ClaudeExecutor({ runner })
-  const session = await executor.start({ ...baseContext, policy: { permissionProfile: 'elevated', approvalRequired: true } })
-  for await (const _event of executor.prompt(session, { kind: 'prompt', clientRequestId: 'one', text: 'do work' })) {}
-  const modeIndex = runner.requests[0]?.args.indexOf('--permission-mode') ?? -1
-  assert.equal(runner.requests[0]?.args[modeIndex + 1], 'dontAsk')
+test('Claude permission mode preserves workspace-write semantics without bypassing read-only', async () => {
+  const writeRunner = new QueueRunner([{ exitCode: 0, stdout: '{"result":"ok","session_id":"session-write"}', stderr: '' }])
+  const writeExecutor = new ClaudeExecutor({ runner: writeRunner })
+  const writeSession = await writeExecutor.start({ ...baseContext, policy: { permissionProfile: 'elevated', approvalRequired: true } })
+  for await (const _event of writeExecutor.prompt(writeSession, { kind: 'prompt', clientRequestId: 'write', text: 'do work' })) {}
+  const writeModeIndex = writeRunner.requests[0]?.args.indexOf('--permission-mode') ?? -1
+  assert.equal(writeRunner.requests[0]?.args[writeModeIndex + 1], 'acceptEdits')
+
+  const readRunner = new QueueRunner([{ exitCode: 0, stdout: '{"result":"ok","session_id":"session-read"}', stderr: '' }])
+  const readExecutor = new ClaudeExecutor({ runner: readRunner })
+  const readSession = await readExecutor.start({ ...baseContext, policy: { permissionProfile: 'read_only', approvalRequired: false } })
+  for await (const _event of readExecutor.prompt(readSession, { kind: 'prompt', clientRequestId: 'read', text: 'inspect only' })) {}
+  const readModeIndex = readRunner.requests[0]?.args.indexOf('--permission-mode') ?? -1
+  assert.equal(readRunner.requests[0]?.args[readModeIndex + 1], 'dontAsk')
 })
 
 test('Claude quota failure is emitted with the canonical executor code', async () => {

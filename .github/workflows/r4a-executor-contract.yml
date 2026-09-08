@@ -60,5 +60,6 @@ jobs:
           apps/zero3-desktop/executor-runtime/executor-runtime.test.ts
           apps/zero3-desktop/executor-runtime/external/claude-executor.test.ts
           apps/zero3-desktop/executor-runtime/router/failover-controller.test.ts
+          apps/zero3-desktop/executor-runtime/router/failover-runtime.test.ts
           apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts
           apps/zero3-desktop/agent-routing-runtime/claude-task-adapter.test.ts
