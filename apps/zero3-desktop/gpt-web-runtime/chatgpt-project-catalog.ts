@@ -10,6 +10,13 @@ const GIZMO_ID = /^g-p-[A-Za-z0-9_-]{1,192}$/
 const LOAD_TIMEOUT_MS = 20_000
 const SCRIPT_TIMEOUT_MS = 20_000
 
+export class ChatGptSignedOutError extends Error {
+  constructor() {
+    super('尚未在 Zero3 内登录 ChatGPT 网页版')
+    this.name = 'ChatGptSignedOutError'
+  }
+}
+
 // ChatGPT publishes no API for "list my projects", so the catalog is read from
 // inside the logged-in page: its own session endpoint yields the bearer token
 // the web client uses, and the sidebar endpoint behind it lists the projects.
@@ -120,7 +127,10 @@ async function readFromContents(contents: WebContents): Promise<Zero3ChatGptRemo
     const project = normalizeRemoteProject(item)
     if (project) projects.push(project)
   }
-  if (projects.length === 0) throw new Error(reasonMessage(payload.reason))
+  if (projects.length === 0) {
+    if (payload.reason === 'signed-out') throw new ChatGptSignedOutError()
+    throw new Error(reasonMessage(payload.reason))
+  }
   return projects.sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'))
 }
 

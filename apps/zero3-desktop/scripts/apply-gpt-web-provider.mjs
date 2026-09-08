@@ -76,7 +76,7 @@ ipcMain.handle('zero3:gpt-web:create', (_event, request: unknown) => {
   if (projectId != null && typeof projectId !== 'string') throw new Error('projectId must be a string or null')
   return zero3GptWeb.create(projectId as string | null)
 })
-ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())
+ipcMain.handle('zero3:gpt-web:list-remote-projects', event => zero3GptWeb.listRemoteProjects(zero3GptWebParent(event)))
 ipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {
   const input = zero3GptWebRecord(request)
   return zero3GptWeb.rename(zero3GptWebId(input), input.title)
@@ -325,10 +325,17 @@ export function applyZero3GptWebProvider() {
   ])
 
   patchFile('electron/main.ts', [{
+    label: 'GPT Web authenticated project-list parent window',
+    already: "zero3GptWeb.listRemoteProjects(zero3GptWebParent(event))",
+    from: "ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())",
+    to: "ipcMain.handle('zero3:gpt-web:list-remote-projects', event => zero3GptWeb.listRemoteProjects(zero3GptWebParent(event)))"
+  }])
+
+  patchFile('electron/main.ts', [{
     label: 'GPT Web verified rename handler',
     already: "ipcMain.handle('zero3:gpt-web:rename'",
-    from: "ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())",
-    to: "ipcMain.handle('zero3:gpt-web:list-remote-projects', () => zero3GptWeb.listRemoteProjects())\nipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {\n  const input = zero3GptWebRecord(request)\n  return zero3GptWeb.rename(zero3GptWebId(input), input.title)\n})"
+    from: "ipcMain.handle('zero3:gpt-web:list-remote-projects', event => zero3GptWeb.listRemoteProjects(zero3GptWebParent(event)))",
+    to: "ipcMain.handle('zero3:gpt-web:list-remote-projects', event => zero3GptWeb.listRemoteProjects(zero3GptWebParent(event)))\nipcMain.handle('zero3:gpt-web:rename', (_event, request: unknown) => {\n  const input = zero3GptWebRecord(request)\n  return zero3GptWeb.rename(zero3GptWebId(input), input.title)\n})"
   }])
   patchFile('electron/preload.ts', [{
     label: 'GPT Web rename preload method',

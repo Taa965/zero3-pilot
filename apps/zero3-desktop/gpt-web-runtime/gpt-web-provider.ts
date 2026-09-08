@@ -14,7 +14,7 @@ import {
   ZERO3_GPT_WEB_PROFILE_ID,
   type Zero3GptWebWorkspaceEntry
 } from '../workspace/workspace-entry-types'
-import { readChatGptProjectCatalog, withChatGptContents } from './chatgpt-project-catalog'
+import { ChatGptSignedOutError, readChatGptProjectCatalog, withChatGptContents } from './chatgpt-project-catalog'
 import { chatGptConversationId, renameChatGptConversation } from './chatgpt-conversation-name'
 import {
   ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS,
@@ -59,6 +59,10 @@ const RENDER_WAIT_TIMEOUT_MS = 8_000
 const SNAPSHOT_MAX_COUNT = 30
 const SNAPSHOT_MAX_WIDTH = 1_280
 const SNAPSHOT_JPEG_QUALITY = 55
+const CHATGPT_LOGIN_STATUS_SCRIPT = String.raw`fetch('/api/auth/session', { credentials: 'include' })
+  .then(response => response.ok ? response.json() : null)
+  .then(session => Boolean(session && typeof session.accessToken === 'string' && session.accessToken))
+  .catch(() => false)`
 
 // Zero3 owns the outer navigation and toolbar. Keep ChatGPT's own conversation
 // rail suppressed by default, and collapse its page header so the same controls
@@ -215,6 +219,7 @@ export class Zero3GptWebProvider {
   private readonly live = new Map<string, LiveGptWebView>()
   private readonly snapshots = new Map<string, SnapshotRecord>()
   private profileSession: Session | null = null
+  private loginWindow: BrowserWindow | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
   private catalogTail: Promise<unknown> = Promise.resolve()
   private renameTail: Promise<unknown> = Promise.resolve()
@@ -244,16 +249,120 @@ export class Zero3GptWebProvider {
    * Serialised because each miss opens a page: two pickers racing would load
    * chatgpt.com twice for the same answer.
    */
-  listRemoteProjects(): Promise<Zero3ChatGptRemoteProject[]> {
-    const task = this.catalogTail.then(
-      () => readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents()),
-      () => readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents())
-    )
+  listRemoteProjects(parent: BrowserWindow): Promise<Zero3ChatGptRemoteProject[]> {
+    const read = async () => {
+      try {
+        return await readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents())
+      } catch (error) {
+        if (!(error instanceof ChatGptSignedOutError)) throw error
+        await this.openLoginWindow(parent)
+        return readChatGptProjectCatalog(this.getProfileSession(), this.reusableContents())
+      }
+    }
+    const task = this.catalogTail.then(read, read)
     this.catalogTail = task.then(
       () => undefined,
       () => undefined
     )
     return task
+  }
+
+  private async openLoginWindow(parent: BrowserWindow): Promise<void> {
+    if (parent.isDestroyed()) throw new Error('GPT Web parent window is unavailable')
+    const profile = this.getProfileSession()
+    const login = new BrowserWindow({
+      parent,
+      modal: true,
+      width: 980,
+      height: 760,
+      minWidth: 720,
+      minHeight: 560,
+      show: true,
+      autoHideMenuBar: true,
+      title: '登录 ChatGPT - Zero3 Pilot',
+      webPreferences: {
+        session: profile,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false
+      }
+    })
+    this.loginWindow = login
+    const contents = login.webContents
+
+    contents.on('will-navigate', event => {
+      if (observedHttpsUrl(event.url)) return
+      event.preventDefault()
+    })
+    contents.setWindowOpenHandler(details => {
+      if (!observedHttpsUrl(details.url)) return { action: 'deny' }
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 900,
+          height: 700,
+          show: true,
+          webPreferences: {
+            session: profile,
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            webSecurity: true,
+            allowRunningInsecureContent: false
+          }
+        }
+      }
+    })
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false
+        let checking = false
+        const finish = (error?: Error) => {
+          if (settled) return
+          settled = true
+          cleanup()
+          if (error) reject(error)
+          else resolve()
+        }
+        const checkLogin = async () => {
+          if (checking || contents.isDestroyed() || !observedChatGptUrl(contents.getURL())) return
+          checking = true
+          try {
+            const signedIn = await contents.executeJavaScript(CHATGPT_LOGIN_STATUS_SCRIPT, false)
+            if (signedIn === true) finish()
+          } catch {
+            // Login navigation can briefly destroy/change the document; retry on the next navigation event.
+          } finally {
+            checking = false
+          }
+        }
+        const onClosed = () => finish(new Error('ChatGPT 登录窗口已关闭，请重新尝试'))
+        const cleanup = () => {
+          login.removeListener('closed', onClosed)
+          contents.removeListener('did-navigate', checkLogin)
+          contents.removeListener('did-navigate-in-page', checkLogin)
+          contents.removeListener('did-stop-loading', checkLogin)
+        }
+
+        login.once('closed', onClosed)
+        contents.on('did-navigate', checkLogin)
+        contents.on('did-navigate-in-page', checkLogin)
+        contents.on('did-stop-loading', checkLogin)
+        login.focus()
+        void contents.loadURL(ZERO3_GPT_WEB_HOME).then(() => checkLogin()).catch(error => {
+          finish(error instanceof Error ? error : new Error(String(error)))
+        })
+      })
+    } finally {
+      for (const child of login.getChildWindows()) {
+        if (!child.isDestroyed()) child.close()
+      }
+      if (!login.isDestroyed()) login.close()
+      if (this.loginWindow === login) this.loginWindow = null
+    }
   }
 
   rename(id: string, title: unknown): Promise<Zero3GptWebWorkspaceEntry> {
@@ -537,6 +646,8 @@ export class Zero3GptWebProvider {
   }
 
   stop(): void {
+    if (this.loginWindow && !this.loginWindow.isDestroyed()) this.loginWindow.close()
+    this.loginWindow = null
     if (this.maintenanceTimer) {
       clearInterval(this.maintenanceTimer)
       this.maintenanceTimer = null
