@@ -29,9 +29,9 @@ export function applyZero3AgentClaudeRuntime() {
   patchFile('electron/main.ts', [
     {
       label: 'Claude task adapter import',
-      appliedMarker: 'Zero3VerificationCollector, Zero3ClaudeTaskAdapter, zero3GitEvidence',
-      from: 'Zero3VerificationCollector, zero3GitEvidence',
-      to: 'Zero3VerificationCollector, Zero3ClaudeTaskAdapter, zero3GitEvidence'
+appliedMarker: 'Zero3ClaudeTaskAdapter',
+      from: " } from './zero3/agent-routing/index'",
+      to: ", Zero3ClaudeTaskAdapter } from './zero3/agent-routing/index'"
     },
     {
       label: 'project-scoped Claude task adapter composition',

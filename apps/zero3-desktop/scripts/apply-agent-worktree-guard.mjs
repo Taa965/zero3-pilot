@@ -20,8 +20,8 @@ export function applyZero3AgentWorktreeGuard() {
   patchFile('electron/main.ts', [
     {
       label: 'worktree guard import',
-      from: "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, zero3GitEvidence, renderZero3AgentTaskPrompt, type Zero3TaskSpecV2 } from './zero3/agent-routing/index'",
-      to: "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, zero3GitEvidence, assertZero3GitPreflight, renderZero3AgentTaskPrompt, type Zero3TaskSpecV2 } from './zero3/agent-routing/index'"
+      from: " } from './zero3/agent-routing/index'",
+      to: ", assertZero3GitPreflight } from './zero3/agent-routing/index'"
     },
     {
       label: 'Gemini linked-worktree preflight',
