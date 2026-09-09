@@ -13,11 +13,11 @@
 | PostgreSQL 事件权威与投影 | 已部署 | 幂等、版本检查、权限、任务隔离、稳定提交序号 |
 | HTTP／WebSocket 服务 | 已实现 | HTTP 真实数据库联调；WebSocket 回放逻辑和客户端协议测试 |
 | SQLite 离线同步 | 已接入 | 持久化队列、发送租约、分页回放、断线重试、明确冲突 |
-| Codex／Claude 项目 MCP | 已接入源码及桌面 overlay | 配置内项目使用共享权威，其余项目保留本地模式 |
+| Codex 全局 MCP／Zero3 项目 MCP | 已安装并启用 | 用户追加授权后，所有现有及未来 Codex 工作区均可使用；各工作区自动选择自己的记忆范围 |
 | 跨设备任务交接 | 已完成 | 两个独立客户端读取同一交接，拒绝旧版本覆盖 |
 | 桌面项目“上下文”页 | 已实现、类型检查通过 | 配置导入、刷新、服务器内容、离线及队列状态；本轮未进行完整 GUI 点击验收 |
 | 网页 GPT 经 DC 访问 | 已实测 | DC 选择 AWS 设备后运行下文 CLI，读到 Windows 发布的生产记录 |
-| Windows 重启后自动连接 | 尚未安装 | 临时隧道已用于验收；永久凭据副本及登录启动需要用户授权 |
+| Windows 登录后自动连接 | 已获授权并安装 | 隐藏启动、单实例和断开自动重连已实测；不需要每次手动建立隧道 |
 | 原生 ChatGPT Developer Mode MCP | 尚未验收 | 保留项目白名单、出站字段限制；共享模式下 HTTP 快照写入关闭 |
 | GitHub Memory Inbox | 库及测试已有 | 本轮没有部署新的 webhook 接收服务，勿当作已上线入口 |
 | 全提供方自动提炼／晋升记忆 | 不在本轮已完成声明中 | 已有治理契约；不会把提供方原生聊天记录自动当作项目事实 |
@@ -47,7 +47,7 @@
 - 升级前备份：`/var/backups/zero3-memory/shared-20260910-48c2172a1526`，包含数据库 dump、原配置和上一版本路径。
 - 服务端凭据配置：`/etc/zero3-memory/authority.env`。此文件不可提交或复制到聊天。
 - 新增 Windows 与网页 DC 两份独立项目级授权，最高 agent authority 60；既有授权保持原样。
-- 本次仅启用项目 `project-487b390b-ddf6-4a26-b47d-b8758a244e13`，没有开启其他用户项目。
+- 初次验收仅启用 Zero3 项目。用户随后明确要求覆盖整个 Codex，包括未来所有项目和会话；Windows 授权已扩展为 `projects: ["*"]`，最高权威仍为 60。网页 DC 的独立授权保持原项目范围。
 
 生产验收事件 `1408387c-2386-4ae9-96fe-065e2fb65d3b` 由 Windows 发布，服务器序号为 **1**，状态 `acked`。随后通过实际 DC 插件，在 AWS 设备读取到了该事件，返回 `sync.stale: false`。记录属于验收任务 `shared-memory-acceptance-20260910`，明确标记为连接验收，不作为业务决定。任务事件不会增加项目投影版本，因此该次返回项目版本 0 正常。
 
@@ -79,12 +79,38 @@
   "token": "<单独发放的项目令牌>",
   "clientId": "pilot-windows-zero3-project",
   "deviceId": "windows-zero3",
-  "projects": ["project-487b390b-ddf6-4a26-b47d-b8758a244e13"],
+  "projects": ["*"],
   "cacheDir": "C:\\Users\\Laaa\\Documents\\Zero3 Pilot\\zero3\\shared-memory-cache"
 }
 ```
 
-Windows 的 8792 通过 SSH 转发到 AWS loopback 8791。仓库 `scripts/start-memory-tunnel.ps1` 是可审查的隧道启动脚本，使用固定主机密钥检查、loopback 监听及单实例互斥；它本身不会安装登录启动项。长期保存 SSH 密钥／令牌及登录启动的安装目前等待授权。未授权时只进行临时联调，不能宣称 Windows 重启后自动可用。
+Windows 的 8792 通过 SSH 转发到 AWS loopback 8791。用户已经明确授权保存凭据和登录自动连接，安装结果：
+
+- 凭据与独立客户端目录：`C:\Users\Laaa\Documents\Zero3 Pilot\zero3\memory-transport`。
+- SSH 私钥副本、连接 JSON、缓存目录均设置为仅当前 Windows 用户拥有访问权限；原始 SSH 密钥文件保持原样。
+- 用户启动文件夹中的 `Zero3 Shared Memory.lnk` 启动隐藏 PowerShell，再运行该目录内的 `start-memory-tunnel.ps1`。仓库保留可审查的同名源码。
+- 固定 SSH 主机密钥、仅监听 loopback 8792；每次连接退出后间隔 30 秒重试，互斥锁防止重复运行。
+- 修复含空格路径的双层引用问题，确保 `Zero3 Pilot` 目录中的 known_hosts 真正被 OpenSSH 读取。
+- 已实测快捷方式参数、重复启动退出，以及中断唯一 SSH 子进程后自动恢复 `/ready`。
+- 配置备份保存在受保护的 `memory-transport` 目录，服务器授权变更前备份为 `/etc/zero3-memory/authority.before-codex-global-20260910.env`。
+
+### Codex 全局配置与自动项目范围
+
+已在 `C:\Users\Laaa\.codex\config.toml` 注册 `mcp_servers.zero3_shared_memory`，使用独立客户端，不依赖当前仓库的 node_modules 或运行中的 Zero3 Desktop。配置采用 [Codex 官方 MCP 方式](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)，没有修改模型、账号或沙箱权限。
+
+全局配置不设固定 `cwd`，也不固定 `ZERO3_ACTIVE_PROJECT_ID`；启用 `ZERO3_MEMORY_AUTO_PROJECT=1`，由 Codex 传入当前任务工作目录。现有已打开的客户端需要重新加载 MCP（或重启一次 Codex）才能使用新工具；之后新项目和新会话无需重复配置。
+
+- 已登记的六个 Zero3 工作区沿用原项目 ID，当前 Zero3 项目的既有记录保持可见。
+- 新 Git 项目按规范化仓库 origin 分配稳定 ID；HTTPS／SSH 的同一 origin 对应同一范围。
+- Git 工作树使用主仓库范围；没有 Git 的新目录按工作目录建立范围。无项目会话使用 Codex 实际传入的工作目录，同目录的会话共享记忆。
+- 首次选择结果持久化在受保护缓存内的 `workspace-scopes.sqlite`，之后添加或更改 origin 不会导致既有工作区突然切换记忆。
+- 全局可用不等于把所有项目记录混成一份。每个 MCP 实例仍绑定当前项目，读取其他项目 ID 会被拒绝。
+- 新增 `memory_get_scope` 工具供 AI 获取本会话的项目 ID；服务初始化指引要求先读当前记忆，完成后发布相关持久事实或交接，不保存凭据或整段聊天。
+- Zero3 内置 Codex 继续通过项目注入读取同一连接配置，已支持全项目授权；其他 MCP 配置保持原样。
+
+本轮实际 stdio MCP 验收包括 Zero3、LanToDo 和全新临时目录：初始化、六个工具发现、权威上下文读取（`stale: false`）以及跨范围读取拒绝。可使用 `scripts/verify-memory-mcp.mjs --server <绝对路径> --config <绝对路径> --cwd <工作区绝对路径>` 复验，不调用模型，不输出令牌或完整上下文。
+
+另外从 LanToDo 目录启动真实 Codex app-server，`mcpServerStatus/list` 已发现全局 `zero3_shared_memory` 的六个工具。该调用验证 Codex 配置和工具发现，不代表当前已经打开的旧会话完成了重载。新增范围分配测试与原离线缓存测试共 6 项通过；桌面三个 TypeScript 配置检查通过。
 
 ### 同步状态含义
 

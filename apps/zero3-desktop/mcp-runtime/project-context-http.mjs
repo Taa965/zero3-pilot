@@ -25,7 +25,8 @@ const sharedProjects = new Map()
 async function readProject(projectId) {
   const configPath = process.env.ZERO3_SHARED_MEMORY_CONFIG?.trim()
   if (!configPath) return core.getProject(projectId)
-  if (!JSON.parse(await fs.readFile(configPath, 'utf8')).projects?.includes(projectId)) return core.getProject(projectId)
+  const projects = JSON.parse(await fs.readFile(configPath, 'utf8')).projects
+  if (!projects?.includes(projectId) && !projects?.includes('*')) return core.getProject(projectId)
   if (!sharedProjects.has(projectId)) {
     const opening = import('../memory-sync-runtime/shared-memory-runtime.mjs')
       .then(({ openSharedMemory }) => openSharedMemory({ configPath, projectId }))

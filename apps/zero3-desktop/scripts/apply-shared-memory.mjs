@@ -17,7 +17,7 @@ ipcMain.handle('zero3:shared-memory:read', async (_event, request: unknown) => {
   const configPath = process.env.ZERO3_SHARED_MEMORY_CONFIG
   if (!configPath) return { mode: 'unconfigured' }
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-  if (!Array.isArray(config.projects) || !config.projects.includes(projectId)) return { mode: 'unconfigured' }
+  if (!Array.isArray(config.projects) || (!config.projects.includes(projectId) && !config.projects.includes('*'))) return { mode: 'unconfigured' }
   if (!zero3SharedReaders.has(projectId)) {
     zero3SharedReaders.set(projectId, zero3SharedModule().then(m => m.openSharedMemory({ configPath, projectId })).catch(error => { zero3SharedReaders.delete(projectId); throw error }))
   }
@@ -33,7 +33,7 @@ ipcMain.handle('zero3:shared-memory:import', async () => {
   const config = JSON.parse(text)
   if (!Array.isArray(config.projects) || !config.projects.length) throw new Error('连接配置需要指定项目')
   const { validateSharedMemoryConfig } = await zero3SharedModule()
-  validateSharedMemoryConfig(config, config.projects[0])
+  validateSharedMemoryConfig(config, config.projects.find(id => id !== '*') ?? 'config-validation')
   fs.mkdirSync(path.dirname(zero3SharedDefaultConfig), { recursive: true, mode: 0o700 })
   const temporary = zero3SharedDefaultConfig + '.tmp-' + crypto.randomUUID()
   fs.writeFileSync(temporary, JSON.stringify(config, null, 2), { mode: 0o600 })
@@ -49,6 +49,14 @@ app.on('before-quit', () => { for (const opening of zero3SharedReaders.values())
 export function applyZero3SharedMemory() {
   const mainFile = path.join(hermesDesktopDir, 'electron', 'main.ts')
   let main = fs.readFileSync(mainFile, 'utf8')
+  const start = main.indexOf('const zero3SharedDefaultConfig =')
+  if (start >= 0) {
+    const endMarker = "app.on('before-quit', () => { for (const opening of zero3SharedReaders.values()) void opening.then(memory => memory.close()).catch(() => {}) })"
+    const end = main.indexOf(endMarker, start)
+    if (end < 0) throw new Error('shared memory overlay: missing owned block end')
+    main = main.slice(0, start) + runtime.trim() + main.slice(end + endMarker.length)
+    fs.writeFileSync(mainFile, main)
+  }
   if (!main.includes("ipcMain.handle('zero3:shared-memory:read'")) {
     const marker = 'const zero3CodexAppServer = createZero3CodexAppServer()'
     if (!main.includes(marker)) throw new Error('shared memory overlay: missing main anchor')

@@ -33,15 +33,16 @@ function zero3ProjectContextMcpConfig(projectId?: string): Record<string, unknow
   const serverPath = path.join(app.getAppPath(), 'electron', 'zero3', 'mcp', 'project-context-server.mjs')
   const stateDir = path.join(app.getPath('userData'), 'zero3', 'project-context')
   const configured = process.env.ZERO3_SHARED_MEMORY_CONFIG
-  const sharedConfig = configured && projectId && JSON.parse(fs.readFileSync(configured, 'utf8')).projects?.includes(projectId) ? configured : undefined
+  const projects = configured ? JSON.parse(fs.readFileSync(configured, 'utf8')).projects : []
+  const sharedConfig = configured && (projects?.includes('*') || (projectId && projects?.includes(projectId))) ? configured : undefined
   return { 'mcp_servers.zero3_project_context': {
     command: process.execPath, args: [serverPath],
     env: { ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: stateDir, ZERO3_ACTIVE_PROJECT_ID: projectId ?? ZERO3_UNASSIGNED_PROJECT_ID,
-      ...(sharedConfig ? { ZERO3_SHARED_MEMORY_CONFIG: sharedConfig } : {}) },
+      ...(sharedConfig ? { ZERO3_SHARED_MEMORY_CONFIG: sharedConfig, ZERO3_MEMORY_AUTO_PROJECT: projectId ? '0' : '1' } : {}) },
     enabled: true, required: true, startup_timeout_sec: 15, tool_timeout_sec: 30,
     default_tools_approval_mode: 'approve',
     enabled_tools: ['project_get_context', 'handoff_get', 'handoff_publish',
-      ...(sharedConfig ? ['memory_publish_event', 'memory_sync_status'] : ['project_put_context'])]
+      ...(sharedConfig ? ['memory_get_scope', 'memory_publish_event', 'memory_sync_status'] : ['project_put_context'])]
   } }
 }
 function zero3WithProjectContextMcp(method: string, params: unknown): unknown {

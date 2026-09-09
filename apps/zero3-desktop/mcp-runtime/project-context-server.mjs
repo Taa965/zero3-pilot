@@ -18,8 +18,10 @@ function activeProjectId() {
 function result(value) {
   return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value }
 }
-function serverFactory(core, shared) {
-  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION })
+function serverFactory(core, shared, projectId) {
+  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION }, shared ? {
+    instructions: `Shared memory is active for project ${projectId}. Read project_get_context before relying on prior project decisions. Use memory_get_scope to discover this session's project. Publish only relevant durable facts or task handoffs; never credentials or whole chats. Use the entity version from the latest read. Only acked means shared; pending is offline and conflicts require re-reading. Other projects have separate scopes.`
+  } : {})
   server.registerTool('project_get_context', {
     title: 'Get Zero3 Project Context', description: 'Read the canonical Zero3 project context snapshot.',
     inputSchema: z.object({ projectId: ID }), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
@@ -33,6 +35,10 @@ function serverFactory(core, shared) {
     return result(await core.putProject(projectId, expectedVersion, payload))
   })
   if (shared) {
+    server.registerTool('memory_get_scope', {
+      title: 'Current shared memory project', description: 'Discover the project ID automatically selected for this Codex session. All new projects and sessions can use shared memory; each workspace keeps its own scope.',
+      inputSchema: z.object({}), annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+    }, async () => result({ projectId }))
     server.registerTool('memory_publish_event', {
       title: 'Publish shared memory event',
       description: 'Publish a zero3.memory.event.v1 project/task event. Supply a stable UUID and expected_entity_version. Authority must be <=60. pending means queued offline, acked means committed, conflict requires re-reading and a new merged event. Never claim pending is shared.',
@@ -60,12 +66,15 @@ function serverFactory(core, shared) {
 
 try {
   const root = resolveContextRoot()
-  const core = createProjectContextCore({ rootDir: root, activeProjectId: activeProjectId() })
   const configPath = process.env.ZERO3_SHARED_MEMORY_CONFIG?.trim()
-  const sharedForProject = configPath && JSON.parse(await fs.readFile(configPath, 'utf8')).projects?.includes(activeProjectId())
-  const shared = sharedForProject ? await (await import('../memory-sync-runtime/shared-memory-runtime.mjs')).openSharedMemory({ configPath, projectId: activeProjectId() }) : null
+  const config = configPath ? JSON.parse(await fs.readFile(configPath, 'utf8')) : null
+  const projectId = process.env.ZERO3_MEMORY_AUTO_PROJECT === '1' && config
+    ? (await import('../memory-sync-runtime/workspace-scope.mjs')).resolveWorkspaceScope({ config }).projectId : activeProjectId()
+  const core = createProjectContextCore({ rootDir: root, activeProjectId: projectId })
+  const sharedForProject = config?.projects?.includes(projectId) || config?.projects?.includes('*')
+  const shared = sharedForProject ? await (await import('../memory-sync-runtime/shared-memory-runtime.mjs')).openSharedMemory({ configPath, projectId }) : null
   process.stdin.once('end', () => { void shared?.close() })
-  await serveStdio(() => serverFactory(core, shared))
+  await serveStdio(() => serverFactory(core, shared, projectId))
 } catch (error) {
   console.error(`[${SERVER_NAME}] ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
   process.exitCode = 1

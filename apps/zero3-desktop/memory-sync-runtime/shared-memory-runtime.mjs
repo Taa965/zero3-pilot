@@ -13,7 +13,7 @@ export function validateSharedMemoryConfig(config, projectId) {
   if (url.username || url.password || url.search || url.hash || (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))) {
     throw new Error('shared memory requires HTTPS or loopback HTTP without URL credentials')
   }
-  if (!Array.isArray(config.projects) || !config.projects.includes(projectId)) throw new Error('shared memory project is not configured')
+  if (!/^[A-Za-z0-9._:-]{1,256}$/.test(projectId ?? '') || !Array.isArray(config.projects) || (!config.projects.includes(projectId) && !config.projects.includes('*'))) throw new Error('shared memory project is not configured')
   for (const key of ['token', 'clientId', 'deviceId', 'cacheDir']) {
     if (typeof config[key] !== 'string' || !config[key].trim()) throw new Error(`shared memory ${key} is required`)
   }
