@@ -34,6 +34,7 @@ type Zero3ApiProfileStored = {
 type Zero3ApiProfileState = { version: 1; profiles: Record<string, Zero3ApiProfileStored> }
 const ZERO3_API_PROFILE_FILE = path.join(app.getPath('userData'), 'zero3', 'api-profiles-v1.json')
 const ZERO3_API_TIMEOUT_MS = 10 * 60_000
+const ZERO3_LOCAL_AGENT_TIMEOUT_MS = 60 * 60_000
 const ZERO3_API_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 function zero3SessionRecord(value: unknown): Record<string, unknown> {
@@ -715,9 +716,11 @@ function zero3OfficialCodexCliEnv(): NodeJS.ProcessEnv {
   return env
 }
 
-async function zero3RunCodexCliTurn(requestValue: unknown) {
+async function zero3RunCodexCliTurn(requestValue: unknown, onProgress?: (payload: { requestId: string; detail: string }) => void) {
   const request = zero3SessionRecord(requestValue)
   const text = zero3SessionText(request.text, 'Codex prompt', 128_000)
+  const requestId = zero3SessionOptionalText(request.requestId, 128)
+  const emitProgress = (detail: string) => { if (requestId && onProgress) onProgress({ requestId, detail }) }
   const cwd = zero3SessionOptionalText(request.cwd, 4096)
   const threadId = zero3SessionOptionalText(request.threadId, 512)
   const model = zero3SessionOptionalText(request.model, 256)
@@ -737,6 +740,7 @@ async function zero3RunCodexCliTurn(requestValue: unknown) {
     ? ['exec', 'resume', ...runtimeArgs, threadId, '-', '--json', '--skip-git-repo-check']
     : ['exec', ...runtimeArgs, '--json', '--skip-git-repo-check', '--sandbox', 'workspace-write']
   const { spawn } = await import('node:child_process')
+  emitProgress('正在启动 Codex CLI')
   return new Promise<{ text: string; threadId: string | null }>((resolve, reject) => {
     const resolved = resolveWindowsCommand(command)
     const child = spawn(resolved.command, [...resolved.args, ...args], {
@@ -748,10 +752,34 @@ async function zero3RunCodexCliTurn(requestValue: unknown) {
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     let bytes = 0
+    let stdoutTail = ''
+    const reportOutput = (chunk: Buffer) => {
+      stdoutTail += chunk.toString('utf8')
+      const lines = stdoutTail.split('\n')
+      stdoutTail = lines.pop() ?? ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('{')) continue
+        let event: Record<string, unknown>
+        try { event = zero3SessionRecord(JSON.parse(trimmed)) } catch { continue }
+        if (event.type === 'thread.started') emitProgress('Codex 会话已建立')
+        else if (event.type === 'turn.started') emitProgress('Codex 已开始处理')
+        else if (event.type === 'turn.completed') emitProgress('Codex 已完成执行，正在整理回复')
+        else if (event.type === 'item.started') {
+          const item = zero3SessionRecord(event.item)
+          if (item.type === 'command_execution') emitProgress('正在执行项目命令')
+          else if (item.type === 'reasoning') emitProgress('正在分析项目')
+        } else if (event.type === 'item.completed') {
+          const item = zero3SessionRecord(event.item)
+          if (item.type === 'command_execution') emitProgress('项目命令执行完成，继续处理')
+          else if (item.type === 'agent_message' && typeof item.text === 'string' && item.text.trim()) emitProgress('阶段性输出：' + item.text.trim().replace(/\s+/g, ' ').slice(0, 180))
+        }
+      }
+    }
     const timer = setTimeout(() => {
       child.kill()
-      reject(new Error('Codex CLI turn timed out after 10 minutes'))
-    }, ZERO3_API_TIMEOUT_MS)
+      reject(new Error('Codex CLI turn timed out after 60 minutes'))
+    }, ZERO3_LOCAL_AGENT_TIMEOUT_MS)
     const capture = (target: Buffer[], chunk: Buffer) => {
       bytes += chunk.byteLength
       if (bytes > ZERO3_API_MAX_RESPONSE_BYTES) {
@@ -761,7 +789,11 @@ async function zero3RunCodexCliTurn(requestValue: unknown) {
       }
       target.push(Buffer.from(chunk))
     }
-    child.stdout.on('data', chunk => capture(stdout, Buffer.from(chunk)))
+    child.stdout.on('data', chunk => {
+      const buffer = Buffer.from(chunk)
+      capture(stdout, buffer)
+      reportOutput(buffer)
+    })
     child.stderr.on('data', chunk => capture(stderr, Buffer.from(chunk)))
     child.once('error', error => { clearTimeout(timer); reject(error) })
     // The prompt travels over stdin so it is never parsed as an argument.
@@ -1013,7 +1045,9 @@ ipcMain.handle('zero3:session-providers:zero3-turn', async (_event, requestValue
 })
 ipcMain.handle('zero3:session-providers:set-archived', (_event, request: unknown) => zero3SetSessionProviderArchived(request))
 ipcMain.handle('zero3:session-providers:claude-turn', (_event, request: unknown) => zero3RunClaudeTurn(request))
-ipcMain.handle('zero3:session-providers:codex-turn', (_event, request: unknown) => zero3RunCodexCliTurn(request))
+ipcMain.handle('zero3:session-providers:codex-turn', (event, request: unknown) => zero3RunCodexCliTurn(request, payload => {
+  if (!event.sender.isDestroyed()) event.sender.send('zero3:session-providers:codex-progress', payload)
+}))
 app.on('before-quit', () => zero3ApiAgentBridge.stop())
 `
 
@@ -1026,7 +1060,12 @@ const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionP
   zero3Turn: request => ipcRenderer.invoke('zero3:session-providers:zero3-turn', request),
   setArchived: request => ipcRenderer.invoke('zero3:session-providers:set-archived', request),
   claudeTurn: request => ipcRenderer.invoke('zero3:session-providers:claude-turn', request),
-  codexTurn: request => ipcRenderer.invoke('zero3:session-providers:codex-turn', request)
+  codexTurn: request => ipcRenderer.invoke('zero3:session-providers:codex-turn', request),
+  onCodexProgress: callback => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('zero3:session-providers:codex-progress', listener)
+    return () => ipcRenderer.removeListener('zero3:session-providers:codex-progress', listener)
+  }
 })
 
 contextBridge.exposeInMainWorld('zero3AgentTask', {`
@@ -1040,6 +1079,7 @@ type Zero3SessionProviderStatus = {
   detail: string
 }
 type Zero3SessionProviderStatusMap = Record<Zero3SessionProviderId, Zero3SessionProviderStatus>
+type Zero3CodexProgressEvent = { requestId: string; detail: string }
 type Zero3ApiProfileProtocol = 'openai_compatible' | 'anthropic' | 'google_gemini'
 type Zero3ApiProfile = {
   id: string
@@ -1062,7 +1102,8 @@ const globalSurface = String.raw`    zero3SessionProviders: {
       zero3Turn: (request: { profileId: string; text: string; cwd: string; projectId: string; threadId?: string | null; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) => Promise<{ text: string; model: string; profileId: string; threadId: string }>
       setArchived: (request: { provider: Exclude<Zero3SessionProviderId, 'gpt' | 'gemini'>; runtimeId?: string | null; archived: boolean }) => Promise<{ native: boolean; detail: string }>
       claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null }) => Promise<{ text: string; sessionId: string | null }>
-      codexTurn: (request: { text: string; cwd?: string | null; threadId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | null }) => Promise<{ text: string; threadId: string | null }>
+      codexTurn: (request: { text: string; cwd?: string | null; threadId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | null; requestId?: string | null }) => Promise<{ text: string; threadId: string | null }>
+      onCodexProgress: (callback: (event: Zero3CodexProgressEvent) => void) => () => void
     }
     zero3AgentTask: {`
 

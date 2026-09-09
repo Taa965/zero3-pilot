@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Codicon } from '@/components/ui/codicon'
 import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
@@ -22,11 +22,12 @@ function providerLabel(provider: LocalSessionProvider) {
 // The official Codex client is an external collaborator on the same footing as
 // Claude Code, so it is driven through the session-provider bridge rather than
 // the pinned Agent Kernel that Zero3 itself runs on.
-async function runCodexTurn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string) {
+async function runCodexTurn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string, requestId: string) {
   const result = await window.zero3SessionProviders.codexTurn({
     text: prompt,
     cwd: project?.rootPath ?? null,
     threadId: session.runtimeId,
+    requestId,
     model: session.model,
     effort: session.thinkingEffort === 'low' || session.thinkingEffort === 'medium' || session.thinkingEffort === 'high' || session.thinkingEffort === 'xhigh'
       ? session.thinkingEffort
@@ -98,11 +99,26 @@ export function LocalConversationSurface({ provider, session, project, onChanged
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState(session?.messages ?? [])
+  const [codexProgress, setCodexProgress] = useState<string | null>(null)
+  const activeCodexRequestId = useRef<string | null>(null)
 
   useEffect(() => {
     setMessages(session?.messages ?? [])
     setError(null)
   }, [session?.id, session?.updatedAt])
+
+  useEffect(() => {
+    setCodexProgress(null)
+    activeCodexRequestId.current = null
+  }, [session?.id])
+
+  useEffect(() => {
+    const subscribe = window.zero3SessionProviders?.onCodexProgress
+    if (provider !== 'codex' || typeof subscribe !== 'function') return
+    return subscribe(event => {
+      if (event.requestId === activeCodexRequestId.current) setCodexProgress(event.detail)
+    })
+  }, [provider])
 
   const requiresProject = provider === 'codex' || provider === 'claude' || provider === 'antigravity' || provider === 'zero3'
   const canSend = Boolean(session && input.trim() && !busy && (!requiresProject || project))
@@ -121,11 +137,16 @@ export function LocalConversationSurface({ provider, session, project, onChanged
     setInput('')
     setBusy(true)
     setError(null)
+    const codexRequestId = provider === 'codex' ? crypto.randomUUID() : null
+    if (codexRequestId) {
+      activeCodexRequestId.current = codexRequestId
+      setCodexProgress('正在启动 Codex…')
+    }
     try {
       const withUser = LocalSessionAdapter.appendMessage(session.id, 'user', prompt)
       setMessages(withUser.messages)
       let response: string
-      if (provider === 'codex') response = await runCodexTurn(withUser, project, prompt)
+      if (provider === 'codex') response = await runCodexTurn(withUser, project, prompt, codexRequestId!)
       else if (provider === 'claude') response = await runClaudeTurn(withUser, project, prompt)
       else if (provider === 'antigravity') response = await runAntigravityTurn(withUser, project, prompt)
       else response = await runZero3Turn(withUser, project, prompt)
@@ -139,6 +160,10 @@ export function LocalConversationSurface({ provider, session, project, onChanged
       setMessages(withAssistant.messages)
       onChanged()
     } finally {
+      if (codexRequestId && activeCodexRequestId.current === codexRequestId) {
+        activeCodexRequestId.current = null
+        setCodexProgress(null)
+      }
       setBusy(false)
     }
   }
@@ -174,7 +199,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
             </div>
           </div>
         ))}
-        {busy && <div className="text-xs text-(--ui-text-tertiary)">正在执行 {providerLabel(provider)}…</div>}
+        {busy && <div className="text-xs text-(--ui-text-tertiary)">正在执行 {providerLabel(provider)}…{provider === 'codex' && codexProgress ? ` ${codexProgress}` : ''}</div>}
         {error && <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600">{error}</div>}
       </div>
 

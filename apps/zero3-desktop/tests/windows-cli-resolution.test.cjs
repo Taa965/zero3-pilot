@@ -193,6 +193,18 @@ test('CLI authorization opens one direct Windows command prompt without nested s
   assert.doesNotMatch(runtime, /start "" cmd\.exe \/k/)
 })
 
+test('local Codex turns surface progress and allow long-running coding work', () => {
+  const runtime = fs.readFileSync(path.join(root, 'scripts', 'apply-session-provider-runtime.mjs'), 'utf8')
+  const surface = fs.readFileSync(path.join(root, 'ui-v2', 'conversations', 'LocalConversationSurface.tsx'), 'utf8')
+  assert.match(runtime, /const ZERO3_LOCAL_AGENT_TIMEOUT_MS = 60 \* 60_000/)
+  assert.match(runtime, /Codex CLI turn timed out after 60 minutes/)
+  assert.match(runtime, /zero3:session-providers:codex-progress/)
+  assert.match(runtime, /onCodexProgress/)
+  assert.match(surface, /onCodexProgress/)
+  assert.match(surface, /requestId/)
+  assert.match(surface, /codexProgress/)
+})
+
 test('local Codex provider reuses the official CLI home instead of the isolated Agent Kernel home', () => {
   const runtime = fs.readFileSync(path.join(root, 'scripts', 'apply-session-provider-runtime.mjs'), 'utf8')
   assert.match(runtime, /function zero3OfficialCodexCliEnv\(\)[\s\S]*delete env\.CODEX_HOME/)
