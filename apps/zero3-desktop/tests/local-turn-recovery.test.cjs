@@ -85,6 +85,7 @@ function runtimeFixture({ output, stderr = '', code = 0 }) {
   const exports = evaluate(helpers + runtime + '\nexport { zero3RunCodexCliTurn, zero3RunClaudeTurn };', {
     path, app: { getPath: () => '/fixture' },
     process: { env: { CODEX_HOME: '/isolated-kernel' } },
+    claudeCliEnvironment: async () => ({ HTTPS_PROXY: 'http://127.0.0.1:7897' }),
     ZERO3_API_TIMEOUT_MS: 1000, ZERO3_LOCAL_AGENT_TIMEOUT_MS: 1000, ZERO3_API_MAX_RESPONSE_BYTES: 16 * 1024 * 1024,
     resolveWindowsCommand: command => ({ command, args: [] })
   }, {
@@ -127,6 +128,7 @@ test('Claude stdin transport returns the real reply and resumed session id', asy
   assert.equal(result.text, 'OK')
   assert.equal(result.sessionId, 'session-1')
   assert.equal(f.calls[0].args.at(-2), '--resume')
+  assert.equal(f.calls[0].options.env.HTTPS_PROXY, 'http://127.0.0.1:7897')
 })
 
 test('the actual conversation restores a failed prompt, resets its model, and sends successfully', async () => {

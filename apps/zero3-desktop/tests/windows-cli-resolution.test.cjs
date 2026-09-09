@@ -239,7 +239,7 @@ test('local Codex provider reuses the official CLI home instead of the isolated 
   const runtime = fs.readFileSync(path.join(root, 'scripts', 'apply-session-provider-runtime.mjs'), 'utf8')
   assert.match(runtime, /function zero3OfficialCodexCliEnv\(\)[\s\S]*delete env\.CODEX_HOME/)
   assert.ok((runtime.match(/env: zero3OfficialCodexCliEnv\(\)/g) || []).length >= 2)
-  assert.match(runtime, /provider === 'codex' \? zero3OfficialCodexCliEnv\(\) : process\.env/)
+  assert.match(runtime, /provider === 'codex' \? zero3OfficialCodexCliEnv\(\) : provider === 'claude' \? await claudeCliEnvironment\(\) : process\.env/)
 })
 
 test('an npm-installed CLI still resolves when the inherited PATH does not list it', () => {

@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 
 import { createExecutorFailure } from '../failure-normalizer.ts'
 import { describeResolution, resolveWindowsCommand } from './windows-command.ts'
+import { claudeCliEnvironment } from './claude-environment.ts'
 import {
   ZERO3_EXECUTOR_CONTRACT,
   ZERO3_HANDOFF_PROTOCOL,
@@ -80,12 +81,13 @@ function capturedText(chunks: Buffer[]): string {
 }
 
 export class NodeClaudeCliRunner implements ClaudeCliRunner {
-  run(request: ClaudeCliRunRequest): Promise<ClaudeCliRunResult> {
+  async run(request: ClaudeCliRunRequest): Promise<ClaudeCliRunResult> {
+    const env = await claudeCliEnvironment()
     return new Promise((resolve, reject) => {
       const resolved = resolveWindowsCommand(request.command)
       const child = spawn(resolved.command, [...resolved.args, ...request.args], {
         ...(request.cwd ? { cwd: request.cwd } : {}),
-        env: process.env,
+        env,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe']
       })

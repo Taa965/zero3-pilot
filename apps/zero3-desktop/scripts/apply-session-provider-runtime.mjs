@@ -754,13 +754,14 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
   if (effort) args.push('--effort', effort)
   if (sessionId) args.push('--resume', sessionId)
   const { spawn } = await import('node:child_process')
+  const env = await claudeCliEnvironment()
   return new Promise<{ text: string; sessionId: string | null }>((resolve, reject) => {
     // Bare "claude" is an npm shim on Windows, which spawn cannot launch
     // without a shell -- and a shell would hand the prompt text to cmd.exe.
     const resolved = resolveWindowsCommand(command)
     const child = spawn(resolved.command, [...resolved.args, ...args], {
       ...(cwd ? { cwd } : {}),
-      env: process.env,
+      env,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     })
@@ -965,7 +966,7 @@ async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) 
   // command line by hand. Passing argv entries instead lets Node quote each one,
   // so the empty title stays an empty title and the command stays one argument.
   const child = spawn(comspec, ['/d', '/c', 'start', '', comspec, '/k', command], {
-    env: provider === 'codex' ? zero3OfficialCodexCliEnv() : process.env,
+    env: provider === 'codex' ? zero3OfficialCodexCliEnv() : provider === 'claude' ? await claudeCliEnvironment() : process.env,
     stdio: 'ignore',
     windowsHide: false
   })
@@ -1336,7 +1337,8 @@ export function applyZero3SessionProviderRuntime() {
       from: "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'",
       to:
         "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'\n" +
-        "import { describeResolution, diagnoseWindowsCommand, resolveWindowsCommand } from './zero3/executor-runtime/external/windows-command'"
+        "import { describeResolution, diagnoseWindowsCommand, resolveWindowsCommand } from './zero3/executor-runtime/external/windows-command'\n" +
+        "import { claudeCliEnvironment } from './zero3/executor-runtime/external/claude-environment'"
     },
     {
       label: 'session provider IPC before Agent orchestrator',
