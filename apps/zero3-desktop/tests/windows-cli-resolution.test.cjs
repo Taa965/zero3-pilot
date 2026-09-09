@@ -196,8 +196,8 @@ test('CLI authorization opens one direct Windows command prompt without nested s
 test('local Codex turns surface progress and allow long-running coding work', () => {
   const runtime = fs.readFileSync(path.join(root, 'scripts', 'apply-session-provider-runtime.mjs'), 'utf8')
   const surface = fs.readFileSync(path.join(root, 'ui-v2', 'conversations', 'LocalConversationSurface.tsx'), 'utf8')
-  assert.match(runtime, /const ZERO3_LOCAL_AGENT_TIMEOUT_MS = 60 \* 60_000/)
-  assert.match(runtime, /Codex CLI turn timed out after 60 minutes/)
+  assert.match(runtime, /const ZERO3_LOCAL_AGENT_TIMEOUT_MS = 6000 \* 60_000/)
+  assert.match(runtime, /Codex CLI turn timed out after 6000 minutes/)
   assert.match(runtime, /zero3:session-providers:codex-progress/)
   assert.match(runtime, /onCodexProgress/)
   assert.match(surface, /onCodexProgress/)

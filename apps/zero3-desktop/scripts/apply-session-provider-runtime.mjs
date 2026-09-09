@@ -34,7 +34,7 @@ type Zero3ApiProfileStored = {
 type Zero3ApiProfileState = { version: 1; profiles: Record<string, Zero3ApiProfileStored> }
 const ZERO3_API_PROFILE_FILE = path.join(app.getPath('userData'), 'zero3', 'api-profiles-v1.json')
 const ZERO3_API_TIMEOUT_MS = 10 * 60_000
-const ZERO3_LOCAL_AGENT_TIMEOUT_MS = 60 * 60_000
+const ZERO3_LOCAL_AGENT_TIMEOUT_MS = 6000 * 60_000
 const ZERO3_API_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 function zero3SessionRecord(value: unknown): Record<string, unknown> {
@@ -778,7 +778,7 @@ async function zero3RunCodexCliTurn(requestValue: unknown, onProgress?: (payload
     }
     const timer = setTimeout(() => {
       child.kill()
-      reject(new Error('Codex CLI turn timed out after 60 minutes'))
+      reject(new Error('Codex CLI turn timed out after 6000 minutes'))
     }, ZERO3_LOCAL_AGENT_TIMEOUT_MS)
     const capture = (target: Buffer[], chunk: Buffer) => {
       bytes += chunk.byteLength
