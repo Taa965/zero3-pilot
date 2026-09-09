@@ -3,6 +3,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { repoRoot } from './config.mjs'
+import { reportLaunchEnvironment } from './launch-preflight.mjs'
 
 // Serialize reloads: stop the old tree completely before creating its successor.
 // Key repeats during a build/stop collapse into a single pending reload.
@@ -76,6 +77,9 @@ export async function runConsole() {
     child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Process cleanup failed (${code}).`)))
   })
   const hint = () => console.log('\n[R] 重新编译并重载   [Q / Ctrl+C] 退出（无需回车）\n')
+  // Say whether this console can see the machine before the build spends a
+  // minute only to report every local CLI as missing.
+  reportLaunchEnvironment()
   const controller = new ReloadController({
     start: async () => {
       for (const port of [5174, 9222]) {

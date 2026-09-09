@@ -120,6 +120,24 @@ jobs:
         working-directory: upstream/hermes-agent
         run: npm install --workspace apps/desktop
 
+      # These suites are the only thing that reads the overlay generators as
+      # source. Two of them were silently truncated to zero bytes by a
+      # concurrent process and nothing noticed, because nothing ran them. The
+      # glob is deliberate: a new suite is covered the moment it is added.
+      - name: Zero3 desktop orchestrator tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $suites = Get-ChildItem 'apps/zero3-desktop/tests/*.test.cjs' | Sort-Object Name
+          if ($suites.Count -lt 1) { throw 'no Zero3 desktop test suites were found' }
+          # An overlay generator emptied on disk still "passes" node --check, so
+          # assert the sources these suites assert against are non-empty first.
+          Get-ChildItem 'apps/zero3-desktop/scripts/*.mjs' | ForEach-Object {
+            if ($_.Length -eq 0) { throw "overlay generator is empty: $($_.Name)" }
+          }
+          node --test @($suites.FullName)
+          if ($LASTEXITCODE -ne 0) { throw 'Zero3 desktop orchestrator tests failed' }
+
       - name: Typecheck Zero3-branded Hermes UI shell
         working-directory: upstream/hermes-agent
         run: npm --workspace apps/desktop run typecheck
