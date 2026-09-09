@@ -45,6 +45,40 @@ test('Claude failure mapping distinguishes quota, rate limit, and context exhaus
   assert.equal(mapClaudeFailure({ exitCode: 1, stdout: '', stderr: '401 authentication_failed' }), 'auth_required')
 })
 
+test('a logged-out Claude CLI probes as installed-but-unauthorized, not as missing', async () => {
+  // What `claude auth status` really prints when no login exists: JSON on
+  // stdout, exit code 1, and not one word the failure mapper recognises.
+  const runner = new QueueRunner([{
+    exitCode: 1,
+    stdout: '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}',
+    stderr: ''
+  }])
+  const probe = await new ClaudeExecutor({ runner }).probe()
+  assert.equal(probe.status, 'auth_required')
+  assert.deepEqual(runner.requests[0].args, ['auth', 'status'])
+})
+
+test('a logged-in Claude CLI probes as ready even when the exit code disagrees', async () => {
+  const runner = new QueueRunner([{ exitCode: 1, stdout: '{"loggedIn":true,"authMethod":"claudeai"}', stderr: '' }])
+  assert.equal((await new ClaudeExecutor({ runner }).probe()).status, 'ready')
+})
+
+test('only a failed spawn makes the Claude CLI unavailable', async () => {
+  const missing: ClaudeCliRunner = {
+    run: async () => { throw Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }) }
+  }
+  const missingProbe = await new ClaudeExecutor({ runner: missing }).probe()
+  assert.equal(missingProbe.status, 'unavailable')
+  assert.match(missingProbe.detail ?? '', /ENOENT/)
+
+  // An unrecognised answer still came from a binary that exists, so the picker
+  // must not report it as 未安装.
+  const confused = new QueueRunner([{ exitCode: 1, stdout: '', stderr: "unknown command 'auth'" }])
+  const confusedProbe = await new ClaudeExecutor({ runner: confused }).probe()
+  assert.equal(confusedProbe.status, 'auth_required')
+  assert.match(confusedProbe.detail ?? '', /unknown command/)
+})
+
 test('Claude executor captures CLI session id and resumes subsequent prompts', async () => {
   const runner = new QueueRunner([
     { exitCode: 0, stdout: '{"result":"first","session_id":"session-real","usage":{"input_tokens":10,"output_tokens":5},"total_cost_usd":0.01}', stderr: '' },

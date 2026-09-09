@@ -102,12 +102,15 @@ export class Zero3ClaudeTaskAdapter {
     this.#now = options.now ?? (() => new Date().toISOString())
   }
 
-  async availability(): Promise<{ available: boolean; authenticated: boolean | null }> {
+  // `detail` carries the probe's own words forward. Without it every failure
+  // collapses into one canned sentence in the picker, and a CLI that is present
+  // but unusable is indistinguishable from one that was never installed.
+  async availability(): Promise<{ available: boolean; authenticated: boolean | null; detail: string | null }> {
     const probe = await this.#factory().probe()
-    if (probe.status === 'ready') return { available: true, authenticated: true }
-    if (probe.status === 'auth_required') return { available: true, authenticated: false }
-    if (probe.status === 'unsupported') return { available: false, authenticated: null }
-    return { available: false, authenticated: null }
+    const detail = probe.detail?.trim() || null
+    if (probe.status === 'ready') return { available: true, authenticated: true, detail }
+    if (probe.status === 'auth_required') return { available: true, authenticated: false, detail }
+    return { available: false, authenticated: null, detail }
   }
 
   async dispatchTask(task: Zero3TaskSpecV2): Promise<Zero3ExecutionResultV2> {

@@ -124,7 +124,7 @@ test('Claude availability exposes authenticated and unavailable probe states wit
     stateDir: '/var/lib/zero3/project-context',
     executorFactory: () => new FakeClaudeExecutor()
   })
-  assert.deepEqual(await ready.availability(), { available: true, authenticated: true })
+  assert.deepEqual(await ready.availability(), { available: true, authenticated: true, detail: null })
 
   const unavailable = new Zero3ClaudeTaskAdapter({
     serverPath: '/opt/zero3/project-context-server.mjs',
@@ -136,5 +136,5 @@ test('Claude availability exposes authenticated and unavailable probe states wit
       close: async () => {}
     })
   })
-  assert.deepEqual(await unavailable.availability(), { available: false, authenticated: null })
+  assert.deepEqual(await unavailable.availability(), { available: false, authenticated: null, detail: null })
 })

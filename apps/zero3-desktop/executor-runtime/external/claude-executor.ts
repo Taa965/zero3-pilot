@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 
 import { createExecutorFailure } from '../failure-normalizer.ts'
-import { resolveWindowsCommand } from './windows-command.ts'
+import { describeResolution, resolveWindowsCommand } from './windows-command.ts'
 import {
   ZERO3_EXECUTOR_CONTRACT,
   ZERO3_HANDOFF_PROTOCOL,
@@ -135,7 +135,10 @@ export class NodeClaudeCliRunner implements ClaudeCliRunner {
         }
         stderr.push(buffer)
       })
-      child.once('error', error => fail(error))
+      // A bare ENOENT names the command that was asked for, not the file that
+      // was tried, so it reads identically whether the CLI is absent or the
+      // lookup came back empty. Say which one it was.
+      child.once('error', error => fail(new Error(`${error.message} (${describeResolution(request.command, resolved)})`)))
       child.once('close', code => finish({ exitCode: code, stdout: capturedText(stdout), stderr: capturedText(stderr), aborted }))
     })
   }
@@ -163,6 +166,24 @@ export function mapClaudeFailure(result: ClaudeCliRunResult): ExecutorFailureCod
   if (/econnreset|econnrefused|enotfound|network error|socket hang up|transport/.test(value)) return 'transport_lost'
   if (/billing_error/.test(value)) return 'provider_error'
   return result.exitCode && result.exitCode !== 0 ? 'process_crash' : 'provider_error'
+}
+
+/**
+ * Read the `loggedIn` flag out of `claude auth status` output. Returns null
+ * when the text is not that payload, which keeps "no answer" distinct from a
+ * definite "not logged in".
+ */
+export function parseClaudeLoggedIn(stdout: string): boolean | null {
+  const text = stdout.trim()
+  if (!text) return null
+  try {
+    const value = JSON.parse(text) as unknown
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const loggedIn = (value as { loggedIn?: unknown }).loggedIn
+    return typeof loggedIn === 'boolean' ? loggedIn : null
+  } catch {
+    return null
+  }
 }
 
 function parseJson(stdout: string): ClaudeJsonResult | null {
@@ -213,21 +234,44 @@ export class ClaudeExecutor implements Zero3Executor {
   }
 
   async probe(): Promise<ExecutorProbe> {
+    let result: ClaudeCliRunResult
     try {
-      const result = await this.#runner.run({ command: this.#command, args: ['auth', 'status'] })
-      if (result.exitCode === 0) return { executorId: this.descriptor.id, status: 'ready' }
-      const code = mapClaudeFailure(result)
-      return {
-        executorId: this.descriptor.id,
-        status: code === 'auth_required' ? 'auth_required' : 'unavailable',
-        detail: errorText(result).slice(0, 2_000) || `Claude CLI exited with code ${result.exitCode}`
-      }
+      result = await this.#runner.run({ command: this.#command, args: ['auth', 'status'] })
     } catch (error) {
+      // Only a failed spawn proves the CLI is absent. Every path below ran the
+      // binary, so it exists and the question is merely whether it is usable.
       return {
         executorId: this.descriptor.id,
         status: 'unavailable',
         detail: error instanceof Error ? error.message : String(error)
       }
+    }
+
+    if (result.exitCode === 0) return { executorId: this.descriptor.id, status: 'ready' }
+
+    // `claude auth status` answers on stdout with JSON and exits non-zero when
+    // no login exists. That payload is the authoritative signal: the generic
+    // failure mapping finds no auth wording in it, reads the non-zero exit as a
+    // crash, and an installed-but-logged-out CLI then shows up as 未安装.
+    const loggedIn = parseClaudeLoggedIn(result.stdout)
+    if (loggedIn !== null) {
+      return loggedIn
+        ? { executorId: this.descriptor.id, status: 'ready' }
+        : {
+            executorId: this.descriptor.id,
+            status: 'auth_required',
+            detail: 'Claude Code CLI is installed but not logged in'
+          }
+    }
+
+    // The command ran and said something unrecognised -- an older CLI without
+    // `auth status`, a broken install, a transient network failure. Report it
+    // as unauthorized rather than missing, so the picker still offers the
+    // authorization path and shows what the CLI actually printed.
+    return {
+      executorId: this.descriptor.id,
+      status: 'auth_required',
+      detail: errorText(result).slice(0, 2_000) || `Claude CLI exited with code ${result.exitCode}`
     }
   }
 

@@ -247,9 +247,11 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
             // A provider that cannot be used says why on its own card. The
             // detail otherwise lives only in the panel below, one click away,
             // so an installed Antigravity IDE reads as a flat 未安装 with no
-            // hint that the missing piece is the separate agy CLI.
+            // hint that the missing piece is the separate agy CLI. 待检测 needs
+            // it just as much: an inconclusive probe is a dead end unless the
+            // card says what the CLI actually did.
             const blockingDetail =
-              itemStatus && !disabledByProject && (!itemStatus.available || itemStatus.authenticated === false)
+              itemStatus && !disabledByProject && itemStatus.authMode !== 'web' && itemStatus.authenticated !== true
                 ? itemStatus.detail
                 : null
             return (

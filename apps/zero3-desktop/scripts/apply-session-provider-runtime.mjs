@@ -862,9 +862,16 @@ async function zero3ProbeCodexCli() {
     const timer = setTimeout(() => child.kill(), 20_000)
     child.stdout.on('data', chunk => chunks.push(Buffer.from(chunk)))
     child.stderr.on('data', chunk => chunks.push(Buffer.from(chunk)))
-    child.once('error', () => {
+    child.once('error', error => {
       clearTimeout(timer)
-      resolve({ available: false, authenticated: null, detail: '未检测到官方 Codex 客户端 (codex)' })
+      // Discarding the spawn error left this branch unable to distinguish a CLI
+      // that is not installed from one that resolved and then failed to start.
+      const cause = error instanceof Error ? error.message : String(error)
+      resolve({
+        available: false,
+        authenticated: null,
+        detail: '未检测到官方 Codex 客户端 (codex)：' + cause + '（' + describeResolution(command, resolved) + '）'
+      })
     })
     child.once('close', code => {
       clearTimeout(timer)
@@ -947,6 +954,39 @@ async function zero3SetSessionProviderArchived(requestValue: unknown) {
   })
 }
 
+// Zero3 launched from inside a Codex sandbox cannot see the machine it is
+// supposed to be driving: the workspace permission profile hides the user's
+// install directories and the sandbox switches the network off. Every CLI probe
+// then reports 未安装 or a timeout for tools that are installed and working, so
+// name the real cause instead of letting the picker blame the CLI.
+function zero3SandboxRestriction(): string | null {
+  const profile = process.env.CODEX_PERMISSION_PROFILE?.trim()
+  const networkOff = process.env.CODEX_SANDBOX_NETWORK_DISABLED?.trim() === '1'
+  if (!profile && !networkOff) return null
+  const limits: string[] = []
+  if (profile) limits.push('工作区以外的文件不可见')
+  if (networkOff) limits.push('网络已禁用')
+  return '注意：Zero3 正运行在 Codex 沙箱中（' + limits.join('、') + '），本机 CLI 检测不可靠。请从资源管理器直接启动 Start-Zero3.cmd 后重试。'
+}
+
+// When a CLI probe comes back unavailable, record what resolution actually saw.
+// A screenshot of the card can only carry one truncated sentence, and the step
+// that fails is several layers below it.
+const ZERO3_CLI_REPORT_FILE = path.join(app.getPath('userData'), 'zero3', 'cli-resolution-report.json')
+async function zero3WriteCliResolutionReport(commands: string[]) {
+  try {
+    const fsp = await import('node:fs/promises')
+    const report = {
+      at: new Date().toISOString(),
+      commands: commands.map(command => diagnoseWindowsCommand(command))
+    }
+    await fsp.mkdir(path.dirname(ZERO3_CLI_REPORT_FILE), { recursive: true })
+    await fsp.writeFile(ZERO3_CLI_REPORT_FILE, JSON.stringify(report, null, 2) + '\n', 'utf8')
+  } catch {
+    // Diagnostics must never take the picker down with them.
+  }
+}
+
 async function zero3SessionProviderStatus() {
   const codexCli = await zero3ProbeCodexCli()
   const codexAvailable = codexCli.available
@@ -955,20 +995,26 @@ async function zero3SessionProviderStatus() {
 
   const claude = await zero3ClaudeTaskAdapter.availability()
   const agy = zero3Antigravity.status()
-  let antigravityAuthenticated: boolean | null = null
-  let sawAuthFailure = false
-  for (const logicalSessionId of agy.activeSessions) {
-    try {
-      const binding = await zero3Antigravity.binding(logicalSessionId)
-      if (binding?.authState === 'AUTHENTICATED') {
-        antigravityAuthenticated = true
-        break
-      }
-      if (binding?.authState === 'AUTH_REQUIRED' || binding?.authState === 'AUTH_EXPIRED') sawAuthFailure = true
-    } catch {}
-  }
-  if (antigravityAuthenticated !== true && sawAuthFailure) antigravityAuthenticated = false
+  // The adapter reads a running session's auth state first and only then pays
+  // for a CLI round trip, so this stays cheap while the picker is open.
+  const antigravityAuth = agy.available
+    ? await zero3Antigravity.probeAuthentication()
+    : { authenticated: null as boolean | null, detail: null as string | null }
+  const antigravityAuthenticated = antigravityAuth.authenticated
   const profiles = await zero3ListApiProfiles()
+  const unresolved = [
+    ...(claude.available ? [] : ['claude']),
+    ...(codexAvailable ? [] : [process.env.ZERO3_CODEX_CLI_BIN?.trim() || 'codex'])
+  ]
+  if (unresolved.length > 0) void zero3WriteCliResolutionReport(unresolved)
+  const sandbox = zero3SandboxRestriction()
+  // A probe that ran and failed knows more than the canned sentence does. Keep
+  // its words: '未安装' with no reason is exactly what makes an installed CLI
+  // impossible to diagnose from this dialog.
+  const zero3ProviderHint = (text: string, detail: string | null) => {
+    const reason = detail ? text + '（' + detail.replace(/\s+/g, ' ').slice(0, 120) + '）' : text
+    return sandbox ? reason + ' ' + sandbox : reason
+  }
 
   return {
     gpt: { available: true, authenticated: null, authMode: 'web' as const, detail: '使用内嵌 ChatGPT 官方网页登录' },
@@ -978,13 +1024,23 @@ async function zero3SessionProviderStatus() {
       available: claude.available,
       authenticated: claude.authenticated,
       authMode: 'cli' as const,
-      detail: !claude.available ? '未检测到 Claude Code CLI' : claude.authenticated === true ? '已复用本机 Claude Code 登录' : 'Claude Code 已安装但未授权'
+      detail: !claude.available
+        ? zero3ProviderHint('未检测到 Claude Code CLI', claude.detail)
+        : claude.authenticated === true
+          ? '已复用本机 Claude Code 登录'
+          : zero3ProviderHint('Claude Code 已安装但未登录：请在终端运行 claude 完成官方登录', claude.detail)
     },
     antigravity: {
       available: agy.available,
       authenticated: antigravityAuthenticated,
       authMode: 'cli' as const,
-      detail: !agy.available ? '未检测到官方 agy CLI；桌面版 Antigravity 应用本身不含该命令行工具' : antigravityAuthenticated === true ? '已验证 Antigravity 授权' : antigravityAuthenticated === false ? 'Antigravity 授权已失效或缺失' : '已安装；首次启动会验证官方授权'
+      detail: !agy.available
+        ? zero3ProviderHint('未检测到官方 agy CLI；桌面版 Antigravity 应用本身不含该命令行工具', null)
+        : antigravityAuthenticated === true
+          ? '已验证 Antigravity 授权'
+          : antigravityAuthenticated === false
+            ? zero3ProviderHint('Antigravity 授权已失效或缺失：请运行 agy 完成官方登录', antigravityAuth.detail)
+            : zero3ProviderHint('已安装；暂时无法确认官方授权状态', antigravityAuth.detail)
     },
     zero3: {
       available: true,
@@ -1114,7 +1170,7 @@ export function applyZero3SessionProviderRuntime() {
       from: "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'",
       to:
         "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'\n" +
-        "import { resolveWindowsCommand } from './zero3/executor-runtime/external/windows-command'"
+        "import { describeResolution, diagnoseWindowsCommand, resolveWindowsCommand } from './zero3/executor-runtime/external/windows-command'"
     },
     {
       label: 'session provider IPC before Agent orchestrator',

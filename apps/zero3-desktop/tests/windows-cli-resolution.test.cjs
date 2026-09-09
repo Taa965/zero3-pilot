@@ -12,7 +12,7 @@ const ts = desktopRequire('typescript')
 // The module under test only imports node builtins, so the loader stays small.
 // `process` is injected rather than inherited: the Windows branch has to be
 // exercised on every platform CI runs, not only on Windows.
-function load(relative, processStub) {
+function load(relative, processStub, overrides = {}) {
   const filename = path.join(root, relative)
   const source = fs.readFileSync(filename, 'utf8')
   const result = ts.transpileModule(source, {
@@ -22,15 +22,32 @@ function load(relative, processStub) {
   })
   assert.equal(result.diagnostics?.length ?? 0, 0, relative)
   const exports = {}
-  vm.runInNewContext(result.outputText, { exports, require, process: processStub, console, Error }, { filename })
+  const localRequire = name => (Object.hasOwn(overrides, name) ? overrides[name] : require(name))
+  vm.runInNewContext(result.outputText, { exports, require: localRequire, process: processStub, console, Error }, { filename })
   return exports
 }
 
-function resolverFor(pathDirs, platform = 'win32') {
+// The resolver falls back to `where.exe`, which would otherwise consult this
+// machine's real PATH and make every fixture-based assertion depend on what
+// happens to be installed. Tests decide what Windows answers.
+function whereStub(stdout = '', status = 1) {
+  const calls = []
+  return {
+    calls,
+    module: {
+      spawnSync(command, args, options) {
+        calls.push({ command, args, options })
+        return { status, stdout }
+      }
+    }
+  }
+}
+
+function resolverFor(pathDirs, platform = 'win32', env = {}, where = whereStub()) {
   const resolve = load('executor-runtime/external/windows-command.ts', {
     platform,
-    env: { PATH: pathDirs.join(path.delimiter) }
-  }).resolveWindowsCommand
+    env: { PATH: pathDirs.join(path.delimiter), ...env }
+  }, { 'node:child_process': where.module }).resolveWindowsCommand
   // The module runs in its own realm, so its objects fail deepStrictEqual on
   // prototype identity alone. Rebuild the result in this realm.
   return command => {
@@ -213,4 +230,113 @@ test('local Codex provider reuses the official CLI home instead of the isolated 
   assert.match(runtime, /function zero3OfficialCodexCliEnv\(\)[\s\S]*delete env\.CODEX_HOME/)
   assert.ok((runtime.match(/env: zero3OfficialCodexCliEnv\(\)/g) || []).length >= 2)
   assert.match(runtime, /provider === 'codex' \? zero3OfficialCodexCliEnv\(\) : process\.env/)
+})
+
+test('an npm-installed CLI still resolves when the inherited PATH does not list it', () => {
+  // Nothing guarantees the app inherits the PATH a fresh shell has. Checking
+  // the installer locations directly keeps detection working when it does not.
+  const { dir, cleanup } = fixture()
+  try {
+    const roaming = path.join(dir, 'Roaming')
+    const npmDir = path.join(roaming, 'npm')
+    fs.mkdirSync(npmDir, { recursive: true })
+    const exe = touch(npmDir, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')
+    writeShim(npmDir, 'claude.cmd', ['@ECHO off', '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*'])
+
+    const missingFromPath = resolverFor([path.join(dir, 'unrelated')], 'win32', { APPDATA: roaming })
+    assert.deepStrictEqual(missingFromPath('claude'), { command: exe, args: [] })
+
+    // Nothing on PATH and nothing installed still yields the original command,
+    // so the caller keeps its own spawn failure instead of a fabricated path.
+    const nothing = resolverFor([path.join(dir, 'unrelated')], 'win32', { APPDATA: path.join(dir, 'empty') })
+    assert.deepStrictEqual(nothing('claude'), { command: 'claude', args: [] })
+  } finally {
+    cleanup()
+  }
+})
+
+test('a winget-installed CLI resolves from the WinGet Links directory', () => {
+  const { dir, cleanup } = fixture()
+  try {
+    const links = path.join(dir, 'Local', 'Microsoft', 'WinGet', 'Links')
+    const exe = touch(links, 'agy.exe')
+    const resolve = resolverFor([], 'win32', { LOCALAPPDATA: path.join(dir, 'Local') })
+    assert.deepStrictEqual(resolve('agy'), { command: exe, args: [] })
+  } finally {
+    cleanup()
+  }
+})
+
+test('a sandboxed launch is named as the cause instead of blaming the CLI', () => {
+  // Inside a Codex sandbox the install directories are hidden and the network
+  // is off, so every probe fails for reasons that have nothing to do with the
+  // CLI. The picker has to say that, or 未安装 is unactionable.
+  const runtime = fs.readFileSync(path.join(root, 'scripts', 'apply-session-provider-runtime.mjs'), 'utf8')
+  assert.match(runtime, /function zero3SandboxRestriction\(\): string \| null/)
+  assert.match(runtime, /CODEX_PERMISSION_PROFILE/)
+  assert.match(runtime, /CODEX_SANDBOX_NETWORK_DISABLED/)
+  assert.match(runtime, /Start-Zero3\.cmd/)
+  assert.match(runtime, /const sandbox = zero3SandboxRestriction\(\)/)
+})
+
+test('where.exe rescues a lookup that scanning PATH missed', () => {
+  // Reading process.env.PATH is a reconstruction of the lookup; where.exe is
+  // the lookup. When they disagree - and in the desktop app they have - the
+  // one that actually launches the CLI wins.
+  const { dir, cleanup } = fixture()
+  try {
+    const exe = touch(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')
+    writeShim(dir, 'claude.cmd', ['@ECHO off', '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*'])
+
+    // Nothing on the searched PATH, but Windows knows where the shim is.
+    const where = whereStub(`${path.join(dir, 'claude.cmd')}\r\n`, 0)
+    const resolve = resolverFor([path.join(dir, 'unrelated')], 'win32', { APPDATA: path.join(dir, 'nope') }, where)
+
+    assert.deepStrictEqual(resolve('claude'), { command: exe, args: [] })
+    // Rebuild in this realm: the args array was created inside the vm context.
+    assert.deepEqual(where.calls.map(call => [call.command, [...call.args]]), [['where.exe', ['claude']]])
+  } finally {
+    cleanup()
+  }
+})
+
+test('a where.exe hit is still verified before it is trusted', () => {
+  const { dir, cleanup } = fixture()
+  try {
+    // Windows reports a path that no longer exists, or a shim whose target was
+    // uninstalled: neither may be handed back as if it were spawnable.
+    const missing = whereStub(`${path.join(dir, 'ghost.exe')}\r\n`, 0)
+    assert.deepStrictEqual(resolverFor([dir], 'win32', {}, missing)('ghost'), { command: 'ghost', args: [] })
+
+    writeShim(dir, 'broken.cmd', ['"%dp0%\\missing\\broken.exe" %*'])
+    const brokenShim = whereStub(`${path.join(dir, 'broken.cmd')}\r\n`, 0)
+    assert.deepStrictEqual(resolverFor([dir], 'win32', {}, brokenShim)('broken'), { command: 'broken', args: [] })
+  } finally {
+    cleanup()
+  }
+})
+
+test('a failed where.exe lookup never breaks resolution', () => {
+  const { dir, cleanup } = fixture()
+  try {
+    const throwing = { calls: [], module: { spawnSync() { throw new Error('where.exe is missing') } } }
+    assert.deepStrictEqual(resolverFor([dir], 'win32', {}, throwing)('claude'), { command: 'claude', args: [] })
+  } finally {
+    cleanup()
+  }
+})
+
+test('the spawn failure says whether the lookup or the launch failed', () => {
+  const { dir, cleanup } = fixture()
+  try {
+    const describe = load('executor-runtime/external/windows-command.ts', {
+      platform: 'win32',
+      env: { PATH: dir }
+    }, { 'node:child_process': whereStub().module }).describeResolution
+
+    assert.match(describe('claude', { command: 'C:\\npm\\claude.exe', args: [] }), /resolved to C:\\npm\\claude\.exe/)
+    assert.match(describe('claude', { command: 'claude', args: [] }), /unresolved: \d+ directories searched/)
+  } finally {
+    cleanup()
+  }
 })
