@@ -660,13 +660,43 @@ fn status_label(status: &WeixinConnectionStatus) -> String {
     )
 }
 
+/// Windows `cmd.exe` splits its command line on `&` before `start` ever sees it,
+/// so an unquoted QR link such as `https://…/q/7GiQu1?qrcode=…&bot_type=3` opens
+/// in the browser truncated at the first `&` (and `bot_type=3` is then run as a
+/// command). 微信 rejects the truncated link with 网络错误. Quoting the URL keeps
+/// it intact; URLs that quoting cannot make safe — a literal quote, or a `%`
+/// that `cmd /C` may expand as an environment variable — get no command line and
+/// are opened without a shell instead.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_start_command_line(url: &str) -> Option<String> {
+    if url.is_empty()
+        || url.contains(['"', '%'])
+        || url
+            .chars()
+            .any(|value| value.is_whitespace() || value.is_control())
+    {
+        return None;
+    }
+    // Do not run cmd AutoRun hooks or expand !variables! in the URL.
+    Some(format!("/D /V:OFF /C start \"\" \"{url}\""))
+}
+
 fn open_qr_url(url: &str) -> anyhow::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()
-            .context("打开微信 ClawBot 二维码链接")?;
+        use std::os::windows::process::CommandExt;
+
+        let started = match windows_start_command_line(url) {
+            Some(command_line) => Command::new("cmd").raw_arg(command_line).spawn().is_ok(),
+            None => false,
+        };
+        if !started {
+            Command::new("rundll32.exe")
+                .arg("url.dll,FileProtocolHandler")
+                .arg(url)
+                .spawn()
+                .context("打开微信 ClawBot 二维码链接")?;
+        }
     }
     #[cfg(target_os = "macos")]
     {
@@ -699,6 +729,45 @@ mod tests {
         let truncated = truncate_utf8(&text, 100);
         assert!(truncated.is_char_boundary(truncated.len()));
         assert!(truncated.chars().count() <= 100);
+    }
+
+    #[test]
+    fn qr_url_query_survives_cmd_quoting() {
+        let url = "https://liteapp.weixin.qq.com/q/7GiQu1?qrcode=94c252e1&bot_type=3";
+        let command_line = windows_start_command_line(url).unwrap();
+        assert_eq!(command_line, format!("/D /V:OFF /C start \"\" \"{url}\""));
+        assert!(command_line.ends_with("&bot_type=3\""));
+    }
+
+    #[test]
+    fn unsafe_qr_urls_get_no_cmd_command_line() {
+        assert!(windows_start_command_line("https://example.test/\" & calc").is_none());
+        assert!(windows_start_command_line("https://example.test/?q=%PATH%").is_none());
+        assert!(windows_start_command_line("https://example.test/a b").is_none());
+        assert!(windows_start_command_line("").is_none());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cmd_preserves_complete_qr_url() {
+        use std::os::windows::process::CommandExt;
+
+        let url = "https://example.test/q?id=123&bot_type=3&literal=!ZERO3_QR_TEST!";
+        // Exercise cmd's real parser without launching a browser.
+        let command_line =
+            windows_start_command_line(url)
+                .unwrap()
+                .replacen("start \"\"", "echo", 1);
+        let output = Command::new("cmd")
+            .raw_arg(command_line)
+            .env("ZERO3_QR_TEST", "must-not-expand")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            format!("\"{url}\"")
+        );
     }
 
     #[test]

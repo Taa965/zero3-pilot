@@ -74,3 +74,28 @@ test('active project scope rejects cross-project reads and writes', async () => 
     assert.deepEqual(b.payload, { owner: 'B' })
   })
 })
+
+test('failed atomic replacement cleans temporary files and preserves the previous context', async t => {
+  await withContextRoot(async root => {
+    const core = createProjectContextCore({ rootDir: root, activeProjectId: 'project-a' })
+    await core.putProject('project-a', 0, { value: 'original' })
+    const projects = path.join(root, 'projects')
+    const originalFiles = await fs.readdir(projects)
+    const rename = t.mock.method(fs, 'rename', async () => {
+      throw Object.assign(new Error('simulated replacement failure'), { code: 'EPERM' })
+    })
+    try {
+      await assert.rejects(core.putProject('project-a', 1, { value: 'replacement' }), /simulated replacement failure/)
+      assert.deepEqual(await fs.readdir(projects), originalFiles)
+      const unchanged = await core.getProject('project-a')
+      assert.equal(unchanged.version, 1)
+      assert.deepEqual(unchanged.payload, { value: 'original' })
+    } finally {
+      rename.mock.restore()
+    }
+    const retried = await core.putProject('project-a', 1, { value: 'retried' })
+    assert.equal(retried.version, 2)
+    assert.deepEqual(retried.payload, { value: 'retried' })
+    assert.deepEqual(await fs.readdir(projects), originalFiles)
+  })
+})

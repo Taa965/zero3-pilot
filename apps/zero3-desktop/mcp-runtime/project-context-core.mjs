@@ -46,8 +46,12 @@ async function writeJson(file, value) {
   const text = `${serialized(value)}\n`
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`
-  await fs.writeFile(temporary, text, { encoding: 'utf8', mode: 0o600 })
-  await fs.rename(temporary, file)
+  try {
+    await fs.writeFile(temporary, text, { encoding: 'utf8', mode: 0o600 })
+    await fs.rename(temporary, file)
+  } finally {
+    await fs.rm(temporary, { force: true })
+  }
 }
 
 export function createProjectContextCore(options = {}) {
