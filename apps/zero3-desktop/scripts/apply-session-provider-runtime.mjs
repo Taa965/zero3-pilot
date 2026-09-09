@@ -831,17 +831,22 @@ async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) 
   const command = provider === 'codex' ? 'codex login' : provider === 'claude' ? 'claude auth login' : 'agy'
   const { spawn } = await import('node:child_process')
   const comspec = process.env.ComSpec || 'cmd.exe'
-  // Spawn one independent command prompt directly. Nesting cmd.exe through
-  // The start command adds a second quoting layer; Electron/Node argument escaping can
-  // make Windows interpret the quote prefix as a bogus path.
-  const child = spawn(comspec, ['/d', '/k', command], {
-    detached: true,
+  // The start command is what creates the console. Spawning cmd.exe directly
+  // from a GUI process opens no window at all: detached:true means
+  // DETACHED_PROCESS on Windows, which denies the child a console, and without
+  // it the child still inherits nothing to attach to. Either way cmd exits at
+  // once, so the login the user was told to complete never ran.
+  //
+  // The nested-quoting hazard this used to avoid comes from building one
+  // command line by hand. Passing argv entries instead lets Node quote each one,
+  // so the empty title stays an empty title and the command stays one argument.
+  const child = spawn(comspec, ['/d', '/c', 'start', '', comspec, '/k', command], {
     env: provider === 'codex' ? zero3OfficialCodexCliEnv() : process.env,
     stdio: 'ignore',
     windowsHide: false
   })
   child.unref()
-  return { opened: true, detail: '已打开官方 CLI 授权终端；完成登录后重新点击该平台卡片即可检测授权状态' }
+  return { opened: true, detail: '已打开官方 CLI 授权终端；请在终端里完成登录并等它提示成功后再关闭，然后重新点击该平台卡片检测授权状态' }
 }
 // 'codex login status' answers both questions at once: a spawn failure means
 // the official client is not installed, a non-zero exit means it is installed
@@ -987,24 +992,60 @@ async function zero3WriteCliResolutionReport(commands: string[]) {
   }
 }
 
+type Zero3CliProbeResult = { available: boolean | null; authenticated: boolean | null; detail: string | null }
+
+// Each probe launches a CLI that can stall: codex login status has hung for
+// minutes here, and agy models is a network round trip. Run them concurrently
+// and bound each one, so the dialog costs the slowest probe rather than their
+// sum and never looks frozen.
+const ZERO3_PROVIDER_PROBE_DEADLINE_MS = 15_000
+function zero3ProbeWithDeadline<T>(work: Promise<T>, onUnknown: T): Promise<T> {
+  return new Promise<T>(resolve => {
+    let settled = false
+    const done = (value: T) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const timer = setTimeout(() => done(onUnknown), ZERO3_PROVIDER_PROBE_DEADLINE_MS)
+    work.then(done, () => done(onUnknown))
+  })
+}
+
 async function zero3SessionProviderStatus() {
-  const codexCli = await zero3ProbeCodexCli()
+  const agy = zero3Antigravity.status()
+  // available stays null on a timeout rather than collapsing to false: a probe
+  // that did not finish has not shown the CLI to be missing, and 未安装 on a
+  // working install is the exact failure this picker already put users through.
+  const [codexCli, claude, antigravityAuth, profiles] = await Promise.all([
+    zero3ProbeWithDeadline<Zero3CliProbeResult>(zero3ProbeCodexCli(), {
+      available: null,
+      authenticated: null,
+      detail: '检测超时（15 秒）：官方 Codex 客户端未在时限内响应'
+    }),
+    zero3ProbeWithDeadline<Zero3CliProbeResult>(zero3ClaudeTaskAdapter.availability(), {
+      available: null,
+      authenticated: null,
+      detail: '检测超时（15 秒）：Claude Code CLI 未在时限内响应'
+    }),
+    // The adapter reads a running session's auth state first and only then pays
+    // for a CLI round trip, so this stays cheap while the picker is open.
+    agy.available
+      ? zero3ProbeWithDeadline<{ authenticated: boolean | null; detail: string | null }>(
+          zero3Antigravity.probeAuthentication(),
+          { authenticated: null, detail: '授权检测超时（15 秒）' }
+        )
+      : Promise.resolve({ authenticated: null as boolean | null, detail: null as string | null }),
+    zero3ListApiProfiles()
+  ])
   const codexAvailable = codexCli.available
   const codexAuthenticated = codexCli.authenticated
   const codexDetail = codexCli.detail
-
-  const claude = await zero3ClaudeTaskAdapter.availability()
-  const agy = zero3Antigravity.status()
-  // The adapter reads a running session's auth state first and only then pays
-  // for a CLI round trip, so this stays cheap while the picker is open.
-  const antigravityAuth = agy.available
-    ? await zero3Antigravity.probeAuthentication()
-    : { authenticated: null as boolean | null, detail: null as string | null }
   const antigravityAuthenticated = antigravityAuth.authenticated
-  const profiles = await zero3ListApiProfiles()
   const unresolved = [
-    ...(claude.available ? [] : ['claude']),
-    ...(codexAvailable ? [] : [process.env.ZERO3_CODEX_CLI_BIN?.trim() || 'codex'])
+    ...(claude.available === false ? ['claude'] : []),
+    ...(codexAvailable === false ? [process.env.ZERO3_CODEX_CLI_BIN?.trim() || 'codex'] : [])
   ]
   if (unresolved.length > 0) void zero3WriteCliResolutionReport(unresolved)
   const sandbox = zero3SandboxRestriction()
@@ -1129,7 +1170,8 @@ contextBridge.exposeInMainWorld('zero3AgentTask', {`
 const globalTypes = String.raw`
 type Zero3SessionProviderId = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'zero3'
 type Zero3SessionProviderStatus = {
-  available: boolean
+  /** null means the probe did not finish: unknown, not missing. */
+  available: boolean | null
   authenticated: boolean | null
   authMode: 'web' | 'cli' | 'api_profile'
   detail: string

@@ -75,6 +75,9 @@ export type WindowsCommandDiagnosis = {
   platform: string
   pathEntries: number
   searchDirectories: number
+  /** Verbatim, so a stray quote or an unexpanded variable is visible. */
+  pathRaw: string | null
+  directories: string[]
   env: Record<string, string | null>
   /** Every place a candidate file was actually seen, and by which call. */
   sightings: Array<{ file: string; existsSync: boolean; statIsFile: boolean }>
@@ -131,6 +134,8 @@ export function diagnoseWindowsCommand(command: string): WindowsCommandDiagnosis
     platform: process.platform,
     pathEntries: (process.env.PATH ?? '').split(path.delimiter).filter(Boolean).length,
     searchDirectories: directories.length,
+    pathRaw: process.env.PATH ?? null,
+    directories,
     env: {
       APPDATA: process.env.APPDATA ?? null,
       LOCALAPPDATA: process.env.LOCALAPPDATA ?? null,

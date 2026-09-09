@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Codicon } from '@/components/ui/codicon'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
@@ -83,6 +83,10 @@ const PROTOCOL_DEFAULTS: Record<ApiProtocol, { baseUrl: string; model: string }>
 
 function statusLabel(status: StatusMap[WorkspaceProvider] | undefined) {
   if (!status) return { text: '检测中', className: 'text-(--ui-text-tertiary)' }
+  // A probe that timed out reports null, and that is not the same as missing.
+  // Saying 未安装 for a CLI that is installed and merely slow is what sent this
+  // dialog's users chasing an install problem that did not exist.
+  if (status.available === null) return { text: '检测超时', className: 'text-amber-600' }
   if (!status.available) return { text: '未安装', className: 'text-red-600' }
   if (status.authenticated === false) return { text: '未授权', className: 'text-amber-600' }
   if (status.authenticated === true) return { text: '已就绪', className: 'text-green-600' }
@@ -114,7 +118,12 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
+  // Each probe spawns a CLI, and focus fires more often than a person changes
+  // windows. One refresh at a time keeps that from turning into a pile-up.
+  const refreshing = useRef(false)
   const refresh = async () => {
+    if (refreshing.current) return
+    refreshing.current = true
     try {
       const [nextStatus, nextProfiles] = await Promise.all([
         window.zero3SessionProviders.status(),
@@ -126,11 +135,23 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
       setMessage(null)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      refreshing.current = false
     }
   }
 
   useEffect(() => {
     void refresh()
+  }, [])
+
+  // Signing a CLI in happens in a terminal and a browser, so the answer changes
+  // while this window is in the background. Re-probe when it comes back rather
+  // than leaving the user to guess that the card needs clicking again.
+  useEffect(() => {
+    const onFocus = () => { void refresh() }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {

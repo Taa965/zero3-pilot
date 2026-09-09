@@ -39,3 +39,41 @@ test('provider picker removes the redundant selected-provider status panel', () 
 test('provider cards re-probe runtime status when selected again after CLI login', () => {
   assert.match(picker, /setSelected\(provider\.id\)[\s\S]*void refresh\(\)/)
 })
+
+test('provider probes run concurrently and each one is bounded', () => {
+  // Sequentially, one stalled CLI held the whole dialog: codex login status has
+  // hung for minutes here and agy models is a network call, so the worst case
+  // was their sum and the picker simply looked frozen.
+  assert.match(runtime, /await Promise\.all\(\[/)
+  assert.match(runtime, /zero3ProbeWithDeadline<Zero3CliProbeResult>\(zero3ProbeCodexCli\(\)/)
+  assert.match(runtime, /zero3ProbeWithDeadline<Zero3CliProbeResult>\(zero3ClaudeTaskAdapter\.availability\(\)/)
+  assert.match(runtime, /zero3ProbeWithDeadline<\{ authenticated: boolean \| null; detail: string \| null \}>\(/)
+  assert.match(runtime, /const ZERO3_PROVIDER_PROBE_DEADLINE_MS = 15_000/)
+  // The old sequential awaits must be gone, or one of them still blocks.
+  assert.doesNotMatch(runtime, /const codexCli = await zero3ProbeCodexCli\(\)/)
+  assert.doesNotMatch(runtime, /const claude = await zero3ClaudeTaskAdapter\.availability\(\)/)
+})
+
+test('a probe that timed out reports unknown rather than missing', () => {
+  // available:false renders as 未安装, which for a working install is the exact
+  // wrong answer - and the one that already cost a long debugging detour.
+  assert.match(runtime, /available: null,\r?\n\s+authenticated: null,\r?\n\s+detail: '检测超时/)
+  assert.match(runtime, /available: boolean \| null/)
+  assert.match(picker, /status\.available === null\) return \{ text: '检测超时'/)
+
+  // And an unfinished probe must not be written up as a resolution failure.
+  assert.match(runtime, /claude\.available === false \? \['claude'\] : \[\]/)
+  assert.match(runtime, /codexAvailable === false \?/)
+})
+
+test('the picker re-probes when the window regains focus, one refresh at a time', () => {
+  // Signing in happens in a terminal and a browser; the answer changes while
+  // this window is in the background.
+  assert.match(picker, /window\.addEventListener\('focus', onFocus\)/)
+  assert.match(picker, /window\.removeEventListener\('focus', onFocus\)/)
+  // Focus fires more often than a person changes windows, and every refresh
+  // spawns CLIs.
+  assert.match(picker, /const refreshing = useRef\(false\)/)
+  assert.match(picker, /if \(refreshing\.current\) return/)
+  assert.match(picker, /refreshing\.current = false/)
+})

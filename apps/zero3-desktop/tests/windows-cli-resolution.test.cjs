@@ -204,10 +204,20 @@ test('paths and non-Windows platforms are passed straight through', () => {
   }
 })
 
-test('CLI authorization opens one direct Windows command prompt without nested start quoting', () => {
+test('CLI authorization actually opens a console the user can type into', () => {
   const runtime = fs.readFileSync(path.join(root, 'scripts', 'apply-session-provider-runtime.mjs'), 'utf8')
-  assert.match(runtime, /spawn\(comspec, \['\/d', '\/k', command\]/)
-  assert.doesNotMatch(runtime, /start "" cmd\.exe \/k/)
+
+  // Measured from a real Electron main process, which has no console of its
+  // own: spawning cmd.exe directly opened no window and the child exited at
+  // once, both with `detached: true` (DETACHED_PROCESS denies it a console) and
+  // without. Only `start` created one. The button reported success either way,
+  // so the login it told the user to complete silently never ran.
+  assert.match(runtime, /spawn\(comspec, \['\/d', '\/c', 'start', '', comspec, '\/k', command\]/)
+  assert.doesNotMatch(runtime, /detached: true/)
+
+  // The nested-quoting hazard is real but comes from hand-built command lines.
+  // Each argv entry stays separate here, so Node quotes them individually.
+  assert.doesNotMatch(runtime, /'start "" ' \+|`start "" \$\{/)
 })
 
 test('local Codex turns surface progress and allow long-running coding work', () => {
