@@ -15,6 +15,7 @@ import {
   resolveHermesHome
 } from './config.mjs'
 import { applyZero3DataDirectory } from './apply-data-directory.mjs'
+import { applyDevelopmentGroupBridge } from './apply-development-group-bridge.mjs'
 
 const mode = process.argv[2] ?? 'dev'
 const allowedModes = new Set(['dev', 'typecheck', 'dist:win'])
@@ -278,9 +279,17 @@ const externallyPrepared = ['1', 'true', 'yes', 'on'].includes(
   (process.env.ZERO3_DESKTOP_ALREADY_PREPARED ?? '').trim().toLowerCase()
 )
 if (!externallyPrepared) {
-  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs')])
+  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs'),
+    ...(process.argv.includes('--desktop-reload') ? ['--refresh-generated'] : [])])
   runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-gemini-integration.mjs')])
-  runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])
+  if (mode === 'dev' && process.argv.includes('--desktop-reload') && isFile(pinnedCodexBinary('debug'))) {
+    // A desktop reload only rebuilds Electron/React. Replaying Rust patches into
+    // a concurrently edited core checkout can fail or interfere with core work.
+    applyDevelopmentGroupBridge()
+    console.log('[Zero3] Desktop reload: reusing the compiled Codex core.')
+  } else {
+    runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])
+  }
 }
 
 const hermesHome = resolveHermesHome()

@@ -128,6 +128,33 @@ function assertOnlyOverlayChanges() {
   }
 }
 
+function refreshGeneratedShell() {
+  // The allowlist and pinned HEAD were checked before this function. Preserve
+  // the previous generated files before rebuilding them, without resetting Git
+  // or touching unrelated upstream edits and the Rust core checkout.
+  const changes = trackedHermesChanges()
+  if (!changes.length) return
+  const originals = changes.map(relative => ({ relative, content: execFileSync('git', [
+    '-C', hermesRoot, 'show', `${pins.hermes}:${relative}`
+  ], { maxBuffer: 20 * 1024 * 1024 }) }))
+  const backup = path.join(repoRoot, 'output', 'desktop-source-backups', `${Date.now()}-${process.pid}`)
+  fs.mkdirSync(backup, { recursive: true })
+  for (const { relative } of originals) {
+    const source = path.join(hermesRoot, relative)
+    const target = path.join(backup, relative)
+    if (!fs.existsSync(source)) continue
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(source, target)
+  }
+  fs.writeFileSync(path.join(backup, 'manifest.json'), JSON.stringify({ pin: pins.hermes, files: changes }, null, 2))
+  for (const { relative, content } of originals) {
+    const target = path.join(hermesRoot, relative)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, content)
+  }
+  console.log(`[Zero3] Previous generated shell saved in ${backup}`)
+}
+
 function brandLocaleText(source) {
   return source
     .split('\n')
@@ -271,6 +298,7 @@ assertPin('Codex', codexRoot, pins.codex)
 assertPin('Hermes Agent', hermesRoot, pins.hermes)
 assertPin('DeepSeek Harness', deepseekRoot, pins.deepseek)
 assertOnlyOverlayChanges()
+if (process.argv.includes('--refresh-generated')) refreshGeneratedShell()
 applyBrandOverlay()
 applyZero3ShellPolicy()
 applyZero3ChineseUi()
