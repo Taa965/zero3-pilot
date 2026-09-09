@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'agent-routing-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'agent-routing')
@@ -23,7 +23,7 @@ function copySources() {
   for (const file of ['agent-contracts.ts', 'agent-router.ts', 'review-loop-store.ts', 'index.ts']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 agent-routing source missing: ${source}`)
-    write(path.join(targetDir, file), read(source))
+    write(path.join(targetDir, file), overlayRuntimeSource(read(source)))
   }
 }
 

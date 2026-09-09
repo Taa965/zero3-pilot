@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const routingSourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'agent-routing-runtime')
 const routingTargetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'agent-routing')
@@ -41,7 +41,7 @@ function stageSources() {
   for (const file of routingFiles) {
     const source = path.join(routingSourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 integrated routing source missing: ${source}`)
-    write(path.join(routingTargetDir, file), read(source))
+    write(path.join(routingTargetDir, file), overlayRuntimeSource(read(source)))
   }
 
   fs.mkdirSync(bridgeTargetDir, { recursive: true })

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file'
 
 const CONFIG_RELATIVE = path.join('.agents', 'mcp_config.json')
 
@@ -119,8 +120,5 @@ export class Zero3AntigravityMcpLease {
 }
 
 async function atomicJson(file: string, value: unknown) {
-  const text = `${JSON.stringify(value, null, 2)}\n`
-  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`
-  await fs.writeFile(temporary, text, { encoding: 'utf8', mode: 0o600 })
-  await fs.rename(temporary, file)
+  await zero3AtomicWriteFile(file, `${JSON.stringify(value, null, 2)}\n`)
 }

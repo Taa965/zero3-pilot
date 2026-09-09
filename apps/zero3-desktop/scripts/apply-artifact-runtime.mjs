@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const artifactSourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'artifact-runtime')
 const artifactTargetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'artifacts')
@@ -25,7 +25,7 @@ function copySources() {
   for (const file of ['artifact-store.ts', 'antigravity-mcp-lease.ts', 'verification.ts', 'index.ts']) {
     const source = path.join(artifactSourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 artifact runtime source missing: ${source}`)
-    write(path.join(artifactTargetDir, file), read(source))
+    write(path.join(artifactTargetDir, file), overlayRuntimeSource(read(source)))
   }
   if (!fs.statSync(mcpSource).isFile()) throw new Error(`Zero3 task MCP server missing: ${mcpSource}`)
   write(mcpTarget, read(mcpSource))

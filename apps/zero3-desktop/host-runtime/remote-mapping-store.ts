@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file'
 
 import type { Zero3RemoteCodexMapping } from './remote-types'
 
@@ -26,10 +27,7 @@ export class Zero3RemoteMappingStore {
       ...mapping,
       turnIds: [...mapping.turnIds]
     }
-    await fs.mkdir(path.dirname(this.file), { recursive: true })
-    const temporary = `${this.file}.tmp-${process.pid}`
-    await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await fs.rename(temporary, this.file)
+    await zero3AtomicWriteFile(this.file, `${JSON.stringify(state, null, 2)}\n`)
   }
 
   private async read(): Promise<MappingFile> {

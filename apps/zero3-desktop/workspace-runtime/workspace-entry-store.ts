@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
-import path from 'node:path'
 
+import { zero3AtomicWriteFile } from './atomic-file'
 import {
   ZERO3_GEMINI_WEB_HOME,
   ZERO3_GEMINI_WEB_PROFILE_ID,
@@ -360,9 +360,6 @@ export class Zero3WorkspaceEntryStore {
   }
 
   private async write(state: Zero3WorkspaceEntryFile): Promise<void> {
-    await fs.mkdir(path.dirname(this.file), { recursive: true })
-    const temporary = `${this.file}.tmp-${process.pid}-${randomUUID()}`
-    await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await fs.rename(temporary, this.file)
+    await zero3AtomicWriteFile(this.file, `${JSON.stringify(state, null, 2)}\n`)
   }
 }

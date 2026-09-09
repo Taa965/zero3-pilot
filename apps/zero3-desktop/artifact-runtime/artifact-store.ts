@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file'
 
 export type Zero3ArtifactRecord = {
   artifactId: string
@@ -133,9 +134,6 @@ export class Zero3ArtifactStore {
   }
 
   private async atomicJson(file: string, value: unknown) {
-    await fs.mkdir(path.dirname(file), { recursive: true })
-    const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
-    await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await fs.rename(temp, file)
+    await zero3AtomicWriteFile(file, `${JSON.stringify(value, null, 2)}\n`)
   }
 }

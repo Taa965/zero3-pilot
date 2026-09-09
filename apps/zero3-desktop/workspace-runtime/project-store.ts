@@ -3,6 +3,7 @@ import { constants as fsConstants } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { zero3AtomicWriteFile } from './atomic-file'
 import {
   ZERO3_PROJECT_SCHEMA_VERSION,
   type Zero3CreateProjectInput,
@@ -181,9 +182,6 @@ export class Zero3ProjectStore {
   }
 
   private async write(state: Zero3ProjectFile): Promise<void> {
-    await fs.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 })
-    const temporary = `${this.file}.tmp-${process.pid}-${randomUUID()}`
-    await fs.writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    await fs.rename(temporary, this.file)
+    await zero3AtomicWriteFile(this.file, `${JSON.stringify(state, null, 2)}\n`)
   }
 }

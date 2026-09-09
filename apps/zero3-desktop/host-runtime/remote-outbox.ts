@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file'
 
 import type {
   Zero3RemoteLease,
@@ -45,21 +46,7 @@ async function ensureDir(dir: string): Promise<void> {
 }
 
 async function atomicWrite(file: string, text: string): Promise<void> {
-  await ensureDir(path.dirname(file))
-  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`
-  const handle = await fs.open(temporary, 'wx', 0o600)
-  try {
-    await handle.writeFile(text, 'utf8')
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-  try {
-    await fs.rename(temporary, file)
-  } catch (error) {
-    await fs.rm(temporary, { force: true }).catch(() => undefined)
-    throw error
-  }
+  await zero3AtomicWriteFile(file, text)
 }
 
 function parseEnvelope(text: string, file: string): Zero3RemoteOutboxEnvelope {

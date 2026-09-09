@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file'
 
 import type {
   Zero3CrossAgentBinding,
@@ -145,10 +146,6 @@ export class Zero3AgentTaskStore {
     const taskId = validId(record.task.taskId, 'taskId')
     const serialized = `${JSON.stringify(record, null, 2)}\n`
     if (Buffer.byteLength(serialized, 'utf8') > MAX_FILE_BYTES) throw new Error('agent task record exceeds size limit')
-    await fs.mkdir(this.root, { recursive: true })
-    const target = this.file(taskId)
-    const temporary = `${target}.tmp-${process.pid}-${randomUUID()}`
-    await fs.writeFile(temporary, serialized, { encoding: 'utf8', mode: 0o600 })
-    await fs.rename(temporary, target)
+    await zero3AtomicWriteFile(this.file(taskId), serialized)
   }
 }

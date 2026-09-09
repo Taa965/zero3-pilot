@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename } from 'node:fs/promises'
 import path from 'node:path'
 
+import { zero3AtomicWriteFile } from '../../workspace-runtime/atomic-file.ts'
+
 import { verifyCheckpointHash } from './handoff-hash.ts'
 import { ZERO3_HANDOFF_SCHEMA, type Zero3HandoffCheckpointV1 } from './handoff-types.ts'
 
@@ -38,16 +40,7 @@ export class HandoffStore {
     if (!verifyCheckpointHash(checkpoint)) throw new Error('refusing to persist checkpoint with invalid hash')
     const target = this.checkpointPath(checkpoint.task_id, checkpoint.execution_id, checkpoint.handoff_generation)
     const directory = path.dirname(target)
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    const temporary = `${target}.tmp-${process.pid}-${randomUUID()}`
-    const handle = await open(temporary, 'wx', 0o600)
-    try {
-      await handle.writeFile(`${JSON.stringify(checkpoint)}\n`, 'utf8')
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
-    await rename(temporary, target)
+    await zero3AtomicWriteFile(target, `${JSON.stringify(checkpoint)}\n`)
     await syncParentDirectory(directory)
     const finalHandle = await open(target, 'r+')
     try {

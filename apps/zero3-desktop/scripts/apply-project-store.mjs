@@ -20,7 +20,7 @@ function patchFile(relativePath, replacements) {
 }
 function copyProjectRuntimeSources() {
   fs.mkdirSync(targetDir, { recursive: true })
-  for (const file of ['project-types.ts', 'project-store.ts']) {
+  for (const file of ['atomic-file.ts', 'project-types.ts', 'project-store.ts']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 project runtime source template missing: ${source}`)
     write(path.join(targetDir, file), read(source))

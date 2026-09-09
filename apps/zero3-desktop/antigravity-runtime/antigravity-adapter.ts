@@ -6,6 +6,8 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 
+import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file'
+
 import {
   ZERO3_GEMINI_EXECUTION_RESULT_SCHEMA,
   type Zero3AntigravityAuthState,
@@ -17,6 +19,12 @@ import {
 } from './antigravity-types'
 
 type EventSink = (event: Zero3AntigravityMappedEvent) => void
+
+export type Zero3AntigravityAuthProbe = {
+  /** null means undetermined -- the CLI is installed but did not say. */
+  authenticated: boolean | null
+  detail: string | null
+}
 
 type PendingTurn = {
   turnId: string
@@ -39,6 +47,11 @@ const MAX_LINE_BYTES = 4 * 1024 * 1024
 const MAX_STDERR_LINES = 100
 const START_TIMEOUT_MS = 30_000
 const RESULT_TIMEOUT_MS = 60 * 60 * 1000
+// `agy models` is a network round trip on a cold CLI start; 10s was short
+// enough to time out and leave the picker on 待检测 with nothing to act on.
+const AUTH_PROBE_TIMEOUT_MS = 25_000
+const AUTH_PROBE_TTL_MS = 60_000
+const AUTH_PROBE_MAX_BYTES = 1024 * 1024
 
 function now() { return new Date().toISOString() }
 function record(value: unknown): Record<string, unknown> {
@@ -93,10 +106,16 @@ export function discoverAntigravityBinary(): string | null {
     return configured
   }
 
+  // `where`/`which` can only see the PATH this process inherited, which is the
+  // launching parent's and may predate the install. The installer locations are
+  // checked directly so an app started from a long-lived parent still finds a
+  // CLI that every fresh shell can see.
   const candidates = process.platform === 'win32'
     ? [
         process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'agy', 'bin', 'agy.exe') : '',
-        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'agy', 'bin', 'agy.cmd') : ''
+        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'agy', 'bin', 'agy.cmd') : '',
+        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links', 'agy.exe') : '',
+        process.env.USERPROFILE ? path.join(process.env.USERPROFILE, '.local', 'bin', 'agy.exe') : ''
       ].filter(Boolean)
     : [path.join(os.homedir(), '.local', 'bin', 'agy')]
   for (const candidate of candidates) if (executableExists(candidate)) return candidate
@@ -123,10 +142,7 @@ class BindingStore {
     const task = this.tail.then(async () => {
       const all = await this.read()
       all[binding.logicalSessionId] = binding
-      await fsp.mkdir(path.dirname(this.file), { recursive: true })
-      const temporary = `${this.file}.tmp-${process.pid}-${randomUUID()}`
-      await fsp.writeFile(temporary, `${JSON.stringify(all, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-      await fsp.rename(temporary, this.file)
+      await zero3AtomicWriteFile(this.file, `${JSON.stringify(all, null, 2)}\n`)
     })
     this.tail = task.then(() => undefined, () => undefined)
     return task
@@ -149,6 +165,7 @@ export class Zero3AntigravityAdapter {
   private readonly turns = new Map<string, Promise<Zero3AntigravityTurnResult>>()
   private readonly store: BindingStore
   private binary: string | null = null
+  private authProbe: { at: number; value: Zero3AntigravityAuthProbe } | null = null
 
   constructor(stateFile: string) {
     this.store = new BindingStore(stateFile)
@@ -170,6 +187,86 @@ export class Zero3AntigravityAdapter {
       binary,
       activeSessions: [...this.handles.keys()]
     }
+  }
+
+  /**
+   * Answer whether the installed CLI is authorized. `agy` has no auth
+   * subcommand, so the only honest signal is a command that has to reach the
+   * account: `agy models` fetches the list from the server. Reading the auth
+   * state off running sessions alone leaves the picker stuck on 待检测 until a
+   * session exists, which is precisely when the answer no longer helps.
+   */
+  async probeAuthentication(): Promise<Zero3AntigravityAuthProbe> {
+    const binary = this.resolveBinary()
+    if (!binary) return { authenticated: null, detail: 'Antigravity CLI (agy) was not found' }
+
+    // A live session knows the truth first hand and costs nothing to read.
+    const live = this.liveAuthState()
+    if (live) return live
+
+    const cached = this.authProbe
+    if (cached && Date.now() - cached.at < AUTH_PROBE_TTL_MS) return cached.value
+    const value = await this.runAuthProbe(binary)
+    this.authProbe = { at: Date.now(), value }
+    return value
+  }
+
+  private liveAuthState(): Zero3AntigravityAuthProbe | null {
+    let sawFailure = false
+    for (const handle of this.handles.values()) {
+      if (handle.binding.authState === 'AUTHENTICATED') return { authenticated: true, detail: null }
+      if (handle.binding.authState === 'AUTH_REQUIRED' || handle.binding.authState === 'AUTH_EXPIRED') sawFailure = true
+    }
+    return sawFailure ? { authenticated: false, detail: 'A running Antigravity session reported that authorization is missing or expired' } : null
+  }
+
+  private runAuthProbe(binary: string): Promise<Zero3AntigravityAuthProbe> {
+    return new Promise(resolve => {
+      const shell = process.platform === 'win32' && /\.cmd$/i.test(binary)
+      const child = spawn(binary, ['models'], {
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+        shell
+      })
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
+      let bytes = 0
+      let settled = false
+      const finish = (value: Zero3AntigravityAuthProbe) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      }
+      const capture = (sink: Buffer[], chunk: Buffer) => {
+        bytes += chunk.byteLength
+        if (bytes > AUTH_PROBE_MAX_BYTES) {
+          child.kill()
+          return
+        }
+        sink.push(chunk)
+      }
+      const timer = setTimeout(() => {
+        child.kill()
+        finish({ authenticated: null, detail: 'agy models did not answer within 25 seconds' })
+      }, AUTH_PROBE_TIMEOUT_MS)
+      child.stdout.on('data', chunk => capture(stdoutChunks, Buffer.from(chunk)))
+      child.stderr.on('data', chunk => capture(stderrChunks, Buffer.from(chunk)))
+      child.once('error', error => finish({ authenticated: null, detail: error.message }))
+      child.once('close', code => {
+        const stdout = Buffer.concat(stdoutChunks).toString('utf8')
+        const stderr = Buffer.concat(stderrChunks).toString('utf8')
+        // "Fetching available models..." is printed before the request is made,
+        // so only a returned row -- an id and a label separated by a tab --
+        // proves the account actually answered.
+        if (code === 0 && /^\S+\t\S/m.test(stdout)) return finish({ authenticated: true, detail: null })
+        const diagnostic = `${stderr}\n${stdout}`.trim()
+        const detail = diagnostic.slice(0, 500) || `agy models exited with code ${code ?? 'null'}`
+        if (authDiagnostic(diagnostic)) return finish({ authenticated: false, detail })
+        return finish({ authenticated: null, detail })
+      })
+    })
   }
 
   subscribe(listener: EventSink) {

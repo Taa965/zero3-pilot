@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'antigravity-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'antigravity')
@@ -24,7 +24,7 @@ function copySources() {
   for (const file of ['antigravity-types.ts', 'antigravity-adapter.ts', 'index.ts']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 Antigravity source missing: ${source}`)
-    write(path.join(targetDir, file), read(source))
+    write(path.join(targetDir, file), overlayRuntimeSource(read(source)))
   }
 }
 

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const executorSource = path.join(repoRoot, 'apps', 'zero3-desktop', 'executor-runtime')
 const groupSource = path.join(repoRoot, 'apps', 'zero3-desktop', 'group-runtime')
@@ -29,7 +29,7 @@ function copyProductionTree(source, target) {
     const from = path.join(source, entry.name)
     const to = path.join(target, entry.name)
     if (entry.isDirectory()) copyProductionTree(from, to)
-    else if (entry.isFile() && /\.(ts|tsx)$/u.test(entry.name)) write(to, normalizeRelativeTypeScriptSpecifiers(read(from)))
+    else if (entry.isFile() && /\.(ts|tsx)$/u.test(entry.name)) write(to, overlayRuntimeSource(normalizeRelativeTypeScriptSpecifiers(read(from))))
   }
 }
 

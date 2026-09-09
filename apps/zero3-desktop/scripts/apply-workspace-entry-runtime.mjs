@@ -23,7 +23,7 @@ function patchFile(relativePath, replacements) {
 
 function copyRuntimeSources() {
   fs.mkdirSync(targetDir, { recursive: true })
-  for (const file of ['workspace-entry-types.ts', 'workspace-entry-store.ts', 'index.ts']) {
+  for (const file of ['atomic-file.ts', 'workspace-entry-types.ts', 'workspace-entry-store.ts', 'index.ts']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 workspace runtime source template missing: ${source}`)
     write(path.join(targetDir, file), read(source))
