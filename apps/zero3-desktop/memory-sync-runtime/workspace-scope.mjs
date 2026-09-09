@@ -35,6 +35,16 @@ export function resolveWorkspaceScope({ cwd = process.cwd(), config }) {
   const top = git(current, 'rev-parse', '--show-toplevel')
   const common = top && git(current, 'rev-parse', '--path-format=absolute', '--git-common-dir')
   const workspace = canonical(common && path.basename(common) === '.git' ? path.dirname(common) : (top || current))
+  // An explicit user association from Zero3 takes precedence over automatic
+  // discovery. Keep the previous automatic registry intact; no history merges.
+  if (config.projectLinksFile && fs.existsSync(config.projectLinksFile)) {
+    const links = new DatabaseSync(config.projectLinksFile, { readOnly: true })
+    try {
+      const rows = links.prepare('SELECT root_path,project_id FROM workspace_links WHERE active=1 ORDER BY length(root_path) DESC').all()
+      const match = rows.find(row => workspace === row.root_path || (!top && current.startsWith(row.root_path + path.sep)))
+      if (match) return { projectId: match.project_id, workspace }
+    } finally { links.close() }
+  }
   const mappings = Object.entries(config.projectMappings ?? {}).map(([root, projectId]) => [canonical(root), projectId])
     .sort((a, b) => b[0].length - a[0].length)
   const registered = mappings.find(([root]) => workspace === root || (!top && current.startsWith(root + path.sep)))

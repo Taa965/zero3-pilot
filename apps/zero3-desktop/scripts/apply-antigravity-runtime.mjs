@@ -12,6 +12,7 @@ function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = read(file)
   for (const replacement of replacements) {
+    if (replacement.appliedMarker && source.includes(replacement.appliedMarker)) continue
     if (source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) throw new Error(`Zero3 Antigravity overlay drift in ${relativePath}: missing ${replacement.label}`)
     source = source.replace(replacement.from, replacement.to)
@@ -101,7 +102,7 @@ export function applyZero3AntigravityRuntime() {
   copySources()
   patchFile('electron/main.ts', [
     { label: 'Antigravity runtime import', from: "import { Zero3GeminiWebProvider } from './zero3/gemini-web/index'", to: "import { Zero3GeminiWebProvider } from './zero3/gemini-web/index'\nimport { Zero3AntigravityAdapter } from './zero3/antigravity/index'" },
-    { label: 'Antigravity runtime IPC', from: 'const zero3CodexAppServer = createZero3CodexAppServer()', to: main + '\nconst zero3CodexAppServer = createZero3CodexAppServer()' }
+    { label: 'Antigravity runtime IPC', appliedMarker: 'const zero3Antigravity = new Zero3AntigravityAdapter(', from: 'const zero3CodexAppServer = createZero3CodexAppServer()', to: main + '\nconst zero3CodexAppServer = createZero3CodexAppServer()' }
   ])
   patchFile('electron/preload.ts', [{ label: 'Antigravity preload', from: "contextBridge.exposeInMainWorld('zero3GeminiWeb', {", to: preload }])
   patchFile('src/global.d.ts', [

@@ -96,6 +96,8 @@ Windows 的 8792 通过 SSH 转发到 AWS loopback 8791。用户已经明确授�
 
 ### Codex 全局配置与自动项目范围
 
+2026-09-10 补充：[手动关联应用项目](PROJECT_LINKS.md)已接入新建项目弹窗与项目总览。支持 Codex、Claude Code、Antigravity；成功关联后，全局 Codex 优先使用持久关联，不再依赖静态清单覆盖未来 Zero3 项目。未关联的工作区继续使用下述自动范围。关联不自动合并旧聊天或旧范围的记忆；详细验收边界见关联文档。
+
 已在 `C:\Users\Laaa\.codex\config.toml` 注册 `mcp_servers.zero3_shared_memory`，使用独立客户端，不依赖当前仓库的 node_modules 或运行中的 Zero3 Desktop。配置采用 [Codex 官方 MCP 方式](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)，没有修改模型、账号或沙箱权限。
 
 全局配置不设固定 `cwd`，也不固定 `ZERO3_ACTIVE_PROJECT_ID`；启用 `ZERO3_MEMORY_AUTO_PROJECT=1`，由 Codex 传入当前任务工作目录。现有已打开的客户端需要重新加载 MCP（或重启一次 Codex）才能使用新工具；之后新项目和新会话无需重复配置。

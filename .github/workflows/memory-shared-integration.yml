@@ -2,9 +2,9 @@ name: Shared memory integration
 on:
   push:
     branches: [main]
-    paths: ['apps/memory-server/**', 'apps/zero3-desktop/memory-sync-runtime/**', 'apps/zero3-desktop/mcp-runtime/**', 'deployment/memory/**', '.github/workflows/memory-shared-integration.yml']
+    paths: ['apps/memory-server/**', 'apps/zero3-desktop/project-link-runtime/**', 'apps/zero3-desktop/memory-sync-runtime/**', 'apps/zero3-desktop/mcp-runtime/**', 'deployment/memory/**', '.github/workflows/memory-shared-integration.yml']
   pull_request:
-    paths: ['apps/memory-server/**', 'apps/zero3-desktop/memory-sync-runtime/**', 'apps/zero3-desktop/mcp-runtime/**', 'deployment/memory/**', '.github/workflows/memory-shared-integration.yml']
+    paths: ['apps/memory-server/**', 'apps/zero3-desktop/project-link-runtime/**', 'apps/zero3-desktop/memory-sync-runtime/**', 'apps/zero3-desktop/mcp-runtime/**', 'deployment/memory/**', '.github/workflows/memory-shared-integration.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -61,4 +61,4 @@ jobs:
         env:
           ZERO3_MEMORY_TEST_URL: http://127.0.0.1:8793
           ZERO3_MEMORY_TEST_TOKEN: memory-verification-token-20260910
-        run: node --test apps/zero3-desktop/memory-sync-runtime/*.test.mjs apps/zero3-desktop/memory-v21-runtime/*.test.mjs apps/zero3-desktop/agent-memory-runtime/*.test.mjs apps/zero3-desktop/mcp-runtime/*.test.mjs
+        run: node --test apps/zero3-desktop/project-link-runtime/*.test.mjs apps/zero3-desktop/memory-sync-runtime/*.test.mjs apps/zero3-desktop/memory-v21-runtime/*.test.mjs apps/zero3-desktop/agent-memory-runtime/*.test.mjs apps/zero3-desktop/mcp-runtime/*.test.mjs

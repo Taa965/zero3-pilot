@@ -13,6 +13,14 @@ const MAX_SESSIONS = 500
 const MAX_MESSAGES = 120
 const MAX_CONTENT = 20_000
 
+function normalizeProjectBinding(value: unknown): LocalSessionRecord['projectBinding'] {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  if (!['codex','claude','antigravity'].includes(String(raw.provider)) || typeof raw.rootPath !== 'string' || typeof raw.revision !== 'number') return null
+  return { provider: raw.provider as 'codex' | 'claude' | 'antigravity', rootPath: raw.rootPath, revision: raw.revision,
+    externalId: typeof raw.externalId === 'string' ? raw.externalId : null, ...(typeof raw.name === 'string' ? { name: raw.name } : {}) }
+}
+
 function now() {
   return new Date().toISOString()
 }
@@ -68,6 +76,8 @@ function normalizeRecord(value: unknown): LocalSessionRecord | null {
   return {
     id,
     provider,
+    projectBinding: normalizeProjectBinding(raw.projectBinding),
+    nativeProjectAttached: raw.nativeProjectAttached === true,
     projectId: typeof raw.projectId === 'string' && raw.projectId.trim() ? raw.projectId.trim() : null,
     title: typeof raw.title === 'string' && raw.title.trim() ? raw.title.trim().slice(0, 200) : `新 ${providerLabel(provider)} 会话`,
     createdAt: typeof raw.createdAt === 'string' && raw.createdAt.trim() ? raw.createdAt : now(),
@@ -156,6 +166,7 @@ export const LocalSessionAdapter = {
       id: uid(`local-${provider}`),
       provider,
       projectId,
+      projectBinding: normalizeProjectBinding(runtimeConfig.projectBinding),
       title: `新 ${providerLabel(provider)} 会话`,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -192,6 +203,10 @@ export const LocalSessionAdapter = {
     const normalized = runtimeId.trim()
     if (!normalized) throw new Error('runtimeId 不能为空')
     return mutate(id, record => ({ ...record, runtimeId: normalized, updatedAt: now() }))
+  },
+
+  markNativeProjectAttached(id: string): LocalSessionRecord {
+    return mutate(id, record => ({ ...record, nativeProjectAttached: true }))
   },
 
   appendMessage(id: string, role: 'user' | 'assistant', content: string): LocalSessionRecord {

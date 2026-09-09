@@ -190,7 +190,7 @@ export class Zero3AntigravityAdapter {
     const effort = runtimeEffort(inputValue.effort)
     if (!isDirectory(cwd)) throw new Error(`Antigravity cwd does not exist: ${cwd}`)
 
-    const handle = await this.ensureRuntime(logicalSessionId, cwd, inputValue.projectId ?? null, model, effort)
+    const handle = await this.ensureRuntime(logicalSessionId, cwd, inputValue.projectId ?? null, model, effort, optional(inputValue.providerProjectId, 'providerProjectId', 256))
     if (handle.binding.authState === 'AUTH_REQUIRED' || handle.binding.authState === 'AUTH_EXPIRED') {
       throw new Error(`Antigravity ${handle.binding.authState.toLowerCase()}; authenticate with the official interactive agy client and retry`)
     }
@@ -269,9 +269,11 @@ export class Zero3AntigravityAdapter {
     cwd: string,
     projectId: string | null,
     model: string | null,
-    effort: Zero3AntigravityEffort | null
+    effort: Zero3AntigravityEffort | null,
+    providerProjectId: string | null
   ): Promise<RuntimeHandle> {
     const existing = this.handles.get(logicalSessionId)
+    if (existing && (existing.binding.providerProjectId ?? null) !== providerProjectId) throw new Error('Antigravity 项目关联已改变，请新建会话')
     if (
       existing &&
       !existing.child.killed &&
@@ -285,6 +287,7 @@ export class Zero3AntigravityAdapter {
     }
 
     const persisted = await this.store.get(logicalSessionId)
+    if (persisted && (persisted.providerProjectId ?? null) !== providerProjectId) throw new Error('Antigravity 历史会话不能切换所属项目，请新建会话')
     if (persisted && path.resolve(persisted.cwd) !== cwd && persisted.conversationId) {
       throw new Error('Antigravity logical session is already bound to a different cwd; create a new logical session')
     }
@@ -300,6 +303,7 @@ export class Zero3AntigravityAdapter {
       updatedAt: now()
     }
     binding.cwd = cwd
+    binding.providerProjectId = providerProjectId
     binding.projectId = projectId ?? binding.projectId
     binding.state = 'STARTING'
     binding.updatedAt = now()
@@ -315,6 +319,7 @@ export class Zero3AntigravityAdapter {
     if (model) args.push('--model', model)
     if (effort) args.push('--effort', effort)
     if (binding.conversationId) args.push('--conversation', binding.conversationId)
+    if (providerProjectId && !binding.conversationId) args.push('--project', providerProjectId, '--add-dir', cwd)
     const binary = this.resolveBinary()
     if (!binary) throw new Error('Antigravity CLI (agy) was not found. Install/authenticate the official CLI first.')
     const shell = process.platform === 'win32' && /\.cmd$/i.test(binary)

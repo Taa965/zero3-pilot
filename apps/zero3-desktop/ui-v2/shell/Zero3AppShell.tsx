@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
 import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdapter'
+import { ProjectLinkAdapter } from '../adapters/ProjectLinkAdapter'
+import { ProjectLinkDialog } from '../projects/ProjectLinkDialog'
 import { SessionArchiveAdapter } from '../adapters/SessionArchiveAdapter'
 import { WebWorkspaceAdapter } from '../adapters/WebWorkspaceAdapter'
 import { ChatGptProjectBindingDialog } from '../conversations/ChatGptProjectBindingDialog'
@@ -34,6 +36,7 @@ export function Zero3AppShell() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   const [focusedProjectId, setFocusedProjectId] = useState<string | null>(null)
   const [projectError, setProjectError] = useState<string | null>(null)
+  const [linkingProject, setLinkingProject] = useState<Zero3ProjectRecord | null>(null)
   const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const [renamingSession, setRenamingSession] = useState<WorkspaceSession | null>(null)
   const [binding, setBinding] = useState<{ project: Zero3ProjectRecord; thenCreate: boolean } | null>(null)
@@ -219,7 +222,8 @@ export function Zero3AppShell() {
         nextProvider,
         createTargetProjectId,
         options.zero3ProfileId ?? null,
-        options
+        { ...options, ...(createTargetProjectId && ['codex','claude','antigravity'].includes(nextProvider)
+          ? { projectBinding: await ProjectLinkAdapter.resolve(createTargetProjectId, nextProvider as 'codex' | 'claude' | 'antigravity') } : {}) }
       )
       refreshLocalSessions()
       setActiveSessionId(record.id)
@@ -271,11 +275,13 @@ export function Zero3AppShell() {
       if (!project) return
       setProjects(current => [project, ...current.filter(item => item.id !== project.id)])
       setActiveProjectId(project.id)
+      await hideNativeWebSession(activeSession)
+      setLinkingProject(project)
       setProjectError(null)
     } catch (error) {
       setProjectError(error instanceof Error ? error.message : String(error))
     }
-  }, [])
+  }, [activeSession])
 
   const activeLocalSession = activeSession?.source === 'local'
     ? localSessions.find(session => session.id === activeSession.id) ?? null
@@ -285,7 +291,7 @@ export function Zero3AppShell() {
     () => activeProjectId ? sessions.filter(session => session.projectId === activeProjectId && !session.archived).length : 0,
     [sessions, activeProjectId]
   )
-  const nativeViewsMayShow = binding === null && !providerPickerOpen && renamingSession === null
+  const nativeViewsMayShow = linkingProject === null && binding === null && !providerPickerOpen && renamingSession === null
   const workspaceSession = nativeViewsMayShow ? activeSession : null
 
   const openProviderPicker = useCallback(async () => {
@@ -344,6 +350,7 @@ export function Zero3AppShell() {
         {inspectorOpen && <InspectorDrawer project={activeProject} onClose={() => setInspectorOpen(false)} />}
       </div>
 
+      {linkingProject && <ProjectLinkDialog project={linkingProject} onClose={() => setLinkingProject(null)} />}
       {renamingSession && (
         <RenameSessionDialog
           session={renamingSession}

@@ -4,6 +4,7 @@ import path from 'node:path'
 import { hermesDesktopDir, repoRoot } from './config.mjs'
 import { applyZero3ProjectContextHttp } from './apply-project-context-http.mjs'
 import { applyZero3SharedMemory } from './apply-shared-memory.mjs'
+import { applyZero3ProjectLinks } from './apply-project-links.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'mcp-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp')
@@ -92,4 +93,5 @@ export function applyZero3ProjectContextMcp() {
   }])
   applyZero3ProjectContextHttp()
   applyZero3SharedMemory()
+  applyZero3ProjectLinks()
 }

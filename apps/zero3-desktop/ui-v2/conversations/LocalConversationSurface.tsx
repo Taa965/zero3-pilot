@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Codicon } from '@/components/ui/codicon'
 import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
+import { ProjectLinkAdapter } from '../adapters/ProjectLinkAdapter'
 import type { LocalSessionProvider, LocalSessionRecord } from './session-types'
 
 interface LocalConversationSurfaceProps {
@@ -25,7 +26,7 @@ function providerLabel(provider: LocalSessionProvider) {
 async function runCodexTurn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string, requestId: string) {
   const result = await window.zero3SessionProviders.codexTurn({
     text: prompt,
-    cwd: project?.rootPath ?? null,
+    cwd: session.projectBinding?.rootPath ?? project?.rootPath ?? null,
     threadId: session.runtimeId,
     requestId,
     model: session.model,
@@ -36,13 +37,21 @@ async function runCodexTurn(session: LocalSessionRecord, project: Zero3ProjectRe
   if (result.threadId && result.threadId !== session.runtimeId) {
     LocalSessionAdapter.setRuntimeId(session.id, result.threadId)
   }
+  if (result.threadId && project && session.projectBinding?.externalId && !session.nativeProjectAttached) {
+    try {
+      await ProjectLinkAdapter.attachCodexThread({ projectId: project.id, externalId: session.projectBinding.externalId, threadId: result.threadId })
+      LocalSessionAdapter.markNativeProjectAttached(session.id)
+    } catch (error) {
+      return `${result.text}\n\n项目归属尚未同步：${error instanceof Error ? error.message : String(error)}。下次发送时会重试。`
+    }
+  }
   return result.text
 }
 
 async function runClaudeTurn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string) {
   const result = await window.zero3SessionProviders.claudeTurn({
     text: prompt,
-    cwd: project?.rootPath ?? null,
+    cwd: session.projectBinding?.rootPath ?? project?.rootPath ?? null,
     sessionId: session.runtimeId,
     model: session.model,
     effort: session.thinkingEffort
@@ -60,7 +69,8 @@ async function runAntigravityTurn(session: LocalSessionRecord, project: Zero3Pro
   const turn = await window.zero3Antigravity.startTurn({
     logicalSessionId,
     projectId: project.id,
-    cwd: project.rootPath,
+    providerProjectId: session.projectBinding?.externalId ?? null,
+    cwd: session.projectBinding?.rootPath ?? project.rootPath,
     prompt,
     model: session.model,
     effort: session.thinkingEffort === 'low' || session.thinkingEffort === 'medium' || session.thinkingEffort === 'high'

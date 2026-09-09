@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/server'
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import * as z from 'zod/v4'
 
 import { createProjectContextCore, EXECUTION_RESULT_PROTOCOL, ID_PATTERN, resolveContextRoot } from './project-context-core.mjs'
@@ -68,6 +69,7 @@ try {
   const root = resolveContextRoot()
   const configPath = process.env.ZERO3_SHARED_MEMORY_CONFIG?.trim()
   const config = configPath ? JSON.parse(await fs.readFile(configPath, 'utf8')) : null
+  if (config) config.projectLinksFile ??= path.join(path.dirname(configPath), 'project-links.sqlite')
   const projectId = process.env.ZERO3_MEMORY_AUTO_PROJECT === '1' && config
     ? (await import('../memory-sync-runtime/workspace-scope.mjs')).resolveWorkspaceScope({ config }).projectId : activeProjectId()
   const core = createProjectContextCore({ rootDir: root, activeProjectId: projectId })

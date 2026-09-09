@@ -15,6 +15,7 @@ export type LocalSessionProvider = Exclude<WorkspaceProvider, 'gpt' | 'gemini'>
 export type LocalSessionThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export type LocalSessionRuntimeConfig = {
+  projectBinding?: import('../adapters/ProjectLinkAdapter').ProjectBinding | null
   model?: string | null
   thinkingEffort?: LocalSessionThinkingEffort | null
 }
@@ -27,6 +28,8 @@ export type LocalSessionMessage = {
 }
 
 export type LocalSessionRecord = {
+  nativeProjectAttached?: boolean
+  projectBinding?: import('../adapters/ProjectLinkAdapter').ProjectBinding | null
   id: string
   provider: LocalSessionProvider
   projectId: string | null

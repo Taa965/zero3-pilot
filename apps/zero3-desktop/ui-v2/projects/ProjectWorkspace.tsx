@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { McpHttpAccessCard } from './McpHttpAccessCard'
 import { SharedMemoryCard } from './SharedMemoryCard'
+import { ProjectLinksCard } from './ProjectLinkDialog'
 
 interface ProjectWorkspaceProps {
   project: Zero3ProjectRecord | null
@@ -48,6 +49,7 @@ export function ProjectWorkspace({
             <div className="mt-2 break-all">{project.chatGptProjectUrl ?? <span className="text-(--ui-text-tertiary)">尚未关联，新建 GPT 网页会话时会先询问</span>}</div>
           </div>
           <McpHttpAccessCard projectId={project.id} />
+          <ProjectLinksCard key={project.id} project={project} />
         </div>}
         {activeTab === 'files' && <div className="text-sm text-(--ui-text-secondary)">文件树视图建设中...</div>}
         {activeTab === 'context' && <SharedMemoryCard key={project.id} projectId={project.id} />}

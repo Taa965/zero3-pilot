@@ -3,6 +3,7 @@ export type Zero3AntigravityRuntimeState = 'STOPPED' | 'STARTING' | 'READY' | 'R
 export type Zero3AntigravityEffort = 'low' | 'medium' | 'high'
 
 export type Zero3AntigravitySessionBinding = {
+  providerProjectId?: string | null
   logicalSessionId: string
   projectId: string | null
   cwd: string
@@ -15,6 +16,7 @@ export type Zero3AntigravitySessionBinding = {
 }
 
 export type Zero3AntigravityTurnInput = {
+  providerProjectId?: string | null
   logicalSessionId: string
   projectId?: string | null
   cwd: string
