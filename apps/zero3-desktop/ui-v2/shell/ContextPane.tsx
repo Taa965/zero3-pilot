@@ -6,6 +6,7 @@ import { DevelopmentGroupList } from '../development-groups/DevelopmentGroupList
 import { ProjectList } from '../projects/ProjectList'
 import { ProjectScopeSwitcher } from './ProjectScopeSwitcher'
 import { RuntimeList } from '../runtime/RuntimeList'
+import type { RuntimeTarget } from '../runtime/runtime-types'
 
 interface ContextPaneProps {
   activeModule: string
@@ -25,6 +26,8 @@ interface ContextPaneProps {
   onSelectProject: (project: Zero3ProjectRecord) => void
   onSelectProjectScope: (projectId: string | null) => void
   onCreateProject: () => void
+  runtimeTarget: RuntimeTarget
+  onSelectRuntimeTarget: (target: RuntimeTarget) => void
 }
 
 export function ContextPane({
@@ -44,7 +47,9 @@ export function ContextPane({
   onRenameSession,
   onSelectProject,
   onSelectProjectScope,
-  onCreateProject
+  onCreateProject,
+  runtimeTarget,
+  onSelectRuntimeTarget
 }: ContextPaneProps) {
   const titles: Record<string, string> = {
     conversations: '工作台',
@@ -92,7 +97,7 @@ export function ContextPane({
             onCreate={onCreateProject}
           />
         ) : activeModule === 'runtime' ? (
-          <RuntimeList />
+          <RuntimeList activeTarget={runtimeTarget} onTargetChange={onSelectRuntimeTarget} />
         ) : (
           <div className="p-4 text-sm text-(--ui-text-tertiary)">{titles[activeModule]} list will go here</div>
         )}

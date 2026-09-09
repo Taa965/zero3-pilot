@@ -164,6 +164,20 @@ function ensurePinnedCodexBinary(env, profile = 'debug') {
   return binary
 }
 
+function zero3WeixinBinary(profile = 'debug') {
+  const executable = process.platform === 'win32' ? 'zero3-pilot-weixin.exe' : 'zero3-pilot-weixin'
+  return path.join(repoRoot, 'target', profile === 'release' ? 'release' : 'debug', executable)
+}
+
+function ensureZero3WeixinBinary(env, profile = 'debug') {
+  const binary = zero3WeixinBinary(profile)
+  const args = ['build', '-p', 'zero3-weixin']
+  if (profile === 'release') args.push('--release')
+  runSync('cargo', args, { cwd: repoRoot, env })
+  if (!isFile(binary)) throw new Error(`Zero3 Weixin binary was not produced at ${binary}`)
+  return binary
+}
+
 function copyRequiredFile(source, target) {
   if (!isFile(source)) throw new Error(`Required release file is missing: ${source}`)
   fs.copyFileSync(source, target)
@@ -195,6 +209,17 @@ function stagePinnedCodexForWindowsPackage(binary) {
   console.log(`[Zero3] Staged pinned Codex release binary for Windows package: ${codexTarget}`)
   console.log(`[Zero3] Staged Zero3/Codex/Hermes release notices: ${legalTargetDir}`)
   return codexTarget
+}
+
+function stageZero3WeixinForWindowsPackage(binary) {
+  if (process.platform !== 'win32') throw new Error('Weixin Windows staging requires Windows.')
+  const targetDir = path.join(hermesDesktopDir, 'build', 'zero3-weixin')
+  const target = path.join(targetDir, 'zero3-pilot-weixin.exe')
+  fs.rmSync(targetDir, { recursive: true, force: true })
+  fs.mkdirSync(targetDir, { recursive: true })
+  copyRequiredFile(binary, target)
+  console.log(`[Zero3] Staged Weixin robot binary for Windows package: ${target}`)
+  return target
 }
 
 function hermesVenvPython() {
@@ -311,14 +336,19 @@ const baseEnv = {
 }
 
 let codexBinary
+let weixinBinary
 if (mode === 'dev') {
   codexBinary = ensurePinnedCodexBinary(baseEnv, 'debug')
+  weixinBinary = ensureZero3WeixinBinary(baseEnv, 'debug')
 } else if (mode === 'dist:win') {
   codexBinary = ensurePinnedCodexBinary(baseEnv, 'release')
+  weixinBinary = ensureZero3WeixinBinary(baseEnv, 'release')
   stagePinnedCodexForWindowsPackage(codexBinary)
+  stageZero3WeixinForWindowsPackage(weixinBinary)
   runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-windows-package.mjs')])
 } else {
   codexBinary = pinnedCodexBinary('debug')
+  weixinBinary = zero3WeixinBinary('debug')
 }
 
 const env = {
@@ -326,7 +356,8 @@ const env = {
   // Development/build orchestration points only at the binary built from the
   // reviewed upstream/codex pin. The packaged Windows app has a separate
   // fail-closed resolver for its bundled resources/zero3-codex/codex.exe.
-  ZERO3_CODEX_BIN: codexBinary
+  ZERO3_CODEX_BIN: codexBinary,
+  ZERO3_WEIXIN_BIN: weixinBinary
 }
 
 ensureHermesDependencies(env)

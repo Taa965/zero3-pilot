@@ -9,6 +9,7 @@ import { TaskWorkspace } from '../tasks/TaskWorkspace'
 import { DevelopmentGroupWorkspace } from '../development-groups/DevelopmentGroupWorkspace'
 import { ProjectWorkspace } from '../projects/ProjectWorkspace'
 import { RuntimeWorkspace } from '../runtime/RuntimeWorkspace'
+import type { RuntimeTarget } from '../runtime/runtime-types'
 
 interface WorkspaceRouterProps {
   activeModule: string
@@ -23,6 +24,7 @@ interface WorkspaceRouterProps {
   onUnbindChatGptProject: (project: Zero3ProjectRecord) => void
   onOpenPowerShell: () => void
   onToggleInspector: () => void
+  runtimeTarget: RuntimeTarget
 }
 
 const PROVIDERS: Array<{ id: WorkspaceProvider; label: string }> = [
@@ -46,7 +48,8 @@ export function WorkspaceRouter({
   onBindChatGptProject,
   onUnbindChatGptProject,
   onOpenPowerShell,
-  onToggleInspector
+  onToggleInspector,
+  runtimeTarget
 }: WorkspaceRouterProps) {
   const webEntryId = activeSession?.source === 'web' && activeSession.provider === provider ? activeSession.id : null
   const localSession = activeLocalSession?.provider === provider ? activeLocalSession : null
@@ -108,7 +111,7 @@ export function WorkspaceRouter({
             onUnbindChatGptProject={onUnbindChatGptProject}
           />
         ) : activeModule === 'runtime' ? (
-          <RuntimeWorkspace />
+          <RuntimeWorkspace target={runtimeTarget} />
         ) : (
           <div className="flex h-full items-center justify-center text-(--ui-text-tertiary)">{activeModule} 模块暂无对应视图</div>
         )}

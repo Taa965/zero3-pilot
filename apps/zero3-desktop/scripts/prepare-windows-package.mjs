@@ -9,6 +9,7 @@ if (process.platform !== 'win32') {
 
 for (const required of [
   path.join(hermesDesktopDir, 'build', 'zero3-codex', 'codex.exe'),
+  path.join(hermesDesktopDir, 'build', 'zero3-weixin', 'zero3-pilot-weixin.exe'),
   path.join(hermesDesktopDir, 'build', 'zero3-legal', 'LICENSE-Zero3-Pilot.txt'),
   path.join(hermesDesktopDir, 'build', 'zero3-legal', 'NOTICE-Zero3-Pilot.txt'),
   path.join(hermesDesktopDir, 'build', 'zero3-legal', 'LICENSE-OpenAI-Codex.txt'),
@@ -27,7 +28,7 @@ packageJson.scripts = packageJson.scripts ?? {}
 packageJson.scripts['dist:win'] = 'npm run build && npm run builder -- --win nsis --publish never'
 packageJson.build = packageJson.build ?? {}
 packageJson.build.win = packageJson.build.win ?? {}
-const managedTargets = new Set(['zero3-codex/codex.exe', 'legal'])
+const managedTargets = new Set(['zero3-codex/codex.exe', 'zero3-weixin/zero3-pilot-weixin.exe', 'legal'])
 const extraResources = Array.isArray(packageJson.build.win.extraResources)
   ? packageJson.build.win.extraResources.filter(item => !managedTargets.has(item?.to))
   : []
@@ -35,6 +36,10 @@ extraResources.push(
   {
     from: 'build/zero3-codex/codex.exe',
     to: 'zero3-codex/codex.exe'
+  },
+  {
+    from: 'build/zero3-weixin/zero3-pilot-weixin.exe',
+    to: 'zero3-weixin/zero3-pilot-weixin.exe'
   },
   {
     from: 'build/zero3-legal',

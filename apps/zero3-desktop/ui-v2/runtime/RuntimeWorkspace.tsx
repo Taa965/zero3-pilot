@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 
+import { WeixinRobotWorkspace } from './WeixinRobotWorkspace'
+import type { RuntimeTarget } from './runtime-types'
+
 type ShellState = {
   kind: string
   status: 'ready' | 'unavailable'
@@ -64,7 +67,7 @@ function shellLabel(kind: string): string {
   return kind
 }
 
-export function RuntimeWorkspace() {
+function KernelRuntimeWorkspace() {
   const [runtime, setRuntime] = useState<RuntimeCapabilityState>({ loading: true, shells: [] })
 
   useEffect(() => {
@@ -142,4 +145,8 @@ export function RuntimeWorkspace() {
       </div>
     </div>
   )
+}
+
+export function RuntimeWorkspace({ target }: { target: RuntimeTarget }) {
+  return target === 'weixin' ? <WeixinRobotWorkspace /> : <KernelRuntimeWorkspace />
 }

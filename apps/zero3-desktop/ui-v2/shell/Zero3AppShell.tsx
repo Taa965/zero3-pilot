@@ -15,6 +15,7 @@ import { GlobalRail } from './GlobalRail'
 import { ContextPane } from './ContextPane'
 import { WorkspaceRouter } from './WorkspaceRouter'
 import { InspectorDrawer } from './InspectorDrawer'
+import type { RuntimeTarget } from '../runtime/runtime-types'
 
 export type ActiveModule = 'conversations' | 'tasks' | 'groups' | 'projects' | 'runtime'
 
@@ -23,6 +24,7 @@ const ACTIVE_PROJECT_STORAGE_KEY = 'zero3.active-project-id'
 export function Zero3AppShell() {
   const [activeModule, setActiveModule] = useState<ActiveModule>('conversations')
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [runtimeTarget, setRuntimeTarget] = useState<RuntimeTarget>('kernel')
   const [provider, setProvider] = useState<WorkspaceProvider>('gpt')
   const [webSessions, setWebSessions] = useState<WorkspaceSession[]>([])
   const [localSessions, setLocalSessions] = useState<LocalSessionRecord[]>([])
@@ -321,6 +323,8 @@ export function Zero3AppShell() {
           onSelectProjectScope={selectProjectScope}
           onSelectProject={selectProject}
           onCreateProject={() => void createProject()}
+          runtimeTarget={runtimeTarget}
+          onSelectRuntimeTarget={setRuntimeTarget}
         />
         <WorkspaceRouter
           activeModule={activeModule}
@@ -335,6 +339,7 @@ export function Zero3AppShell() {
           onUnbindChatGptProject={project => void unbindProject(project)}
           onOpenPowerShell={() => setInspectorOpen(true)}
           onToggleInspector={() => setInspectorOpen(!inspectorOpen)}
+          runtimeTarget={runtimeTarget}
         />
         {inspectorOpen && <InspectorDrawer project={activeProject} onClose={() => setInspectorOpen(false)} />}
       </div>
