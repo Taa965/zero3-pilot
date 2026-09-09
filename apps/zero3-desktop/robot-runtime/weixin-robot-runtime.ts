@@ -46,9 +46,15 @@ async function launchBindingWindow(): Promise<{ started: true }> {
     throw new Error('当前绑定启动器只支持 Windows。')
   }
   const executable = resolveWeixinExecutable()
-  const command = `start "Zero3 Weixin Binding" "${executable.replaceAll('"', '""')}" login`
-  await execFileAsync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', command], {
-    cwd: path.dirname(executable),
+  const workingDirectory = path.dirname(executable)
+  const launchScript = "Start-Process -FilePath $env:ZERO3_WEIXIN_LAUNCH_EXE -ArgumentList 'login' -WorkingDirectory $env:ZERO3_WEIXIN_LAUNCH_CWD"
+  await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', launchScript], {
+    cwd: workingDirectory,
+    env: {
+      ...process.env,
+      ZERO3_WEIXIN_LAUNCH_EXE: executable,
+      ZERO3_WEIXIN_LAUNCH_CWD: workingDirectory
+    },
     timeout: 10_000,
     windowsHide: true
   })

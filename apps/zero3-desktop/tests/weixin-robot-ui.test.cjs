@@ -28,8 +28,11 @@ test('renderer can only invoke fixed Weixin robot operations', () => {
   assert.match(bridge, /zero3:robots:weixin-bind/)
   assert.match(bridge, /zero3:robots:weixin-disconnect/)
   assert.match(runtime, /runWeixinCommand\(command: 'status' \| 'disconnect'\)/)
-  assert.match(runtime, /login`/)
+  assert.match(runtime, /Start-Process -FilePath \$env:ZERO3_WEIXIN_LAUNCH_EXE/)
+  assert.match(runtime, /-ArgumentList 'login'/)
+  assert.match(runtime, /ZERO3_WEIXIN_LAUNCH_CWD/)
   assert.doesNotMatch(runtime, /request\.command|request\.args|shell:\s*true/)
+  assert.doesNotMatch(runtime, /ComSpec|cmd\.exe|\['\/d', '\/s', '\/c'/)
   assert.doesNotMatch(runtime, /ZERO3_PILOT_NODE_URL|api\/v1\/jobs/)
 })
 
