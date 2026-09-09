@@ -1138,22 +1138,24 @@ function zero3ProbeWithDeadline<T>(work: Promise<T>, onUnknown: T): Promise<T> {
   })
 }
 
-async function zero3SessionProviderStatus() {
-  const agy = zero3Antigravity.status()
+async function zero3SessionProviderStatus(provider?: string) {
+  const wants = (id: string) => !provider || provider === id
+  const unknown: Zero3CliProbeResult = { available: null, authenticated: null, detail: '' }
+  const agy = wants('antigravity') ? zero3Antigravity.status() : { available: null }
   // available stays null on a timeout rather than collapsing to false: a probe
   // that did not finish has not shown the CLI to be missing, and 未安装 on a
   // working install is the exact failure this picker already put users through.
   const [codexCli, claude, antigravityAuth, profiles] = await Promise.all([
-    zero3ProbeWithDeadline<Zero3CliProbeResult>(zero3ProbeCodexCli(), {
+    wants('codex') ? zero3ProbeWithDeadline<Zero3CliProbeResult>(zero3ProbeCodexCli(), {
       available: null,
       authenticated: null,
       detail: '检测超时（15 秒）：官方 Codex 客户端未在时限内响应'
-    }),
-    zero3ProbeWithDeadline<Zero3CliProbeResult>(zero3ClaudeTaskAdapter.availability(), {
+    }) : Promise.resolve(unknown),
+    wants('claude') ? zero3ProbeWithDeadline<Zero3CliProbeResult>(zero3ClaudeTaskAdapter.availability(), {
       available: null,
       authenticated: null,
       detail: '检测超时（15 秒）：Claude Code CLI 未在时限内响应'
-    }),
+    }) : Promise.resolve(unknown),
     // The adapter reads a running session's auth state first and only then pays
     // for a CLI round trip, so this stays cheap while the picker is open.
     agy.available
@@ -1162,7 +1164,7 @@ async function zero3SessionProviderStatus() {
           { authenticated: null, detail: '授权检测超时（15 秒）' }
         )
       : Promise.resolve({ authenticated: null as boolean | null, detail: null as string | null }),
-    zero3ListApiProfiles()
+    wants('zero3') ? zero3ListApiProfiles() : Promise.resolve([])
   ])
   const codexAvailable = codexCli.available
   const codexAuthenticated = codexCli.authenticated
@@ -1182,7 +1184,7 @@ async function zero3SessionProviderStatus() {
     return sandbox ? reason + ' ' + sandbox : reason
   }
 
-  return {
+  const statuses = {
     gpt: { available: true, authenticated: null, authMode: 'web' as const, detail: '使用内嵌 ChatGPT 官方网页登录' },
     gemini: { available: true, authenticated: null, authMode: 'web' as const, detail: '使用内嵌 Gemini 官方网页登录' },
     codex: { available: codexAvailable, authenticated: codexAuthenticated, authMode: 'cli' as const, detail: codexDetail },
@@ -1215,9 +1217,13 @@ async function zero3SessionProviderStatus() {
       detail: profiles.length > 0 ? '已配置 ' + String(profiles.length) + ' 个 API 模型，Zero3 将通过 Codex Agent Kernel 提供项目工具能力' : '尚未配置 API 模型'
     }
   }
+  return provider ? Object.fromEntries(Object.entries(statuses).filter(([id]) => id === provider)) : statuses
 }
 
-ipcMain.handle('zero3:session-providers:status', () => zero3SessionProviderStatus())
+ipcMain.handle('zero3:session-providers:status', (_event, request: unknown) => {
+  const provider = zero3SessionRecord(request).provider
+  return zero3SessionProviderStatus(provider == null ? undefined : zero3SessionProvider(provider))
+})
 ipcMain.handle('zero3:session-providers:authorize', (_event, request: unknown) => zero3OpenProviderAuthorization(zero3SessionProvider(zero3SessionRecord(request).provider)))
 ipcMain.handle('zero3:session-providers:zero3-profiles:list', () => zero3ListApiProfiles())
 ipcMain.handle('zero3:session-providers:zero3-profiles:save', async (_event, requestValue: unknown) => {
@@ -1274,7 +1280,7 @@ app.on('before-quit', () => zero3ApiAgentBridge.stop())
 `
 
 const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionProviders', {
-  status: () => ipcRenderer.invoke('zero3:session-providers:status'),
+  status: request => ipcRenderer.invoke('zero3:session-providers:status', request),
   authorize: request => ipcRenderer.invoke('zero3:session-providers:authorize', request),
   listZero3Profiles: () => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:list'),
   saveZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:save', request),
@@ -1317,7 +1323,7 @@ type Zero3ApiProfile = {
 `
 
 const globalSurface = String.raw`    zero3SessionProviders: {
-      status: () => Promise<Zero3SessionProviderStatusMap>
+      status: (request?: { provider: Zero3SessionProviderId }) => Promise<Partial<Zero3SessionProviderStatusMap>>
       authorize: (request: { provider: Zero3SessionProviderId }) => Promise<{ opened: boolean; detail: string }>
       listZero3Profiles: () => Promise<Zero3ApiProfile[]>
       saveZero3Profile: (request: { id: string; name: string; protocol: Zero3ApiProfileProtocol; baseUrl: string; model: string; apiKey?: string | null }) => Promise<Zero3ApiProfile>

@@ -5,6 +5,7 @@ import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { ProjectLinkAdapter } from '../adapters/ProjectLinkAdapter'
 import type { LocalSessionProvider, LocalSessionRecord } from './session-types'
+import { providerReadiness } from './provider-readiness'
 import { localTurnFailureMessage, localTurnRecovery } from './local-turn-failure'
 
 interface LocalConversationSurfaceProps {
@@ -159,6 +160,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
         setRecoveryNotice('已恢复本机默认模型和思考设置。可直接重新发送，无需新建会话。')
         onChanged()
       } else if (canReauthorize) {
+        providerReadiness.invalidate(provider)
         const result = await window.zero3SessionProviders.authorize({ provider })
         setRecoveryNotice(result.detail)
       }
@@ -195,11 +197,15 @@ export function LocalConversationSurface({ provider, session, project, onChanged
       else if (provider === 'claude') response = await runClaudeTurn(withUser, project, prompt)
       else if (provider === 'antigravity') response = await runAntigravityTurn(withUser, project, prompt)
       else response = await runZero3Turn(withUser, project, prompt)
+      providerReadiness.markReady(provider)
       const withAssistant = LocalSessionAdapter.appendMessage(session.id, 'assistant', response)
       setMessages(withAssistant.messages)
       onChanged()
     } catch (nextError) {
       const message = localTurnFailureMessage(nextError)
+      if (localTurnRecovery(provider, message) === 'auth' || /(?:ENOENT|not found.*(?:codex|claude|agy)|ECONN|ENOTFOUND|ETIMEDOUT|fetch failed|network error|未找到.*CLI)/i.test(message)) {
+        providerReadiness.invalidate(provider)
+      }
       setError(message)
       const withAssistant = LocalSessionAdapter.appendMessage(session.id, 'assistant', `执行失败：${message}`)
       setMessages(withAssistant.messages)

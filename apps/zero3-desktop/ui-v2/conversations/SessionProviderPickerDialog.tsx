@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+
+import { providerReadiness, type CliProvider } from './provider-readiness'
 
 import { Codicon } from '@/components/ui/codicon'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
@@ -80,7 +82,7 @@ const PROTOCOL_DEFAULTS: Record<ApiProtocol, { baseUrl: string; model: string }>
 }
 
 function statusLabel(status: StatusMap[WorkspaceProvider] | undefined) {
-  if (!status) return { text: '检测中', className: 'text-(--ui-text-tertiary)' }
+  if (!status) return { text: '选择后检测', className: 'text-(--ui-text-tertiary)' }
   // A probe that timed out reports null, and that is not the same as missing.
   // Saying 未安装 for a CLI that is installed and merely slow is what sent this
   // dialog's users chasing an install problem that did not exist.
@@ -100,7 +102,7 @@ function makeProfileId() {
 
 export function SessionProviderPickerDialog({ project, onCreate, onCancel }: SessionProviderPickerDialogProps) {
   const [selected, setSelected] = useState<WorkspaceProvider>('gpt')
-  const [status, setStatus] = useState<StatusMap | null>(null)
+  const { statuses: status, checking } = useSyncExternalStore(providerReadiness.subscribe, providerReadiness.getSnapshot)
   const [profiles, setProfiles] = useState<ApiProfile[]>([])
   const [profileId, setProfileId] = useState('')
   const [profileName, setProfileName] = useState('OpenAI API')
@@ -116,40 +118,32 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
-  // Each probe spawns a CLI, and focus fires more often than a person changes
-  // windows. One refresh at a time keeps that from turning into a pile-up.
-  const refreshing = useRef(false)
-  const refresh = async () => {
-    if (refreshing.current) return
-    refreshing.current = true
+  const pendingAuthorization = useRef<CliProvider | null>(null)
+  const refreshProfiles = async () => {
     try {
-      const [nextStatus, nextProfiles] = await Promise.all([
-        window.zero3SessionProviders.status(),
-        window.zero3SessionProviders.listZero3Profiles()
-      ])
-      setStatus(nextStatus)
+      const nextProfiles = await window.zero3SessionProviders.listZero3Profiles()
       setProfiles(nextProfiles)
-      setProfileId(current => current || nextProfiles[0]?.id || '')
-      setMessage(null)
+      setProfileId(current => nextProfiles.some(profile => profile.id === current) ? current : nextProfiles[0]?.id || '')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
-    } finally {
-      refreshing.current = false
     }
   }
 
+  useEffect(() => { void refreshProfiles() }, [])
   useEffect(() => {
-    void refresh()
-  }, [])
+    if (isRuntimeProvider(selected)) void providerReadiness.ensure(selected)
+  }, [selected])
 
-  // Signing a CLI in happens in a terminal and a browser, so the answer changes
-  // while this window is in the background. Re-probe when it comes back rather
-  // than leaving the user to guess that the card needs clicking again.
+  // Only returning from an authorization opened here warrants a fresh probe.
   useEffect(() => {
-    const onFocus = () => { void refresh() }
+    const onFocus = () => {
+      const provider = pendingAuthorization.current
+      if (!provider) return
+      pendingAuthorization.current = null
+      void providerReadiness.ensure(provider, true)
+    }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -176,6 +170,10 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
     setBusy(true)
     try {
       const result = await window.zero3SessionProviders.authorize({ provider: selected })
+      if (result.opened && isRuntimeProvider(selected)) {
+        providerReadiness.invalidate(selected)
+        pendingAuthorization.current = selected
+      }
       setMessage(result.detail)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
@@ -196,7 +194,7 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
         model,
         apiKey: apiKey || null
       })
-      await refresh()
+      await refreshProfiles()
       setProfileId(saved.id)
       setApiKey('')
       setMessage(`已保存 API 模型：${saved.name}`)
@@ -222,7 +220,7 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
     try {
       await window.zero3SessionProviders.removeZero3Profile({ id: profileId })
       setProfileId('')
-      await refresh()
+      await refreshProfiles()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -261,7 +259,11 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
         <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
           {PROVIDERS.map(provider => {
             const itemStatus = status?.[provider.id]
-            const badge = statusLabel(itemStatus)
+            const badge = provider.id === 'zero3'
+              ? { text: profiles.length ? '已配置' : '待配置', className: 'text-blue-600' }
+              : isRuntimeProvider(provider.id) && checking[provider.id]
+                ? { text: '检测中', className: 'text-(--ui-text-tertiary)' }
+                : statusLabel(itemStatus)
             const disabledByProject = provider.requiresProject && !project
             // A provider that cannot be used says why on its own card. The
             // detail otherwise lives only in the panel below, one click away,
@@ -279,7 +281,6 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
                 type="button"
                 onClick={() => {
                   setSelected(provider.id)
-                  void refresh()
                 }}
                 className={`rounded-lg border p-3 text-left transition-colors ${selected === provider.id ? 'border-blue-500 bg-blue-500/5' : 'border-(--ui-border) hover:bg-(--ui-control-hover-background)'}`}
               >
@@ -300,6 +301,15 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
             )
           })}
         </div>
+
+        {isRuntimeProvider(selected) && (
+          <div className="mt-3 flex items-center gap-3 text-xs text-(--ui-text-tertiary)">
+            <button type="button" disabled={busy || checking[selected]} onClick={() => void providerReadiness.ensure(selected, true)} className="rounded-md border border-(--ui-border) px-3 py-1.5 disabled:opacity-50">
+              {checking[selected] ? '检测中…' : '重新检测'}
+            </button>
+            <span>已连接的平台会自动记住，无需每次检测。</span>
+          </div>
+        )}
 
         {selected !== 'zero3' && selectedStatus?.authMode === 'cli' && selectedStatus.authenticated !== true && (
           <div className="mt-3 flex items-center gap-2">
