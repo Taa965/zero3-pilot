@@ -148,6 +148,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
     ? localTurnFailureMessage(lastMessage.content) : null
   const failureMessage = error ?? savedFailure
   const recovery = localTurnRecovery(provider, failureMessage)
+  const canReauthorize = provider === 'codex' || provider === 'claude'
 
   const recover = async () => {
     if (!session || busy) return
@@ -157,7 +158,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
         setInput(current => current || [...messages].reverse().find(message => message.role === 'user')?.content || '')
         setRecoveryNotice('已恢复本机默认模型和思考设置。可直接重新发送，无需新建会话。')
         onChanged()
-      } else if (recovery === 'auth') {
+      } else if (canReauthorize) {
         const result = await window.zero3SessionProviders.authorize({ provider })
         setRecoveryNotice(result.detail)
       }
@@ -267,7 +268,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
             {recovery === 'model' && <div>当前模型可能不受账号支持。恢复本机默认设置后重新发送，或在新建会话时填写账号可用的模型。</div>}
             {recovery === 'auth' && <div>服务端拒绝了请求。本地存在登录凭证并不代表当前授权可用；请重新登录后重试，若仍返回 403，请检查账号访问权限和网络。</div>}
             {!recovery && <div>{failureMessage}</div>}
-            {recovery && <button disabled={busy} onClick={() => void recover()} className="rounded border border-current px-2 py-1 disabled:opacity-50">{recovery === 'model' ? '恢复本机默认设置' : '重新登录'}</button>}
+            {(recovery || canReauthorize) && <button disabled={busy} onClick={() => void recover()} className="rounded border border-current px-2 py-1 disabled:opacity-50">{recovery === 'model' ? '恢复本机默认设置' : '重新登录'}</button>}
           </div>
         )}
         {recoveryNotice && <div role="status" className="text-xs text-(--ui-text-secondary)">{recoveryNotice}</div>}

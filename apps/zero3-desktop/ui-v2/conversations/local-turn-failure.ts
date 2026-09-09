@@ -9,7 +9,14 @@ export function localTurnFailureMessage(error: unknown): string {
     if (result.is_error === true && typeof result.result === 'string') {
       return message.slice(0, start) + result.result + message.slice(end + 1)
     }
-  } catch { /* Already a readable error. */ }
+  } catch {
+    // Earlier releases saved only the first 300 characters of stdout. The
+    // result/error field is gone; do not infer an authentication cause from it.
+    if (/^Claude CLI 执行失败：\s*\{/.test(message)) {
+      const logAt = message.indexOf('（完整输出见 ')
+      return 'Claude CLI 执行失败：旧版本截断了错误详情，请重新发送以获取具体原因。' + (logAt >= 0 ? message.slice(logAt) : '')
+    }
+  }
   return message
 }
 

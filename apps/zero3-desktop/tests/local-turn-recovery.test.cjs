@@ -32,6 +32,10 @@ test('recover historical Claude JSON and Codex progress-only errors', () => {
   assert.equal(recovery.localTurnRecovery('claude', 'output exceeded 16 MiB'), null)
   const wrapped = 'Claude CLI 执行失败：' + JSON.stringify({ is_error: true, result: '403 Request not allowed', usage: {} }) + '（完整输出见 log）'
   assert.equal(recovery.localTurnFailureMessage(wrapped), 'Claude CLI 执行失败：403 Request not allowed（完整输出见 log）')
+  const truncated = recovery.localTurnFailureMessage('Claude CLI 执行失败：{"duration_api_ms":0,"usage":{"web_sear（完整输出见 log）')
+  assert.match(truncated, /旧版本截断了错误详情/)
+  assert.match(truncated, /完整输出见 log/)
+  assert.equal(recovery.localTurnRecovery('claude', truncated), null)
 })
 
 function sessionStore() {
