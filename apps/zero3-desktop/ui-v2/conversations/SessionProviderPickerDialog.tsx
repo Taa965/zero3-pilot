@@ -21,11 +21,9 @@ type RuntimeDraft = {
 }
 
 const MODEL_SUGGESTIONS: Record<RuntimeProvider, Array<{ value: string; label: string }>> = {
-  codex: [
-    { value: 'gpt-6-astra', label: 'GPT-6 Astra' },
-    { value: 'gpt-5.6', label: 'GPT-5.6 Sol' },
-    { value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' }
-  ],
+  // Availability depends on the CLI's account and provider. A static list was
+  // offering rejected models; leave blank to inherit the user's working CLI.
+  codex: [],
   claude: [
     { value: 'claude-opus-5', label: 'Claude Opus 5' },
     { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },

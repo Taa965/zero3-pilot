@@ -749,7 +749,7 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
     throw new Error('Claude effort must be low, medium, high, xhigh, or max')
   }
   const command = process.env.ZERO3_CLAUDE_BIN?.trim() || 'claude'
-  const args = ['-p', text, '--output-format', 'json', '--permission-mode', 'dontAsk']
+  const args = ['-p', '--output-format', 'json', '--permission-mode', 'dontAsk']
   if (model) args.push('--model', model)
   if (effort) args.push('--effort', effort)
   if (sessionId) args.push('--resume', sessionId)
@@ -762,7 +762,7 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
       ...(cwd ? { cwd } : {}),
       env: process.env,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe']
     })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
@@ -783,6 +783,9 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
     child.stdout.on('data', chunk => capture(stdout, Buffer.from(chunk)))
     child.stderr.on('data', chunk => capture(stderr, Buffer.from(chunk)))
     child.once('error', error => { clearTimeout(timer); reject(error) })
+    // Keep conversation text out of the process command line and failure logs.
+    child.stdin.on('error', () => {})
+    child.stdin.end(text, 'utf8')
     child.once('close', code => {
       clearTimeout(timer)
       const output = Buffer.concat(stdout).toString('utf8')
@@ -1189,7 +1192,7 @@ async function zero3SessionProviderStatus() {
       detail: !claude.available
         ? zero3ProviderHint('未检测到 Claude Code CLI', claude.detail)
         : claude.authenticated === true
-          ? '已复用本机 Claude Code 登录'
+          ? '检测到本机 Claude Code 登录凭证；实际可用性以发送结果为准'
           : zero3ProviderHint('Claude Code 已安装但未登录：请在终端运行 claude 完成官方登录', claude.detail)
     },
     antigravity: {

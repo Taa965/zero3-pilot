@@ -209,6 +209,10 @@ export const LocalSessionAdapter = {
     return mutate(id, record => ({ ...record, nativeProjectAttached: true }))
   },
 
+  resetRuntimeConfig(id: string): LocalSessionRecord {
+    return mutate(id, record => ({ ...record, model: null, thinkingEffort: null, updatedAt: now() }))
+  },
+
   appendMessage(id: string, role: 'user' | 'assistant', content: string): LocalSessionRecord {
     const normalized = content.trim()
     if (!normalized) throw new Error('消息不能为空')
