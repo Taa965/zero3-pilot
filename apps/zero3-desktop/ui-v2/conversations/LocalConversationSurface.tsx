@@ -99,8 +99,9 @@ export function LocalConversationSurface({ provider, session, project, onChanged
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState(session?.messages ?? [])
-  const [codexProgress, setCodexProgress] = useState<string | null>(null)
+  const [codexProgressLog, setCodexProgressLog] = useState<string[]>([])
   const activeCodexRequestId = useRef<string | null>(null)
+  const codexProgressEndRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     setMessages(session?.messages ?? [])
@@ -108,7 +109,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
   }, [session?.id, session?.updatedAt])
 
   useEffect(() => {
-    setCodexProgress(null)
+    setCodexProgressLog([])
     activeCodexRequestId.current = null
   }, [session?.id])
 
@@ -116,9 +117,16 @@ export function LocalConversationSurface({ provider, session, project, onChanged
     const subscribe = window.zero3SessionProviders?.onCodexProgress
     if (provider !== 'codex' || typeof subscribe !== 'function') return
     return subscribe(event => {
-      if (event.requestId === activeCodexRequestId.current) setCodexProgress(event.detail)
+      if (event.requestId !== activeCodexRequestId.current) return
+      const detail = event.detail.trim()
+      if (!detail) return
+      setCodexProgressLog(current => current.at(-1) === detail ? current : [...current, detail].slice(-40))
     })
   }, [provider])
+
+  useEffect(() => {
+    if (busy && provider === 'codex') codexProgressEndRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [busy, codexProgressLog.length, provider])
 
   const requiresProject = provider === 'codex' || provider === 'claude' || provider === 'antigravity' || provider === 'zero3'
   const canSend = Boolean(session && input.trim() && !busy && (!requiresProject || project))
@@ -140,7 +148,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
     const codexRequestId = provider === 'codex' ? crypto.randomUUID() : null
     if (codexRequestId) {
       activeCodexRequestId.current = codexRequestId
-      setCodexProgress('正在启动 Codex…')
+      setCodexProgressLog(['正在启动 Codex…'])
     }
     try {
       const withUser = LocalSessionAdapter.appendMessage(session.id, 'user', prompt)
@@ -162,7 +170,6 @@ export function LocalConversationSurface({ provider, session, project, onChanged
     } finally {
       if (codexRequestId && activeCodexRequestId.current === codexRequestId) {
         activeCodexRequestId.current = null
-        setCodexProgress(null)
       }
       setBusy(false)
     }
@@ -199,7 +206,26 @@ export function LocalConversationSurface({ provider, session, project, onChanged
             </div>
           </div>
         ))}
-        {busy && <div className="text-xs text-(--ui-text-tertiary)">正在执行 {providerLabel(provider)}…{provider === 'codex' && codexProgress ? ` ${codexProgress}` : ''}</div>}
+        {busy && provider === 'codex' && (
+          <div className="max-w-[88%] space-y-2 py-1 text-sm">
+            {codexProgressLog.map((detail, index) => {
+              const isLatest = index === codexProgressLog.length - 1
+              const isCommand = detail.includes('命令')
+              return (
+                <div key={`${index}-${detail}`} className="flex items-start gap-2.5 text-(--ui-text-secondary)">
+                  <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center">
+                    {isCommand
+                      ? <span className="flex size-5 items-center justify-center rounded bg-(--ui-text-primary) text-white"><Codicon name="terminal" className="size-3" /></span>
+                      : <span className={`size-2 rounded-full ${isLatest ? 'animate-pulse bg-blue-500' : 'bg-(--ui-text-tertiary)'}`} />}
+                  </div>
+                  <div className={`min-w-0 break-words leading-6 ${isLatest ? 'text-(--ui-text-primary)' : ''}`}>{detail}</div>
+                </div>
+              )
+            })}
+            <div ref={codexProgressEndRef} />
+          </div>
+        )}
+        {busy && provider !== 'codex' && <div className="text-xs text-(--ui-text-tertiary)">正在执行 {providerLabel(provider)}…</div>}
         {error && <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600">{error}</div>}
       </div>
 

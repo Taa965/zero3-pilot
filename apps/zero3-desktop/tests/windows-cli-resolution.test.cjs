@@ -202,7 +202,10 @@ test('local Codex turns surface progress and allow long-running coding work', ()
   assert.match(runtime, /onCodexProgress/)
   assert.match(surface, /onCodexProgress/)
   assert.match(surface, /requestId/)
-  assert.match(surface, /codexProgress/)
+  assert.match(surface, /codexProgressLog/)
+  assert.match(surface, /slice\(-40\)/)
+  assert.match(surface, /scrollIntoView/)
+  assert.match(surface, /Codicon name=\"terminal\"/)
 })
 
 test('local Codex provider reuses the official CLI home instead of the isolated Agent Kernel home', () => {
