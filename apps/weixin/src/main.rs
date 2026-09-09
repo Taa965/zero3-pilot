@@ -1,9 +1,12 @@
+mod authorization;
+
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
+use authorization::{looks_like_code, validate_code, AuthorizationStore};
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -14,6 +17,10 @@ use zero3_providers::weixin_clawbot::{
 
 const DEFAULT_NODE_URL: &str = "http://127.0.0.1:8790";
 const COMMAND_PREFIX: &str = "/pilot";
+const CANCEL_COMMAND: &str = "/cancel";
+const APPROVAL_TTL: Duration = Duration::from_secs(120);
+const AUTH_LOCKOUT: Duration = Duration::from_secs(600);
+const MAX_AUTH_FAILURES: u8 = 5;
 
 #[derive(Debug, Deserialize)]
 struct AcceptedJob {
@@ -25,6 +32,79 @@ struct JobRecord {
     status: String,
     output: Option<Value>,
     error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteCommand {
+    backend: String,
+    goal: String,
+    from_user_id: String,
+    session_id: Option<String>,
+    message_id: Option<u64>,
+    context_token: Option<String>,
+}
+
+#[derive(Debug)]
+struct PendingApproval {
+    command: RemoteCommand,
+    created_at: Instant,
+}
+
+#[derive(Debug, Default)]
+struct ApprovalSession {
+    pending: Option<PendingApproval>,
+    failed_attempts: u8,
+    locked_until: Option<Instant>,
+}
+
+impl ApprovalSession {
+    fn clear_pending(&mut self) {
+        self.pending = None;
+    }
+    fn pending_expired(&mut self) -> bool {
+        let expired = self
+            .pending
+            .as_ref()
+            .map(|pending| pending.created_at.elapsed() >= APPROVAL_TTL)
+            .unwrap_or(false);
+        if expired {
+            self.pending = None;
+        }
+        expired
+    }
+
+    fn lockout_remaining(&mut self) -> Option<Duration> {
+        let until = self.locked_until?;
+        let now = Instant::now();
+        if now >= until {
+            self.locked_until = None;
+            self.failed_attempts = 0;
+            None
+        } else {
+            Some(until.saturating_duration_since(now))
+        }
+    }
+
+    fn register_failure(&mut self) -> bool {
+        self.failed_attempts = self.failed_attempts.saturating_add(1);
+        if self.failed_attempts >= MAX_AUTH_FAILURES {
+            self.failed_attempts = 0;
+            self.locked_until = Some(Instant::now() + AUTH_LOCKOUT);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn register_success(&mut self) {
+        self.failed_attempts = 0;
+        self.locked_until = None;
+    }
+}
+
+enum SubmitOutcome {
+    Accepted(AcceptedJob),
+    ApprovalRequired(String),
 }
 
 fn data_dir() -> PathBuf {
@@ -70,33 +150,54 @@ async fn main() -> anyhow::Result<()> {
     let command = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "help".to_string());
-    let state_path = data_dir().join("weixin-clawbot.json");
+    let data_dir = data_dir();
+    let state_path = data_dir.join("weixin-clawbot.json");
+    let auth_path = data_dir.join("weixin-authorization.json");
     let weixin = WeixinClawBotClient::open(state_path)?;
+    let mut authorization = AuthorizationStore::open(auth_path)?;
 
     match command.as_str() {
         "status" => {
             let status = weixin.status().await;
-            println!("{}", serde_json::to_string_pretty(&status)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "weixin": status,
+                    "authorization_configured": authorization.is_configured(),
+                }))?
+            );
         }
-        "login" => login(&weixin).await?,
+        "login" => login(&weixin, &mut authorization).await?,
         "run" => {
+            if !authorization.is_configured() {
+                return Err(anyhow!(
+                    "尚未设置微信高风险操作授权码。请先运行 zero3-pilot-weixin login"
+                ));
+            }
             let backend = std::env::args().nth(2).unwrap_or_else(default_backend);
             validate_backend(&backend)?;
-            run_bridge(&weixin, &backend).await?;
+            run_bridge(&weixin, &authorization, &backend).await?;
         }
         "disconnect" => {
             weixin.disconnect().await?;
-            println!("微信 ClawBot 本地授权已移除。需要再次使用时重新运行 login。")
+            authorization.clear()?;
+            println!(
+                "微信 ClawBot 本地绑定和高风险操作授权码已移除。需要再次使用时重新运行 login。"
+            );
         }
         _ => print_usage(),
     }
     Ok(())
 }
 
-async fn login(weixin: &WeixinClawBotClient) -> anyhow::Result<()> {
+async fn login(
+    weixin: &WeixinClawBotClient,
+    authorization: &mut AuthorizationStore,
+) -> anyhow::Result<()> {
     let current = weixin.status().await;
     if current.connected {
         println!("微信 ClawBot 已连接：{}", status_label(&current));
+        ensure_authorization_code(authorization)?;
         println!("如需换绑，请先运行 zero3-pilot-weixin disconnect。");
         return Ok(());
     }
@@ -117,14 +218,26 @@ async fn login(weixin: &WeixinClawBotClient) -> anyhow::Result<()> {
                 sleep(Duration::from_secs(1)).await;
             }
             WeixinLoginState::NeedVerifyCode => {
-                print!("配对码: ");
+                print!("微信配对码: ");
                 io::stdout().flush()?;
                 let mut line = String::new();
                 io::stdin().read_line(&mut line)?;
                 verify_code = Some(line.trim().to_string());
             }
             WeixinLoginState::Connected | WeixinLoginState::AlreadyConnected => {
+                ensure_authorization_code(authorization)?;
                 println!("连接完成。现在可运行 zero3-pilot-weixin run。");
+                if let Some(owner) = weixin.owner_user_id().await {
+                    if let Err(error) = weixin
+                        .send_text(
+                            &owner,
+                            "Zero3 Pilot 已完成微信绑定。高风险操作会单独要求发送授权码；验证通过只授权当前待执行操作。",
+                            None,
+                        )                        .await
+                    {
+                        eprintln!("发送微信绑定确认失败: {error:#}");
+                    }
+                }
                 return Ok(());
             }
             WeixinLoginState::Expired | WeixinLoginState::VerifyCodeBlocked => {
@@ -134,7 +247,53 @@ async fn login(weixin: &WeixinClawBotClient) -> anyhow::Result<()> {
     }
 }
 
-async fn run_bridge(weixin: &WeixinClawBotClient, backend: &str) -> anyhow::Result<()> {
+fn ensure_authorization_code(authorization: &mut AuthorizationStore) -> anyhow::Result<()> {
+    if authorization.is_configured() {
+        return Ok(());
+    }
+
+    println!(
+        "\n首次微信绑定需要设置 Zero3 高风险操作授权码。\n\
+         以后微信触发高风险操作时，机器人会要求你发送此授权码后才执行。\n\
+         授权码长度 6-64 个字符，不能包含空白；本机只保存加盐多轮 SHA-256 摘要。"
+    );
+
+    loop {
+        print!("设置授权码: ");
+        io::stdout().flush()?;
+        let mut first = String::new();
+        io::stdin()
+            .read_line(&mut first)
+            .context("读取微信授权码")?;
+        let first = first.trim().to_string();
+        if let Err(error) = validate_code(&first) {
+            println!("{error}");
+            continue;
+        }
+
+        print!("再次输入授权码: ");
+        io::stdout().flush()?;
+        let mut second = String::new();
+        io::stdin()
+            .read_line(&mut second)
+            .context("再次读取微信授权码")?;
+        let second = second.trim().to_string();
+        if first != second {
+            println!("两次授权码不一致，请重新设置。");
+            continue;
+        }
+
+        authorization.configure(&first)?;
+        println!("高风险操作授权码设置完成。");
+        return Ok(());
+    }
+}
+
+async fn run_bridge(
+    weixin: &WeixinClawBotClient,
+    authorization: &AuthorizationStore,
+    backend: &str,
+) -> anyhow::Result<()> {
     let status = weixin.status().await;
     if !status.connected {
         return Err(anyhow!(
@@ -145,12 +304,15 @@ async fn run_bridge(weixin: &WeixinClawBotClient, backend: &str) -> anyhow::Resu
     println!(
         "微信 ClawBot 已连接到 Zero3 Pilot。默认 Agent={backend}。仅处理 {COMMAND_PREFIX} 指令。"
     );
+    let mut approval = ApprovalSession::default();
 
     loop {
         match weixin.get_updates().await {
             Ok(messages) => {
                 for message in messages {
-                    if let Err(error) = handle_message(weixin, message, backend).await {
+                    if let Err(error) =
+                        handle_message(weixin, authorization, &mut approval, message, backend).await
+                    {
                         eprintln!("处理微信消息失败: {error:#}");
                     }
                 }
@@ -165,20 +327,106 @@ async fn run_bridge(weixin: &WeixinClawBotClient, backend: &str) -> anyhow::Resu
 
 async fn handle_message(
     weixin: &WeixinClawBotClient,
+    authorization: &AuthorizationStore,
+    approval: &mut ApprovalSession,
     message: WeixinMessage,
     default_backend: &str,
 ) -> anyhow::Result<()> {
-    let Some(from) = message.from_user_id.as_deref() else {
+    let Some(from) = message.from_user_id.clone() else {
         return Ok(());
     };
     let owner = weixin.owner_user_id().await;
-    if owner.as_deref() != Some(from) {
+    if owner.as_deref() != Some(from.as_str()) {
         return Ok(());
     }
     let Some(text) = message.text() else {
         return Ok(());
     };
     let trimmed = text.trim();
+
+    if approval.pending_expired() && looks_like_code(trimmed) {
+        weixin
+            .send_text(
+                &from,
+                "授权请求已超过 2 分钟并失效，请重新发送原 /pilot 指令。",
+                message.context_token.as_deref(),
+            )
+            .await?;
+        return Ok(());
+    }
+
+    if approval.pending.is_some() {
+        if trimmed.eq_ignore_ascii_case(CANCEL_COMMAND) {
+            approval.clear_pending();
+            weixin
+                .send_text(
+                    &from,
+                    "已取消当前待授权操作。",
+                    message.context_token.as_deref(),
+                )
+                .await?;
+            return Ok(());
+        }
+
+        if trimmed.starts_with(COMMAND_PREFIX) {
+            weixin
+                .send_text(
+                    &from,
+                    "当前已有待授权操作。请先发送授权码，或发送 /cancel 取消后再提交新指令。",
+                    message.context_token.as_deref(),
+                )
+                .await?;
+            return Ok(());
+        }
+        if let Some(remaining) = approval.lockout_remaining() {
+            let minutes = (remaining.as_secs() + 59) / 60;
+            weixin
+                .send_text(
+                    &from,
+                    &format!("授权码尝试次数过多，已临时锁定。约 {minutes} 分钟后可重试。"),
+                    message.context_token.as_deref(),
+                )
+                .await?;
+            return Ok(());
+        }
+
+        if !looks_like_code(trimmed) {
+            weixin
+                .send_text(
+                    &from,
+                    "当前操作等待授权。请直接发送授权码，或发送 /cancel 取消。",
+                    message.context_token.as_deref(),
+                )
+                .await?;
+            return Ok(());
+        }
+
+        if authorization.verify(trimmed)? {
+            approval.register_success();
+            let pending = approval.pending.take().expect("pending approval exists");
+            weixin
+                .send_text(
+                    &from,
+                    "授权码验证通过，仅授权当前操作。正在执行。",
+                    message.context_token.as_deref(),
+                )
+                .await?;
+            execute_and_reply(weixin, pending.command, true).await?;
+        } else {
+            let locked = approval.register_failure();
+            let reply = if locked {
+                "授权码连续错误 5 次，已锁定 10 分钟；当前操作不会执行。".to_string()
+            } else {
+                let remaining = MAX_AUTH_FAILURES.saturating_sub(approval.failed_attempts);
+                format!("授权码错误，当前操作未执行。还可尝试 {remaining} 次。")
+            };
+            weixin
+                .send_text(&from, &reply, message.context_token.as_deref())
+                .await?;
+        }
+        return Ok(());
+    }
+
     if !trimmed.starts_with(COMMAND_PREFIX) {
         return Ok(());
     }
@@ -186,7 +434,7 @@ async fn handle_message(
     if rest.is_empty() {
         weixin
             .send_text(
-                from,
+                &from,
                 "用法：/pilot <任务>，或 /pilot codex|claude|hermes <任务>",
                 message.context_token.as_deref(),
             )
@@ -195,15 +443,60 @@ async fn handle_message(
     }
 
     let (backend, goal) = parse_backend(rest, default_backend)?;
-    let output = match submit_and_wait(&backend, goal, &message).await {
+    let command = RemoteCommand {
+        backend,
+        goal: goal.to_string(),
+        from_user_id: from.clone(),
+        session_id: message.session_id.clone(),
+        message_id: message.message_id,
+        context_token: message.context_token.clone(),
+    };
+    match submit_agent(&command, false).await? {
+        SubmitOutcome::Accepted(accepted) => {
+            let value = wait_for_job(&accepted.job_id).await?;
+            let output = render_reply(&value);
+            weixin
+                .send_text(
+                    &from,
+                    &truncate_utf8(&output, 3500),
+                    message.context_token.as_deref(),
+                )
+                .await?;
+        }
+        SubmitOutcome::ApprovalRequired(reason) => {
+            approval.pending = Some(PendingApproval {
+                command,
+                created_at: Instant::now(),
+            });
+            let reason = truncate_utf8(&reason, 500);
+            weixin
+                .send_text(
+                    &from,
+                    &format!(
+                        "检测到高风险/需审批操作，当前尚未执行。\n请在 2 分钟内直接发送授权码；发送 /cancel 可取消。\n权限原因：{reason}"
+                    ),
+                    message.context_token.as_deref(),
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn execute_and_reply(
+    weixin: &WeixinClawBotClient,
+    command: RemoteCommand,
+    approved: bool,
+) -> anyhow::Result<()> {
+    let output = match submit_and_wait(&command, approved).await {
         Ok(value) => render_reply(&value),
         Err(error) => format!("Zero3 Pilot 执行失败：{error:#}"),
     };
     weixin
         .send_text(
-            from,
+            &command.from_user_id,
             &truncate_utf8(&output, 3500),
-            message.context_token.as_deref(),
+            command.context_token.as_deref(),
         )
         .await?;
     Ok(())
@@ -247,38 +540,63 @@ async fn ensure_node_healthy() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn submit_and_wait(
-    backend: &str,
-    goal: &str,
-    message: &WeixinMessage,
-) -> anyhow::Result<Value> {
+async fn submit_agent(command: &RemoteCommand, approved: bool) -> anyhow::Result<SubmitOutcome> {
     let client = reqwest::Client::new();
-    let accepted = client
+    let response = client
         .post(format!("{}/api/v1/jobs/agent", node_url()))
         .json(&json!({
-            "backend": backend,
-            "goal": goal,
+            "backend": command.backend,
+            "goal": command.goal,
             "context": {
                 "channel": "weixin-clawbot",
-                "from_user_id": message.from_user_id,
-                "session_id": message.session_id,
-                "message_id": message.message_id,
+                "from_user_id": command.from_user_id,
+                "session_id": command.session_id,
+                "message_id": command.message_id,
             },
             "granted_level": "Standard",
-            "approved": true
+            "approved": approved,
         }))
         .send()
         .await
-        .context("提交微信指令到 Zero3 Pilot Node")?
-        .error_for_status()
-        .context("Zero3 Pilot Node 拒绝微信指令")?
+        .context("提交微信指令到 Zero3 Pilot Node")?;
+
+    let status = response.status();
+    if status == StatusCode::PRECONDITION_REQUIRED {
+        return Ok(SubmitOutcome::ApprovalRequired(
+            api_error_message(response).await,
+        ));
+    }
+    if !status.is_success() {
+        let message = api_error_message(response).await;
+        return Err(anyhow!(
+            "Zero3 Pilot Node 拒绝微信指令 ({status}): {message}"
+        ));
+    }
+
+    let accepted = response
         .json::<AcceptedJob>()
         .await
         .context("解析 Zero3 Pilot Job ID")?;
+    Ok(SubmitOutcome::Accepted(accepted))
+}
 
+async fn submit_and_wait(command: &RemoteCommand, approved: bool) -> anyhow::Result<Value> {
+    let accepted = match submit_agent(command, approved).await? {
+        SubmitOutcome::Accepted(accepted) => accepted,
+        SubmitOutcome::ApprovalRequired(reason) => {
+            return Err(anyhow!(
+                "授权后操作仍被权限层要求审批，已停止执行: {reason}"
+            ));
+        }
+    };
+    wait_for_job(&accepted.job_id).await
+}
+
+async fn wait_for_job(job_id: &str) -> anyhow::Result<Value> {
+    let client = reqwest::Client::new();
     for _ in 0..300 {
         let job = client
-            .get(format!("{}/api/v1/jobs/{}", node_url(), accepted.job_id))
+            .get(format!("{}/api/v1/jobs/{job_id}", node_url()))
             .send()
             .await
             .context("读取 Zero3 Pilot Job 状态")?
@@ -288,12 +606,28 @@ async fn submit_and_wait(
         match job.status.as_str() {
             "Succeeded" => return Ok(job.output.unwrap_or(Value::Null)),
             "Failed" | "Cancelled" => {
-                return Err(anyhow!(job.error.unwrap_or_else(|| job.status.clone())))
+                return Err(anyhow!(job.error.unwrap_or_else(|| job.status.clone())));
             }
             _ => sleep(Duration::from_secs(1)).await,
         }
     }
     Err(anyhow!("Zero3 Pilot Job 超过 5 分钟仍未完成"))
+}
+
+async fn api_error_message(response: reqwest::Response) -> String {
+    match response.text().await {
+        Ok(body) => serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| body.trim().to_string()),
+        Err(error) => format!("读取错误响应失败: {error}"),
+    }
 }
 
 fn render_reply(value: &Value) -> String {
@@ -365,5 +699,15 @@ mod tests {
         let truncated = truncate_utf8(&text, 100);
         assert!(truncated.is_char_boundary(truncated.len()));
         assert!(truncated.chars().count() <= 100);
+    }
+
+    #[test]
+    fn approval_session_locks_after_five_failures() {
+        let mut session = ApprovalSession::default();
+        for _ in 0..4 {
+            assert!(!session.register_failure());
+        }
+        assert!(session.register_failure());
+        assert!(session.lockout_remaining().is_some());
     }
 }
