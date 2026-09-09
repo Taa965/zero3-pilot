@@ -9,6 +9,7 @@ import readline from 'node:readline'
 import {
   ZERO3_GEMINI_EXECUTION_RESULT_SCHEMA,
   type Zero3AntigravityAuthState,
+  type Zero3AntigravityEffort,
   type Zero3AntigravityMappedEvent,
   type Zero3AntigravitySessionBinding,
   type Zero3AntigravityTurnInput,
@@ -27,6 +28,8 @@ type PendingTurn = {
 type RuntimeHandle = {
   binding: Zero3AntigravitySessionBinding
   child: ChildProcessWithoutNullStreams
+  model: string | null
+  effort: Zero3AntigravityEffort | null
   pending: PendingTurn | null
   terminalSeenForCurrentTurn: boolean
   stderrTail: string[]
@@ -45,6 +48,18 @@ function required(value: unknown, label: string, max: number) {
   const text = typeof value === 'string' ? value.trim() : ''
   if (!text || text.length > max) throw new Error(`${label} is required and must be at most ${max} characters`)
   return text
+}
+function optional(value: unknown, label: string, max: number): string | null {
+  if (value == null || value === '') return null
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text || text.length > max) throw new Error(`${label} must be at most ${max} characters`)
+  return text
+}
+function runtimeEffort(value: unknown): Zero3AntigravityEffort | null {
+  const effort = optional(value, 'effort', 16)
+  if (effort == null) return null
+  if (effort === 'low' || effort === 'medium' || effort === 'high') return effort
+  throw new Error('Antigravity effort must be low, medium, or high')
 }
 function isDirectory(value: string) {
   try { return fs.statSync(value).isDirectory() } catch { return false }
@@ -171,9 +186,11 @@ export class Zero3AntigravityAdapter {
     const logicalSessionId = required(inputValue.logicalSessionId, 'logicalSessionId', 256)
     const cwd = path.resolve(required(inputValue.cwd, 'cwd', 4096))
     const prompt = required(inputValue.prompt, 'prompt', 128_000)
+    const model = optional(inputValue.model, 'model', 256)
+    const effort = runtimeEffort(inputValue.effort)
     if (!isDirectory(cwd)) throw new Error(`Antigravity cwd does not exist: ${cwd}`)
 
-    const handle = await this.ensureRuntime(logicalSessionId, cwd, inputValue.projectId ?? null)
+    const handle = await this.ensureRuntime(logicalSessionId, cwd, inputValue.projectId ?? null, model, effort)
     if (handle.binding.authState === 'AUTH_REQUIRED' || handle.binding.authState === 'AUTH_EXPIRED') {
       throw new Error(`Antigravity ${handle.binding.authState.toLowerCase()}; authenticate with the official interactive agy client and retry`)
     }
@@ -247,9 +264,21 @@ export class Zero3AntigravityAdapter {
     this.handles.clear()
   }
 
-  private async ensureRuntime(logicalSessionId: string, cwd: string, projectId: string | null): Promise<RuntimeHandle> {
+  private async ensureRuntime(
+    logicalSessionId: string,
+    cwd: string,
+    projectId: string | null,
+    model: string | null,
+    effort: Zero3AntigravityEffort | null
+  ): Promise<RuntimeHandle> {
     const existing = this.handles.get(logicalSessionId)
-    if (existing && !existing.child.killed && existing.binding.cwd === cwd) return existing
+    if (
+      existing &&
+      !existing.child.killed &&
+      existing.binding.cwd === cwd &&
+      existing.model === model &&
+      existing.effort === effort
+    ) return existing
     if (existing) {
       try { existing.child.kill() } catch {}
       this.handles.delete(logicalSessionId)
@@ -283,6 +312,8 @@ export class Zero3AntigravityAdapter {
       '--print-timeout', '60m',
       '--json-schema', JSON.stringify(ZERO3_GEMINI_EXECUTION_RESULT_SCHEMA)
     ]
+    if (model) args.push('--model', model)
+    if (effort) args.push('--effort', effort)
     if (binding.conversationId) args.push('--conversation', binding.conversationId)
     const binary = this.resolveBinary()
     if (!binary) throw new Error('Antigravity CLI (agy) was not found. Install/authenticate the official CLI first.')
@@ -294,7 +325,7 @@ export class Zero3AntigravityAdapter {
       windowsHide: true,
       shell
     })
-    const handle: RuntimeHandle = { binding, child, pending: null, terminalSeenForCurrentTurn: false, stderrTail: [] }
+    const handle: RuntimeHandle = { binding, child, model, effort, pending: null, terminalSeenForCurrentTurn: false, stderrTail: [] }
     this.handles.set(logicalSessionId, handle)
     this.observeProcess(handle)
     await this.waitUntilStarted(handle)

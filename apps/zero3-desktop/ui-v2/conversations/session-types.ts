@@ -12,6 +12,12 @@ export type WorkspaceSession = {
 }
 
 export type LocalSessionProvider = Exclude<WorkspaceProvider, 'gpt' | 'gemini'>
+export type LocalSessionThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export type LocalSessionRuntimeConfig = {
+  model?: string | null
+  thinkingEffort?: LocalSessionThinkingEffort | null
+}
 
 export type LocalSessionMessage = {
   id: string
@@ -30,6 +36,8 @@ export type LocalSessionRecord = {
   titleIsCustom?: boolean
   runtimeId: string | null
   zero3ProfileId: string | null
+  model: string | null
+  thinkingEffort: LocalSessionThinkingEffort | null
   archived?: boolean
   messages: LocalSessionMessage[]
 }

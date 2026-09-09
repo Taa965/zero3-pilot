@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { Codicon } from '@/components/ui/codicon'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
-import type { WorkspaceProvider } from './session-types'
+import type { LocalSessionRuntimeConfig, LocalSessionThinkingEffort, WorkspaceProvider } from './session-types'
 
 type StatusMap = Awaited<ReturnType<Window['zero3SessionProviders']['status']>>
 type ApiProfile = Awaited<ReturnType<Window['zero3SessionProviders']['listZero3Profiles']>>[number]
@@ -10,8 +10,54 @@ type ApiProtocol = ApiProfile['protocol']
 
 interface SessionProviderPickerDialogProps {
   project: Zero3ProjectRecord | null
-  onCreate: (provider: WorkspaceProvider, zero3ProfileId?: string | null) => void
+  onCreate: (provider: WorkspaceProvider, options?: LocalSessionRuntimeConfig & { zero3ProfileId?: string | null }) => void
   onCancel: () => void
+}
+
+type RuntimeProvider = Extract<WorkspaceProvider, 'codex' | 'claude' | 'antigravity'>
+type RuntimeDraft = {
+  model: string
+  thinkingEffort: LocalSessionThinkingEffort | ''
+}
+
+const MODEL_SUGGESTIONS: Record<RuntimeProvider, Array<{ value: string; label: string }>> = {
+  codex: [
+    { value: 'gpt-6-astra', label: 'GPT-6 Astra' },
+    { value: 'gpt-5.6', label: 'GPT-5.6 Sol' },
+    { value: 'gpt-5.3-codex', label: 'GPT-5.3-Codex' }
+  ],
+  claude: [
+    { value: 'claude-opus-5', label: 'Claude Opus 5' },
+    { value: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+    { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' }
+  ],
+  antigravity: []
+}
+
+const EFFORT_OPTIONS: Record<RuntimeProvider, Array<{ value: LocalSessionThinkingEffort; label: string }>> = {
+  codex: [
+    { value: 'low', label: '低（Low）' },
+    { value: 'medium', label: '中（Medium）' },
+    { value: 'high', label: '高（High）' },
+    { value: 'xhigh', label: '超高（XHigh）' }
+  ],
+  claude: [
+    { value: 'low', label: '低（Low）' },
+    { value: 'medium', label: '中（Medium）' },
+    { value: 'high', label: '高（High）' },
+    { value: 'xhigh', label: '超高（XHigh）' },
+    { value: 'max', label: '最大（Max）' }
+  ],
+  antigravity: [
+    { value: 'low', label: '低（Low）' },
+    { value: 'medium', label: '中（Medium）' },
+    { value: 'high', label: '高（High）' }
+  ]
+}
+
+function isRuntimeProvider(provider: WorkspaceProvider): provider is RuntimeProvider {
+  return provider === 'codex' || provider === 'claude' || provider === 'antigravity'
 }
 
 const PROVIDERS: Array<{
@@ -60,6 +106,11 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
   const [baseUrl, setBaseUrl] = useState(PROTOCOL_DEFAULTS.openai_compatible.baseUrl)
   const [model, setModel] = useState(PROTOCOL_DEFAULTS.openai_compatible.model)
   const [apiKey, setApiKey] = useState('')
+  const [runtimeDrafts, setRuntimeDrafts] = useState<Record<RuntimeProvider, RuntimeDraft>>({
+    codex: { model: '', thinkingEffort: '' },
+    claude: { model: '', thinkingEffort: '' },
+    antigravity: { model: '', thinkingEffort: '' }
+  })
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
@@ -243,6 +294,61 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
           </div>
         )}
 
+        {isRuntimeProvider(selected) && (
+          <div className="mt-4 rounded-lg border border-(--ui-border) bg-(--ui-pane-background) p-4">
+            <div className="mb-3">
+              <div className="text-sm font-medium">运行配置</div>
+              <div className="mt-1 text-xs text-(--ui-text-tertiary)">
+                留空会沿用官方 CLI 默认值；模型支持从常用项选择，也可以直接输入官方 CLI 支持的模型名。
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
+                模型
+                <input
+                  list={`zero3-${selected}-model-suggestions`}
+                  value={runtimeDrafts[selected].model}
+                  onChange={event => setRuntimeDrafts(current => ({
+                    ...current,
+                    [selected]: { ...current[selected], model: event.target.value }
+                  }))}
+                  placeholder={selected === 'antigravity' ? '官方默认；或输入 agy models 中的模型名' : '官方默认；或选择 / 输入模型名'}
+                  className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground"
+                />
+                <datalist id={`zero3-${selected}-model-suggestions`}>
+                  {MODEL_SUGGESTIONS[selected].map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </datalist>
+              </label>
+              <label className="grid gap-1 text-xs text-(--ui-text-tertiary)">
+                思考强度
+                <select
+                  value={runtimeDrafts[selected].thinkingEffort}
+                  onChange={event => setRuntimeDrafts(current => ({
+                    ...current,
+                    [selected]: {
+                      ...current[selected],
+                      thinkingEffort: event.target.value as LocalSessionThinkingEffort | ''
+                    }
+                  }))}
+                  className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground"
+                >
+                  <option value="">官方默认</option>
+                  {EFFORT_OPTIONS[selected].map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-2 text-[11px] leading-5 text-(--ui-text-tertiary)">
+              {selected === 'codex' && 'Codex 会把选择写入 --model 与 model_reasoning_effort，并在 resume 时继续覆盖。'}
+              {selected === 'claude' && 'Claude Code 会通过 --model 与 --effort 执行；具体可用强度仍取决于所选 Claude 模型。'}
+              {selected === 'antigravity' && 'Antigravity 当前官方 agy CLI 的 --effort 只支持 low / medium / high。'}
+            </div>
+          </div>
+        )}
+
         {selected === 'zero3' && (
           <div className="mt-4 space-y-3">
             <div className="flex gap-2">
@@ -301,7 +407,14 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
           <button onClick={onCancel} className="rounded-md border border-(--ui-border) px-4 py-2 text-sm hover:bg-(--ui-control-hover-background)">取消</button>
           <button
             disabled={!canCreate}
-            onClick={() => onCreate(selected, selected === 'zero3' ? profileId : null)}
+            onClick={() => {
+              const runtime = isRuntimeProvider(selected) ? runtimeDrafts[selected] : null
+              onCreate(selected, {
+                zero3ProfileId: selected === 'zero3' ? profileId : null,
+                model: runtime?.model.trim() || null,
+                thinkingEffort: runtime?.thinkingEffort || null
+              })
+            }}
             className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             创建 {selectedDefinition.title} 会话

@@ -26,7 +26,11 @@ async function runCodexTurn(session: LocalSessionRecord, project: Zero3ProjectRe
   const result = await window.zero3SessionProviders.codexTurn({
     text: prompt,
     cwd: project?.rootPath ?? null,
-    threadId: session.runtimeId
+    threadId: session.runtimeId,
+    model: session.model,
+    effort: session.thinkingEffort === 'low' || session.thinkingEffort === 'medium' || session.thinkingEffort === 'high' || session.thinkingEffort === 'xhigh'
+      ? session.thinkingEffort
+      : null
   })
   if (result.threadId && result.threadId !== session.runtimeId) {
     LocalSessionAdapter.setRuntimeId(session.id, result.threadId)
@@ -38,7 +42,9 @@ async function runClaudeTurn(session: LocalSessionRecord, project: Zero3ProjectR
   const result = await window.zero3SessionProviders.claudeTurn({
     text: prompt,
     cwd: project?.rootPath ?? null,
-    sessionId: session.runtimeId
+    sessionId: session.runtimeId,
+    model: session.model,
+    effort: session.thinkingEffort
   })
   if (result.sessionId && result.sessionId !== session.runtimeId) {
     LocalSessionAdapter.setRuntimeId(session.id, result.sessionId)
@@ -54,7 +60,11 @@ async function runAntigravityTurn(session: LocalSessionRecord, project: Zero3Pro
     logicalSessionId,
     projectId: project.id,
     cwd: project.rootPath,
-    prompt
+    prompt,
+    model: session.model,
+    effort: session.thinkingEffort === 'low' || session.thinkingEffort === 'medium' || session.thinkingEffort === 'high'
+      ? session.thinkingEffort
+      : null
   })
   const result = await window.zero3Antigravity.waitTurn({ turnId: turn.turnId })
   if (result.status !== 'COMPLETE' && result.status !== 'PARTIAL') {
@@ -99,7 +109,10 @@ export function LocalConversationSurface({ provider, session, project, onChanged
   const subtitle = useMemo(() => {
     if (!session) return '未选择会话'
     if (provider === 'zero3') return session.zero3ProfileId ? `API Profile: ${session.zero3ProfileId}` : '未绑定 API Profile'
-    return session.runtimeId ? `Runtime: ${session.runtimeId}` : '运行时将在首次发送时建立'
+    const runtime = session.runtimeId ? `Runtime: ${session.runtimeId}` : '运行时将在首次发送时建立'
+    const model = session.model ? `Model: ${session.model}` : 'Model: 官方默认'
+    const effort = session.thinkingEffort ? `思考: ${session.thinkingEffort}` : '思考: 官方默认'
+    return `${model} · ${effort} · ${runtime}`
   }, [provider, session])
 
   const send = async () => {

@@ -2,6 +2,8 @@ import type {
   LocalSessionMessage,
   LocalSessionProvider,
   LocalSessionRecord,
+  LocalSessionRuntimeConfig,
+  LocalSessionThinkingEffort,
   WorkspaceSession
 } from '../conversations/session-types'
 
@@ -27,6 +29,16 @@ function providerLabel(provider: LocalSessionProvider) {
   if (provider === 'claude') return 'Claude Code'
   if (provider === 'antigravity') return 'Antigravity'
   return 'Zero3'
+}
+
+function normalizeModel(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 256) : null
+}
+
+function normalizeThinkingEffort(value: unknown): LocalSessionThinkingEffort | null {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max'
+    ? value
+    : null
 }
 
 function normalizeMessage(value: unknown): LocalSessionMessage | null {
@@ -63,6 +75,8 @@ function normalizeRecord(value: unknown): LocalSessionRecord | null {
     titleIsCustom: raw.titleIsCustom === true,
     runtimeId: typeof raw.runtimeId === 'string' && raw.runtimeId.trim() ? raw.runtimeId.trim() : null,
     zero3ProfileId: typeof raw.zero3ProfileId === 'string' && raw.zero3ProfileId.trim() ? raw.zero3ProfileId.trim() : null,
+    model: normalizeModel(raw.model),
+    thinkingEffort: normalizeThinkingEffort(raw.thinkingEffort),
     archived: raw.archived === true,
     messages
   }
@@ -131,7 +145,12 @@ export const LocalSessionAdapter = {
     }
   },
 
-  create(provider: LocalSessionProvider, projectId: string | null, zero3ProfileId: string | null = null): LocalSessionRecord {
+  create(
+    provider: LocalSessionProvider,
+    projectId: string | null,
+    zero3ProfileId: string | null = null,
+    runtimeConfig: LocalSessionRuntimeConfig = {}
+  ): LocalSessionRecord {
     const timestamp = now()
     const record: LocalSessionRecord = {
       id: uid(`local-${provider}`),
@@ -142,6 +161,8 @@ export const LocalSessionAdapter = {
       updatedAt: timestamp,
       runtimeId: provider === 'antigravity' ? uid('agy-session') : null,
       zero3ProfileId: provider === 'zero3' ? zero3ProfileId : null,
+      model: provider === 'zero3' ? null : normalizeModel(runtimeConfig.model),
+      thinkingEffort: provider === 'zero3' ? null : normalizeThinkingEffort(runtimeConfig.thinkingEffort),
       archived: false,
       messages: []
     }

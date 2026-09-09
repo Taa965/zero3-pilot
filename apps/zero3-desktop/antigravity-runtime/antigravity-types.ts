@@ -1,5 +1,6 @@
 export type Zero3AntigravityAuthState = 'UNKNOWN' | 'AUTHENTICATED' | 'AUTH_REQUIRED' | 'AUTH_EXPIRED'
 export type Zero3AntigravityRuntimeState = 'STOPPED' | 'STARTING' | 'READY' | 'RUNNING' | 'OUTCOME_UNKNOWN' | 'ERROR'
+export type Zero3AntigravityEffort = 'low' | 'medium' | 'high'
 
 export type Zero3AntigravitySessionBinding = {
   logicalSessionId: string
@@ -18,6 +19,8 @@ export type Zero3AntigravityTurnInput = {
   projectId?: string | null
   cwd: string
   prompt: string
+  model?: string | null
+  effort?: Zero3AntigravityEffort | null
   taskId?: string | null
   contextVersion?: number | null
 }

@@ -648,8 +648,15 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
   const text = zero3SessionText(request.text, 'Claude prompt', 128_000)
   const cwd = zero3SessionOptionalText(request.cwd, 4096)
   const sessionId = zero3SessionOptionalText(request.sessionId, 512)
+  const model = zero3SessionOptionalText(request.model, 256)
+  const effort = zero3SessionOptionalText(request.effort, 16)
+  if (effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort)) {
+    throw new Error('Claude effort must be low, medium, high, xhigh, or max')
+  }
   const command = process.env.ZERO3_CLAUDE_BIN?.trim() || 'claude'
   const args = ['-p', text, '--output-format', 'json', '--permission-mode', 'dontAsk']
+  if (model) args.push('--model', model)
+  if (effort) args.push('--effort', effort)
   if (sessionId) args.push('--resume', sessionId)
   const { spawn } = await import('node:child_process')
   return new Promise<{ text: string; sessionId: string | null }>((resolve, reject) => {
@@ -713,14 +720,22 @@ async function zero3RunCodexCliTurn(requestValue: unknown) {
   const text = zero3SessionText(request.text, 'Codex prompt', 128_000)
   const cwd = zero3SessionOptionalText(request.cwd, 4096)
   const threadId = zero3SessionOptionalText(request.threadId, 512)
+  const model = zero3SessionOptionalText(request.model, 256)
+  const effort = zero3SessionOptionalText(request.effort, 16)
+  if (effort && !['low', 'medium', 'high', 'xhigh'].includes(effort)) {
+    throw new Error('Codex reasoning effort must be low, medium, high, or xhigh')
+  }
   const command = process.env.ZERO3_CODEX_CLI_BIN?.trim() || 'codex'
-  // 'exec resume' accepts neither --sandbox nor -C: it restores the session's
-  // own settings, and the working directory comes from the spawn. Its prompt is
-  // a positional argument where '-' means stdin; plain 'exec' reads stdin when
-  // no prompt argument is given.
+  const runtimeArgs = [
+    ...(model ? ['--model', model] : []),
+    ...(effort ? ['-c', 'model_reasoning_effort=' + JSON.stringify(effort)] : [])
+  ]
+  // 'exec resume' still rejects sandbox/-C, but it accepts model/config
+  // overrides. Keep those before the resumed thread id so every turn honors the
+  // runtime selection stored by Zero3.
   const args = threadId
-    ? ['exec', 'resume', threadId, '-', '--json', '--skip-git-repo-check']
-    : ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'workspace-write']
+    ? ['exec', 'resume', ...runtimeArgs, threadId, '-', '--json', '--skip-git-repo-check']
+    : ['exec', ...runtimeArgs, '--json', '--skip-git-repo-check', '--sandbox', 'workspace-write']
   const { spawn } = await import('node:child_process')
   return new Promise<{ text: string; threadId: string | null }>((resolve, reject) => {
     const resolved = resolveWindowsCommand(command)
@@ -1046,8 +1061,8 @@ const globalSurface = String.raw`    zero3SessionProviders: {
       removeZero3Profile: (request: { id: string }) => Promise<{ removed: boolean }>
       zero3Turn: (request: { profileId: string; text: string; cwd: string; projectId: string; threadId?: string | null; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) => Promise<{ text: string; model: string; profileId: string; threadId: string }>
       setArchived: (request: { provider: Exclude<Zero3SessionProviderId, 'gpt' | 'gemini'>; runtimeId?: string | null; archived: boolean }) => Promise<{ native: boolean; detail: string }>
-      claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null }) => Promise<{ text: string; sessionId: string | null }>
-      codexTurn: (request: { text: string; cwd?: string | null; threadId?: string | null }) => Promise<{ text: string; threadId: string | null }>
+      claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null }) => Promise<{ text: string; sessionId: string | null }>
+      codexTurn: (request: { text: string; cwd?: string | null; threadId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | null }) => Promise<{ text: string; threadId: string | null }>
     }
     zero3AgentTask: {`
 

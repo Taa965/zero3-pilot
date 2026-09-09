@@ -9,7 +9,7 @@ import { hideNativeWebSession } from '../conversations/native-overlay-visibility
 import { RenameSessionDialog } from '../conversations/RenameSessionDialog'
 import { SessionProviderPickerDialog } from '../conversations/SessionProviderPickerDialog'
 import { resolveCreateProjectId } from '../conversations/session-create-target'
-import type { LocalSessionRecord, WorkspaceProvider, WorkspaceSession } from '../conversations/session-types'
+import type { LocalSessionRecord, LocalSessionRuntimeConfig, WorkspaceProvider, WorkspaceSession } from '../conversations/session-types'
 import { AppTitleBar } from './AppTitleBar'
 import { GlobalRail } from './GlobalRail'
 import { ContextPane } from './ContextPane'
@@ -196,7 +196,10 @@ export function Zero3AppShell() {
     void openGptSession(createTargetProjectId)
   }, [createTargetProject, createTargetProjectId, openGptSession])
 
-  const createSession = useCallback(async (nextProvider: WorkspaceProvider, zero3ProfileId: string | null = null) => {
+  const createSession = useCallback(async (
+    nextProvider: WorkspaceProvider,
+    options: LocalSessionRuntimeConfig & { zero3ProfileId?: string | null } = {}
+  ) => {
     setProviderPickerOpen(false)
     try {
       if (nextProvider === 'gpt') {
@@ -210,7 +213,12 @@ export function Zero3AppShell() {
         await refreshWebSessions()
         return
       }
-      const record = LocalSessionAdapter.create(nextProvider, createTargetProjectId, zero3ProfileId)
+      const record = LocalSessionAdapter.create(
+        nextProvider,
+        createTargetProjectId,
+        options.zero3ProfileId ?? null,
+        options
+      )
       refreshLocalSessions()
       setActiveSessionId(record.id)
       setProvider(nextProvider)
@@ -342,7 +350,7 @@ export function Zero3AppShell() {
       {providerPickerOpen && (
         <SessionProviderPickerDialog
           project={createTargetProject}
-          onCreate={(nextProvider, zero3ProfileId) => void createSession(nextProvider, zero3ProfileId ?? null)}
+          onCreate={(nextProvider, options) => void createSession(nextProvider, options)}
           onCancel={() => setProviderPickerOpen(false)}
         />
       )}
