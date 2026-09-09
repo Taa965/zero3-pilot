@@ -644,6 +644,64 @@ async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: u
   return { text: responseText, model: profile.model, profileId: profile.id, threadId }
 }
 
+// A failed turn used to exist only as a string in the conversation, where the
+// UI truncates it -- so the one place the real cause was written down was also
+// the one place it could not be read. Keep the whole thing on disk and give the
+// user a sentence they can act on.
+const ZERO3_TURN_LOG_FILE = path.join(app.getPath('userData'), 'zero3', 'turn-failures.log')
+const ZERO3_TURN_LOG_MAX_BYTES = 1024 * 1024
+const ZERO3_TURN_LOG_STREAM_CHARS = 8000
+
+type Zero3TurnFailure = {
+  provider: string
+  command: string
+  args: string[]
+  cwd: string | null
+  exitCode: number | null
+  stderr: string
+  stdout: string
+  promptChars: number
+}
+
+async function zero3LogTurnFailure(failure: Zero3TurnFailure): Promise<string | null> {
+  try {
+    const fsp = await import('node:fs/promises')
+    await fsp.mkdir(path.dirname(ZERO3_TURN_LOG_FILE), { recursive: true })
+    // Two-file rotation keeps this bounded without ever discarding the entry
+    // that is being written right now.
+    try {
+      const stats = await fsp.stat(ZERO3_TURN_LOG_FILE)
+      if (stats.size > ZERO3_TURN_LOG_MAX_BYTES) await fsp.rename(ZERO3_TURN_LOG_FILE, ZERO3_TURN_LOG_FILE + '.old')
+    } catch {}
+    // The prompt is the user's own conversation; its length is what diagnoses a
+    // turn, so record that and leave the content in the conversation.
+    const entry = {
+      at: new Date().toISOString(),
+      ...failure,
+      stderr: failure.stderr.slice(-ZERO3_TURN_LOG_STREAM_CHARS),
+      stdout: failure.stdout.slice(-ZERO3_TURN_LOG_STREAM_CHARS)
+    }
+    await fsp.appendFile(ZERO3_TURN_LOG_FILE, JSON.stringify(entry) + '\n', 'utf8')
+    return ZERO3_TURN_LOG_FILE
+  } catch {
+    return null
+  }
+}
+
+// The CLI's own last words, trimmed to something a chat bubble can hold.
+function zero3TurnFailureSummary(stderr: string, stdout: string, exitCode: number | null): string {
+  const lines = (stderr.trim() || stdout.trim()).split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  // The informative line is usually the last one; earlier ones are progress.
+  const meaningful = [...lines].reverse().find(line => !line.startsWith('{')) ?? lines.at(-1) ?? ''
+  return meaningful.slice(0, 300) || '退出码 ' + String(exitCode)
+}
+
+async function zero3TurnFailureError(label: string, failure: Zero3TurnFailure): Promise<Error> {
+  const logFile = await zero3LogTurnFailure(failure)
+  const summary = zero3TurnFailureSummary(failure.stderr, failure.stdout, failure.exitCode)
+  return new Error(label + '：' + summary + (logFile ? '（完整输出见 ' + logFile + '）' : ''))
+}
+
 async function zero3RunClaudeTurn(requestValue: unknown) {
   const request = zero3SessionRecord(requestValue)
   const text = zero3SessionText(request.text, 'Claude prompt', 128_000)
@@ -693,9 +751,25 @@ async function zero3RunClaudeTurn(requestValue: unknown) {
       clearTimeout(timer)
       const output = Buffer.concat(stdout).toString('utf8')
       const errorOutput = Buffer.concat(stderr).toString('utf8')
-      if (code !== 0) return reject(new Error(errorOutput.trim() || output.trim() || 'Claude CLI exited with code ' + String(code)))
+      const failure = {
+        provider: 'claude',
+        command: resolved.command,
+        args: [...resolved.args, ...args],
+        cwd,
+        exitCode: code,
+        stderr: errorOutput,
+        stdout: output,
+        promptChars: text.length
+      }
+      if (code !== 0) return void zero3TurnFailureError('Claude CLI 执行失败', failure).then(reject)
       let parsed: Record<string, unknown>
       try { parsed = zero3SessionRecord(JSON.parse(output)) } catch { return reject(new Error('Claude CLI returned invalid JSON')) }
+      // The CLI reports an API failure in-band and still exits 0. Without this
+      // the error text was handed back as if Claude had answered it.
+      if (parsed.is_error === true) {
+        const reported = typeof parsed.result === 'string' ? parsed.result.trim() : ''
+        return void zero3TurnFailureError('Claude 拒绝了这次请求', { ...failure, stderr: reported || errorOutput }).then(reject)
+      }
       const result = typeof parsed.result === 'string' ? parsed.result.trim() : ''
       if (!result) return reject(new Error('Claude CLI returned no assistant text'))
       const nextSessionId = typeof parsed.session_id === 'string' && parsed.session_id.trim() ? parsed.session_id.trim() : sessionId
@@ -803,7 +877,18 @@ async function zero3RunCodexCliTurn(requestValue: unknown, onProgress?: (payload
       clearTimeout(timer)
       const output = Buffer.concat(stdout).toString('utf8')
       const errorOutput = Buffer.concat(stderr).toString('utf8')
-      if (code !== 0) return reject(new Error(errorOutput.trim() || output.trim() || 'Codex CLI exited with code ' + String(code)))
+      if (code !== 0) {
+        return void zero3TurnFailureError('Codex CLI 执行失败', {
+          provider: 'codex',
+          command: resolved.command,
+          args: [...resolved.args, ...args],
+          cwd,
+          exitCode: code,
+          stderr: errorOutput,
+          stdout: output,
+          promptChars: text.length
+        }).then(reject)
+      }
       let nextThreadId = threadId
       let message = ''
       for (const line of output.split('\n')) {

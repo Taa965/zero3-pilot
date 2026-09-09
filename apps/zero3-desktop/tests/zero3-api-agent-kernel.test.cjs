@@ -77,3 +77,28 @@ test('the picker re-probes when the window regains focus, one refresh at a time'
   assert.match(picker, /if \(refreshing\.current\) return/)
   assert.match(picker, /refreshing\.current = false/)
 })
+
+test('a failed turn is written to disk, not only into a chat bubble', () => {
+  // The only record of a failure used to be a string in the conversation, where
+  // the UI truncates it - so the one place the cause was written down was the
+  // one place it could not be read.
+  assert.match(runtime, /const ZERO3_TURN_LOG_FILE = path\.join\(app\.getPath\('userData'\), 'zero3', 'turn-failures\.log'\)/)
+  assert.match(runtime, /async function zero3LogTurnFailure/)
+  assert.match(runtime, /zero3TurnFailureError\('Claude CLI 执行失败'/)
+  assert.match(runtime, /zero3TurnFailureError\('Codex CLI 执行失败'/)
+
+  // Bounded, and never at the cost of the entry being written right now.
+  assert.match(runtime, /const ZERO3_TURN_LOG_MAX_BYTES = 1024 \* 1024/)
+  assert.match(runtime, /fsp\.rename\(ZERO3_TURN_LOG_FILE, ZERO3_TURN_LOG_FILE \+ '\.old'\)/)
+
+  // The prompt is the user's own conversation: log its size, not its text.
+  assert.match(runtime, /promptChars: text\.length/)
+  assert.doesNotMatch(runtime, /prompt: text\b/)
+})
+
+test('an in-band API failure is reported as a failure, not as Claude answering', () => {
+  // claude -p reports an API error inside its JSON and still exits 0. The error
+  // text was being handed back as the assistant's reply.
+  assert.match(runtime, /if \(parsed\.is_error === true\)/)
+  assert.match(runtime, /zero3TurnFailureError\('Claude 拒绝了这次请求'/)
+})
