@@ -102,3 +102,24 @@ test('an in-band API failure is reported as a failure, not as Claude answering',
   assert.match(runtime, /if \(parsed\.is_error === true\)/)
   assert.match(runtime, /zero3TurnFailureError\('Claude 拒绝了这次请求'/)
 })
+
+test('a turn failure reports what the CLI said, not what it happened to print first', () => {
+  // Both CLIs state the cause on stdout as JSON and leave stderr unhelpful:
+  // Codex prints a progress line, Claude prints nothing. Preferring stderr threw
+  // the answer away and showed "Reading prompt from stdin..." for a model the
+  // account is not allowed to use.
+  assert.match(runtime, /function zero3CliFailureMessage\(stdout: string\)/)
+  assert.match(runtime, /event\.type === 'error' \? event\.message : null/)
+  assert.match(runtime, /zero3SessionRecord\(event\.error\)\.message/)
+  assert.match(runtime, /event\.is_error === true \? event\.result : null/)
+
+  // Codex wraps the server's words once more as {"detail": "..."}.
+  assert.match(runtime, /function zero3UnwrapFailureDetail/)
+  assert.match(runtime, /zero3SessionRecord\(JSON\.parse\(text\)\)\.detail/)
+
+  // stdout is consulted first; stderr stays the fallback.
+  const summary = runtime.slice(runtime.indexOf('function zero3TurnFailureSummary'))
+  const reportedAt = summary.indexOf('zero3CliFailureMessage(stdout)')
+  const stderrAt = summary.indexOf('stderr.trim()')
+  assert.ok(reportedAt > 0 && stderrAt > reportedAt, 'the streamed failure message must win over stderr')
+})

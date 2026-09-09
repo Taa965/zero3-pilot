@@ -688,8 +688,44 @@ async function zero3LogTurnFailure(failure: Zero3TurnFailure): Promise<string | 
   }
 }
 
+// Both CLIs state why they failed on stdout, as JSON, and both leave something
+// unhelpful on stderr: Codex prints a progress line, Claude prints nothing. So
+// stderr-first threw the answer away and showed 'Reading prompt from stdin...'
+// for a rejected model.
+function zero3CliFailureMessage(stdout: string): string | null {
+  let message: string | null = null
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('{')) continue
+    let event: Record<string, unknown>
+    try { event = zero3SessionRecord(JSON.parse(trimmed)) } catch { continue }
+    // Codex streams {"type":"error"} and {"type":"turn.failed","error":{...}};
+    // Claude returns one result object carrying is_error.
+    const candidates = [
+      event.is_error === true ? event.result : null,
+      event.type === 'error' ? event.message : null,
+      zero3SessionRecord(event.error).message
+    ]
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate.trim()) message = candidate.trim()
+    }
+  }
+  return message
+}
+
+// Codex wraps the server's words once more, as {"detail":"..."}.
+function zero3UnwrapFailureDetail(text: string): string {
+  try {
+    const detail = zero3SessionRecord(JSON.parse(text)).detail
+    if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  } catch {}
+  return text
+}
+
 // The CLI's own last words, trimmed to something a chat bubble can hold.
 function zero3TurnFailureSummary(stderr: string, stdout: string, exitCode: number | null): string {
+  const reported = zero3CliFailureMessage(stdout)
+  if (reported) return zero3UnwrapFailureDetail(reported).slice(0, 300)
   const lines = (stderr.trim() || stdout.trim()).split(/\r?\n/).map(line => line.trim()).filter(Boolean)
   // The informative line is usually the last one; earlier ones are progress.
   const meaningful = [...lines].reverse().find(line => !line.startsWith('{')) ?? lines.at(-1) ?? ''
