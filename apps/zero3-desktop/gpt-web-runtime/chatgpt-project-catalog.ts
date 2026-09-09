@@ -26,9 +26,11 @@ export class ChatGptSignedOutError extends Error {
 const CATALOG_SCRIPT = String.raw`(async () => {
   const found = new Map()
   const gizmoId = /^g-p-[A-Za-z0-9_-]{1,192}$/
-  const remember = (id, name) => {
+  const slugs = new Map()
+  const remember = (id, name, slug) => {
     if (typeof id !== 'string' || !gizmoId.test(id) || found.size >= 400) return
     const label = typeof name === 'string' ? name.trim() : ''
+    if (typeof slug === 'string' && slug.startsWith(id + '-') && /^[A-Za-z0-9_-]+$/.test(slug)) slugs.set(id, slug)
     const existing = found.get(id)
     if (existing != null && existing.length >= label.length) return
     found.set(id, label)
@@ -47,7 +49,7 @@ const CATALOG_SCRIPT = String.raw`(async () => {
     const id = typeof value.id === 'string' ? value.id : null
     if (id && gizmoId.test(id)) {
       const display = value.display && typeof value.display === 'object' ? value.display : {}
-      remember(id, value.name || value.title || display.name || display.title || '')
+      remember(id, value.name || value.title || display.name || display.title || '', value.short_url)
     }
     for (const key of Object.keys(value)) walk(value[key], depth + 1)
   }
@@ -105,7 +107,7 @@ const CATALOG_SCRIPT = String.raw`(async () => {
 
   return {
     reason: found.size > 0 ? null : reason,
-    items: [...found.entries()].map(entry => ({ id: entry[0], name: entry[1] }))
+    items: [...found.entries()].map(entry => ({ id: entry[0], name: entry[1], slug: slugs.get(entry[0]) }))
   }
 })()`
 
@@ -122,7 +124,9 @@ function normalizeRemoteProject(value: unknown): Zero3ChatGptRemoteProject | nul
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, MAX_REMOTE_NAME)
-  return { id, name: name || id, url: `https://${CHATGPT_HOST}/g/${id}/project` }
+  const slug = typeof raw.slug === 'string' && raw.slug.startsWith(id + '-') &&
+    /^[A-Za-z0-9_-]{1,512}$/.test(raw.slug) ? raw.slug : id
+  return { id, name: name || id, url: `https://${CHATGPT_HOST}/g/${slug}/project` }
 }
 
 function reasonMessage(reason: unknown): string {

@@ -14,6 +14,7 @@ import {
   resolveCodexHome,
   resolveHermesHome
 } from './config.mjs'
+import { applyZero3DataDirectory } from './apply-data-directory.mjs'
 
 const mode = process.argv[2] ?? 'dev'
 const allowedModes = new Set(['dev', 'typecheck', 'dist:win'])
@@ -283,6 +284,8 @@ if (!externallyPrepared) {
 }
 
 const hermesHome = resolveHermesHome()
+// Even an already-prepared checkout must enforce the same data directory.
+applyZero3DataDirectory()
 const codexHome = resolveCodexHome()
 fs.mkdirSync(hermesHome, { recursive: true })
 fs.mkdirSync(codexHome, { recursive: true })

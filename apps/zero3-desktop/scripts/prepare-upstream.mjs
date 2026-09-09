@@ -12,6 +12,7 @@ import {
   upstreamRoot
 } from './config.mjs'
 import { applyZero3ChineseUi } from './apply-chinese-ui.mjs'
+import { applyZero3DataDirectory } from './apply-data-directory.mjs'
 import { applyZero3CodexItemRenderingHardening } from './apply-codex-item-rendering-hardening.mjs'
 import { applyZero3CodexItemRendering } from './apply-codex-item-rendering.mjs'
 import { applyZero3CodexPrimaryChat } from './apply-codex-primary-chat.mjs'
@@ -285,6 +286,7 @@ applyZero3CodexItemRenderingHardening()
 applyZero3CodexSessionListGuard()
 applyZero3CodexStructuredInput()
 applyZero3RemoteHostRuntime()
+applyZero3DataDirectory()
 
 console.log('Zero3 Desktop R3D + Remote Host H0-H3 shell prepared successfully.')
 console.log(`Codex CORE source pin: ${pins.codex}`)

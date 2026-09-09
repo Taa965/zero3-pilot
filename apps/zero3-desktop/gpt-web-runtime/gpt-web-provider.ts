@@ -15,6 +15,7 @@ import {
   type Zero3GptWebWorkspaceEntry
 } from '../workspace/workspace-entry-types'
 import { ChatGptSignedOutError, readChatGptProjectCatalog, withChatGptContents } from './chatgpt-project-catalog'
+import { chatGptProjectId, loadChatGptProject } from './chatgpt-project-navigation'
 import { chatGptConversationId, renameChatGptConversation, setChatGptConversationArchived } from './chatgpt-conversation-name'
 import {
   ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS,
@@ -41,6 +42,7 @@ type LiveGptWebView = {
   chromeHidden: boolean
   chromeCssKey: string | null
   headerCssKey: string | null
+  projectLoad?: Promise<void>
 }
 
 type SnapshotRecord = {
@@ -660,7 +662,7 @@ export class Zero3GptWebProvider {
     const url = chatGptNavigationUrl(urlValue)
     const live = await this.ensureLive(entry)
     this.markActivated(live)
-    await live.view.webContents.loadURL(url)
+    await this.loadPage(live, url)
     live.lastUsedAt = Date.now()
     this.bump(live.entryId)
     this.maintainHotPool(live.entryId)
@@ -672,7 +674,10 @@ export class Zero3GptWebProvider {
     const entry = await this.requireEntry(id)
     const live = await this.ensureLive(entry)
     this.markActivated(live)
-    live.view.webContents.reload()
+    const target = live.loadState === 'error' ? resumeChatGptUrl(entry) : live.view.webContents.getURL()
+    if (live.projectLoad) await live.projectLoad
+    else if (chatGptProjectId(target)) await this.loadPage(live, target)
+    else live.view.webContents.reload()
     live.lastUsedAt = Date.now()
     this.bump(live.entryId)
     this.maintainHotPool(live.entryId)
@@ -751,6 +756,9 @@ export class Zero3GptWebProvider {
         spellcheck: true
       }
     })
+    // Detached prewarming still needs a desktop viewport so ChatGPT mounts and
+    // populates its project sidebar before the project route is entered.
+    view.setBounds({ x: 0, y: 0, width: 1200, height: 800 })
     const now = Date.now()
     const live: LiveGptWebView = {
       entryId: entry.id,
@@ -771,7 +779,7 @@ export class Zero3GptWebProvider {
 
     const target = resumeChatGptUrl(entry)
     this.emitEvent({ kind: 'state', entryId: entry.id, state: 'warming' })
-    void view.webContents.loadURL(target).catch(error => {
+    void this.loadPage(live, target).catch(error => {
       if (!view.webContents.isDestroyed()) {
         live.loadState = 'error'
         this.emitEvent({
@@ -783,6 +791,33 @@ export class Zero3GptWebProvider {
       }
     })
     return live
+  }
+
+  private async loadPage(live: LiveGptWebView, target: string): Promise<void> {
+    if (live.projectLoad) await live.projectLoad
+    if (!chatGptProjectId(target)) return live.view.webContents.loadURL(target)
+    const contents = live.view.webContents
+    live.loadState = 'warming'
+    this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'warming' })
+    // Suppress transient home-page persistence and ready events during bootstrap.
+    const task = Promise.resolve().then(() => loadChatGptProject(contents, target))
+    live.projectLoad = task
+    try {
+      await task
+      if (contents.isDestroyed()) return
+      const currentUrl = observedChatGptUrl(contents.getURL())
+      if (currentUrl) this.queueObservedState(live, currentUrl, contents.getTitle())
+      live.loadState = 'warm'
+      this.emitEvent({ kind: 'state', entryId: live.entryId,
+        state: live.parentWindowId == null ? 'warm' : 'visible' })
+    } catch (error) {
+      live.loadState = 'error'
+      this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'error',
+        detail: error instanceof Error ? error.message : String(error) })
+      throw error
+    } finally {
+      live.projectLoad = undefined
+    }
   }
 
   private installViewGuards(live: LiveGptWebView): void {
@@ -831,6 +866,7 @@ export class Zero3GptWebProvider {
   private installViewObservers(live: LiveGptWebView): void {
     const contents = live.view.webContents
     const observe = () => {
+      if (live.projectLoad) return
       // Persist only chatgpt.com URLs. OAuth providers can contain transient
       // authorization codes in their query string and must never enter the
       // Zero3 workspace metadata store.
@@ -859,6 +895,7 @@ export class Zero3GptWebProvider {
     contents.on('did-stop-loading', () => {
       void this.applyHeaderSuppression(live)
       if (live.chromeHidden) void this.applyChromeSuppression(live)
+      if (live.projectLoad || live.loadState === 'error') return
       observe()
       live.loadState = 'warm'
       this.emitEvent({

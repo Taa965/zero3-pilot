@@ -18,19 +18,21 @@ export const pins = Object.freeze({
 })
 
 export function resolveHermesHome() {
+  if (process.platform === 'win32') return path.join(resolveZero3DataRoot(), 'hermes')
   if (process.env.ZERO3_HERMES_HOME) return path.resolve(process.env.ZERO3_HERMES_HOME)
-  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
-    return path.join(process.env.LOCALAPPDATA, 'Zero3Pilot', 'hermes')
-  }
   return path.join(os.homedir(), '.local', 'share', 'zero3-pilot', 'hermes')
 }
 
 export function resolveCodexHome() {
+  if (process.platform === 'win32') return path.join(resolveZero3DataRoot(), 'codex')
   if (process.env.ZERO3_CODEX_HOME) return path.resolve(process.env.ZERO3_CODEX_HOME)
-  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
-    return path.join(process.env.LOCALAPPDATA, 'Zero3Pilot', 'codex')
-  }
   return path.join(os.homedir(), '.local', 'share', 'zero3-pilot', 'codex')
+}
+
+export function resolveZero3DataRoot() {
+  return process.platform === 'win32'
+    ? path.join(os.homedir(), 'Documents', 'Zero3 Pilot')
+    : path.join(os.homedir(), '.local', 'share', 'zero3-pilot')
 }
 
 export function pinnedCodexBinary(profile = 'debug') {

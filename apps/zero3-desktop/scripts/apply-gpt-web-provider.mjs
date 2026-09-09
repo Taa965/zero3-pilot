@@ -35,7 +35,7 @@ function patchFile(relativePath, replacements) {
 
 function copyRuntimeSources() {
   fs.mkdirSync(targetDir, { recursive: true })
-  for (const file of ['gpt-web-types.ts', 'chatgpt-project-catalog.ts', 'chatgpt-conversation-name.ts', 'gpt-web-provider.ts', 'index.ts']) {
+  for (const file of ['gpt-web-types.ts', 'chatgpt-project-catalog.ts', 'chatgpt-project-navigation.ts', 'chatgpt-conversation-name.ts', 'gpt-web-provider.ts', 'index.ts']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 GPT Web source template missing: ${source}`)
     write(path.join(targetDir, file), read(source))
