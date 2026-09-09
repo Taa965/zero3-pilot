@@ -3,6 +3,7 @@ import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
 import { applyZero3ProjectContextHttp } from './apply-project-context-http.mjs'
+import { applyZero3SharedMemory } from './apply-shared-memory.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'mcp-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp')
@@ -31,12 +32,16 @@ const ZERO3_UNASSIGNED_PROJECT_ID = '__zero3_unassigned__'
 function zero3ProjectContextMcpConfig(projectId?: string): Record<string, unknown> {
   const serverPath = path.join(app.getAppPath(), 'electron', 'zero3', 'mcp', 'project-context-server.mjs')
   const stateDir = path.join(app.getPath('userData'), 'zero3', 'project-context')
+  const configured = process.env.ZERO3_SHARED_MEMORY_CONFIG
+  const sharedConfig = configured && projectId && JSON.parse(fs.readFileSync(configured, 'utf8')).projects?.includes(projectId) ? configured : undefined
   return { 'mcp_servers.zero3_project_context': {
     command: process.execPath, args: [serverPath],
-    env: { ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: stateDir, ZERO3_ACTIVE_PROJECT_ID: projectId ?? ZERO3_UNASSIGNED_PROJECT_ID },
+    env: { ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: stateDir, ZERO3_ACTIVE_PROJECT_ID: projectId ?? ZERO3_UNASSIGNED_PROJECT_ID,
+      ...(sharedConfig ? { ZERO3_SHARED_MEMORY_CONFIG: sharedConfig } : {}) },
     enabled: true, required: true, startup_timeout_sec: 15, tool_timeout_sec: 30,
     default_tools_approval_mode: 'approve',
-    enabled_tools: ['project_get_context', 'handoff_get', 'project_put_context', 'handoff_publish']
+    enabled_tools: ['project_get_context', 'handoff_get', 'handoff_publish',
+      ...(sharedConfig ? ['memory_publish_event', 'memory_sync_status'] : ['project_put_context'])]
   } }
 }
 function zero3WithProjectContextMcp(method: string, params: unknown): unknown {
@@ -49,12 +54,28 @@ function zero3WithProjectContextMcp(method: string, params: unknown): unknown {
 }
 `
 export function applyZero3ProjectContextMcp() {
+  for (const directory of ['memory-sync-runtime', 'memory-v21-runtime', 'agent-memory-runtime']) {
+    const source = path.join(repoRoot, 'apps', 'zero3-desktop', directory)
+    for (const file of fs.readdirSync(source).filter(name => name.endsWith('.mjs') && !name.endsWith('.test.mjs'))) {
+      write(path.join(targetDir, '..', directory, file), read(path.join(source, file)))
+    }
+  }
   for (const file of ['project-context-server.mjs', 'project-context-core.mjs']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 project-context MCP source is missing: ${source}`)
     write(path.join(targetDir, file), read(source))
   }
   addDesktopDependencies()
+  // Refresh this owned helper on prepared trees without resetting unrelated overlays.
+  const mainFile = path.join(hermesDesktopDir, 'electron', 'main.ts')
+  let currentMain = read(mainFile)
+  const configStart = currentMain.indexOf('function zero3ProjectContextMcpConfig(')
+  const configEnd = currentMain.indexOf('function zero3WithProjectContextMcp(', configStart)
+  if (configStart >= 0 && configEnd > configStart) {
+    const replacement = helper.slice(helper.indexOf('function zero3ProjectContextMcpConfig('), helper.indexOf('function zero3WithProjectContextMcp('))
+    currentMain = currentMain.slice(0, configStart) + replacement + currentMain.slice(configEnd)
+    write(mainFile, currentMain)
+  }
   patchFile('electron/main.ts', [
     { label: 'project-context MCP helper before Codex singleton', appliedMarker: 'function zero3ProjectContextMcpConfig(projectId?: string): Record<string, unknown> {', from: 'const zero3CodexAppServer = createZero3CodexAppServer()', to: helper + '\nconst zero3CodexAppServer = createZero3CodexAppServer()' },
     { label: 'central Codex thread/start MCP injection', from: "  async request(method: string, params: unknown, timeoutMs = ZERO3_CODEX_REQUEST_TIMEOUT_MS) {\n    await this.ensureStarted()\n    return this.requestStarted(method, params, timeoutMs)\n  }", to: "  async request(method: string, params: unknown, timeoutMs = ZERO3_CODEX_REQUEST_TIMEOUT_MS) {\n    await this.ensureStarted()\n    return this.requestStarted(method, zero3WithProjectContextMcp(method, params), timeoutMs)\n  }" },
@@ -69,4 +90,5 @@ export function applyZero3ProjectContextMcp() {
     to: "      const selection = selectedZero3Model()\n      const projectId = (() => {\n        try { return window.localStorage.getItem('zero3.active-project-id')?.trim() ?? '' } catch { return '' }\n      })()\n      const response = await window.zero3Codex.thread.start({\n        ...(cwd ? { cwd } : {}),\n        ...(projectId ? { projectId } : {}),"
   }])
   applyZero3ProjectContextHttp()
+  applyZero3SharedMemory()
 }

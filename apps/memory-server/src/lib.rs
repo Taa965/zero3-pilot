@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        Path, Query, State,
     },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -98,8 +98,56 @@ impl MemoryEvent {
         if self.memory.authority == 100 && self.actor.agent_type != "system" {
             return Err(anyhow!("agents cannot self-assert user authority"));
         }
+        if !is_uuid(&self.event_id)
+            || chrono::DateTime::parse_from_rfc3339(&self.created_at).is_err()
+            || !self.payload.is_object()
+            || self.memory.authority > 100
+            || self
+                .memory
+                .confidence
+                .is_some_and(|v| !(0.0..=1.0).contains(&v))
+            || self.supersedes.len() > 64
+            || self.supersedes.iter().any(|id| !is_uuid(id))
+        {
+            return Err(anyhow!("invalid memory event fields"));
+        }
+        if !matches!(
+            self.memory.class.as_str(),
+            "project" | "task" | "global" | "scratch" | "audit" | "personal"
+        ) {
+            return Err(anyhow!("invalid memory class"));
+        }
+        if matches!(self.memory.class.as_str(), "project" | "task")
+            && (self
+                .scope
+                .project_id
+                .as_deref()
+                .is_none_or(|id| id.trim().is_empty()))
+        {
+            return Err(anyhow!("project scope is required"));
+        }
+        if self.memory.class == "task"
+            && self
+                .scope
+                .task_id
+                .as_deref()
+                .is_none_or(|id| id.trim().is_empty())
+        {
+            return Err(anyhow!("task scope is required"));
+        }
         Ok(())
     }
+}
+
+fn is_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(i, byte)| {
+            if [8, 13, 18, 23].contains(&i) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -129,6 +177,7 @@ pub struct ProjectContext {
     pub version: i64,
     pub payload: Value,
     pub sync: SyncInfo,
+    pub entities: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -269,6 +318,7 @@ impl MemoryRepository for InMemoryRepository {
                 last_sequence,
                 stale: false,
             },
+            entities: Vec::new(),
         })
     }
 
@@ -314,7 +364,7 @@ impl MemoryRepository for PostgresRepository {
             .context("expected entity version exceeds PostgreSQL bigint")?;
         let supersedes = event.supersedes.clone();
         let inserted = client.query_opt(
-            "INSERT INTO memory_events (event_id, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence, entity_type, entity_id, expected_entity_version, supersedes, payload, source_type, source_ref, source_hash, created_at) VALUES ($1::text::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::text[]::uuid[],$17,$18,$19,$20,$21::text::timestamptz) ON CONFLICT (event_id) DO NOTHING RETURNING sequence",
+            "INSERT INTO memory_events (event_id, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence, entity_type, entity_id, expected_entity_version, supersedes, payload, source_type, source_ref, source_hash, created_at) VALUES ($1::text::uuid,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::double precision,$13,$14,$15,$16::text[]::uuid[],$17,$18,$19,$20,$21::text::timestamptz) ON CONFLICT (event_id) DO NOTHING RETURNING sequence",
             &[
                 &event.event_id, &event.scope.project_id, &event.scope.task_id, &event.scope.session_id,
                 &event.scope.thread_id, &event.actor.agent_id, &event.actor.agent_type, &event.actor.device_id,
@@ -355,7 +405,7 @@ impl MemoryRepository for PostgresRepository {
         }
         let client = self.client().await?;
         let rows = client.query(
-            "SELECT sequence, event_id::text, created_at::text, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence, entity_type, entity_id, supersedes::text[], payload, source_type, source_ref, source_hash FROM memory_events WHERE sequence > $1 AND project_id = ANY($2) ORDER BY sequence ASC LIMIT 5000",
+            "SELECT sequence, event_id::text, created_at::text, project_id, task_id, session_id, thread_id, agent_id, agent_type, device_id, event_type, memory_class, authority, confidence::double precision, entity_type, entity_id, supersedes::text[], payload, source_type, source_ref, source_hash, expected_entity_version FROM memory_events WHERE sequence > $1 AND project_id = ANY($2) ORDER BY sequence ASC LIMIT 5000",
             &[&sequence, &projects],
         ).await?;
         rows.into_iter()
@@ -386,7 +436,9 @@ impl MemoryRepository for PostgresRepository {
                             authority: u8::try_from(authority)
                                 .map_err(|_| anyhow!("invalid stored authority"))?,
                             confidence: row.get(13),
-                            expected_entity_version: None,
+                            expected_entity_version: row
+                                .get::<_, Option<i64>>(21)
+                                .map(|v| v as u64),
                         },
                         source: MemorySource {
                             kind: row.get(18),
@@ -414,7 +466,17 @@ impl MemoryRepository for PostgresRepository {
 
     async fn project_context(&self, project_id: &str) -> anyhow::Result<ProjectContext> {
         let client = self.client().await?;
-        let row = client.query_opt("SELECT version, decisions, current_focus, pitfalls, glossary, constraints, policies, last_sequence FROM project_memory_projection WHERE project_id = $1", &[&project_id]).await?;
+        let mut client = client;
+        let transaction = client
+            .build_transaction()
+            .isolation_level(tokio_postgres::IsolationLevel::RepeatableRead)
+            .read_only(true)
+            .start()
+            .await?;
+        let row = transaction.query_opt("SELECT version, decisions, current_focus, pitfalls, glossary, constraints, policies, last_sequence FROM project_memory_projection WHERE project_id = $1", &[&project_id]).await?;
+        let entities = transaction.query("SELECT jsonb_build_object('entity_id', m.entity_id, 'entity_type', m.entity_type, 'memory_class', m.memory_class, 'task_id', m.task_id, 'version', m.current_version, 'authority', m.authority, 'verification_status', m.verification_status, 'content', m.content, 'updated_sequence', e.sequence) FROM memory_entities m JOIN memory_events e ON e.event_id=m.source_event_id WHERE m.project_id=$1 ORDER BY e.sequence, m.entity_id", &[&project_id]).await?
+            .into_iter().map(|row| row.get::<_, Value>(0)).collect();
+        transaction.commit().await?;
         let Some(row) = row else {
             return Ok(ProjectContext {
                 project_id: project_id.into(),
@@ -425,6 +487,7 @@ impl MemoryRepository for PostgresRepository {
                     last_sequence: 0,
                     stale: false,
                 },
+                entities,
             });
         };
         let last_sequence: i64 = row.get(7);
@@ -437,11 +500,15 @@ impl MemoryRepository for PostgresRepository {
                 last_sequence,
                 stale: false,
             },
+            entities,
         })
     }
 
     async fn ready(&self) -> anyhow::Result<()> {
-        self.client().await?.query_one("SELECT 1", &[]).await?;
+        self.client()
+            .await?
+            .query_one("SELECT count(*) FROM memory_events WHERE false", &[])
+            .await?;
         Ok(())
     }
 }
@@ -459,7 +526,7 @@ pub fn router(repo: Arc<dyn MemoryRepository>, auth: AuthPolicy) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
-        .route("/v1/memory/events", post(append_event))
+        .route("/v1/memory/events", post(append_event).get(read_events))
         .route("/v1/memory/events:batch", post(append_batch))
         .route("/v1/projects/:project_id/context", get(project_context))
         .route("/v1/sync", get(sync_upgrade))
@@ -506,6 +573,22 @@ fn repository_error_code(error: &anyhow::Error) -> (&'static str, bool) {
         }
         if message.contains("authority_conflict") {
             return ("authority_conflict", true);
+        }
+        if let Some(error) = cause.downcast_ref::<tokio_postgres::Error>() {
+            if let Some(db) = error.as_db_error() {
+                match db.message() {
+                    "entity_version_conflict" => return ("entity_version_conflict", true),
+                    "authority_conflict" => return ("authority_conflict", true),
+                    _ => {}
+                }
+            }
+            if error.as_db_error().is_none()
+                || error
+                    .code()
+                    .is_some_and(|code| matches!(&code.code()[..2], "08" | "40" | "53" | "57"))
+            {
+                return ("memory_unavailable", false);
+            }
         }
     }
     ("memory_event_rejected", false)
@@ -568,7 +651,7 @@ fn validate_shared_event(event: &MemoryEvent) -> Result<(), &'static str> {
     if event.memory.class == "personal" {
         return Err("personal_memory_requires_separate_boundary");
     }
-    validate_secret_free(&event.payload)
+    validate_secret_free(&serde_json::to_value(event).map_err(|_| "invalid_event")?)
 }
 
 async fn append_event(
@@ -600,6 +683,8 @@ async fn append_event(
             let (code, conflict) = repository_error_code(&error);
             let status = if conflict {
                 StatusCode::CONFLICT
+            } else if code == "memory_unavailable" {
+                StatusCode::SERVICE_UNAVAILABLE
             } else {
                 StatusCode::BAD_REQUEST
             };
@@ -657,7 +742,7 @@ async fn append_batch(
                 let (code, conflict) = repository_error_code(&error);
                 results.push(json!({
                     "event_id": event.event_id,
-                    "status": if conflict { "conflict" } else { "rejected" },
+                    "status": if conflict { "conflict" } else if code == "memory_unavailable" { "retryable" } else { "rejected" },
                     "error": code
                 }));
             }
@@ -686,6 +771,49 @@ async fn project_context(
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error":"context_read_failed","message":error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ReplayQuery {
+    project_id: String,
+    #[serde(default)]
+    after: i64,
+}
+
+async fn read_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ReplayQuery>,
+) -> Response {
+    let grant = match authenticate(&state, &headers) {
+        Ok(grant) => grant,
+        Err(failure) => return auth_failure_response(failure),
+    };
+    if !grant.allows_project(&query.project_id) {
+        return auth_failure_response(AuthFailure {
+            status: StatusCode::FORBIDDEN,
+            code: "project_denied",
+        });
+    }
+    if query.after < 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid_cursor"})),
+        )
+            .into_response();
+    }
+    match state
+        .repo
+        .events_after(query.after, &[query.project_id])
+        .await
+    {
+        Ok(events) => Json(json!({"events":events})).into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"replay_unavailable"})),
         )
             .into_response(),
     }
@@ -754,39 +882,26 @@ async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
         return;
     }
 
-    let latest = match state.repo.latest_sequence().await {
-        Ok(value) => value,
-        Err(_) => return,
-    };
+    // Subscribe before catchup; durable replay, rather than publication order,
+    // determines the cursor. Polling also observes writes from other replicas.
+    let mut receiver = state.bus.subscribe();
+    let mut cursor = hello.last_sequence;
+    if send_catchup(&mut socket, &state, &hello.projects, &mut cursor)
+        .await
+        .is_err()
+    {
+        return;
+    }
     if socket
         .send(Message::Text(
-            json!({"type":"ready","latest_sequence":latest}).to_string(),
+            json!({"type":"ready","latest_sequence":cursor}).to_string(),
         ))
         .await
         .is_err()
     {
         return;
     }
-    if let Ok(events) = state
-        .repo
-        .events_after(hello.last_sequence, &hello.projects)
-        .await
-    {
-        if !events.is_empty() {
-            let from_sequence = events
-                .first()
-                .map(|item| item.sequence)
-                .unwrap_or(hello.last_sequence);
-            let to_sequence = events
-                .last()
-                .map(|item| item.sequence)
-                .unwrap_or(hello.last_sequence);
-            if socket.send(Message::Text(json!({"type":"events","from_sequence":from_sequence,"to_sequence":to_sequence,"events":events}).to_string())).await.is_err() { return; }
-        }
-    }
-
-    let projects: HashSet<String> = hello.projects.into_iter().collect();
-    let mut receiver = state.bus.subscribe();
+    let mut poll = tokio::time::interval(std::time::Duration::from_secs(1));
     loop {
         tokio::select! {
             incoming = socket.recv() => match incoming {
@@ -805,19 +920,43 @@ async fn sync_socket(mut socket: WebSocket, state: AppState, grant: AuthGrant) {
                 _ => {}
             },
             published = receiver.recv() => match published {
-                Ok(item) => {
-                    if item.event.scope.project_id.as_ref().is_some_and(|id| projects.contains(id))
-                        && socket.send(Message::Text(json!({"type":"memory.changed","sequence":item.sequence,"event":item.event}).to_string())).await.is_err() {
-                        break;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    let _ = socket.send(Message::Text(json!({"type":"error","code":"sync_lagged","message":"client must reconnect from last acknowledged sequence","retryable":true}).to_string())).await;
-                    break;
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                    if send_catchup(&mut socket, &state, &hello.projects, &mut cursor).await.is_err() { break; }
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
+            },
+            _ = poll.tick() => {
+                if send_catchup(&mut socket, &state, &hello.projects, &mut cursor).await.is_err() { break; }
             }
         }
+    }
+}
+
+async fn send_catchup(
+    socket: &mut WebSocket,
+    state: &AppState,
+    projects: &[String],
+    cursor: &mut i64,
+) -> anyhow::Result<()> {
+    loop {
+        let events = state.repo.events_after(*cursor, projects).await?;
+        let Some(last) = events.last() else {
+            return Ok(());
+        };
+        let next = last.sequence;
+        if next <= *cursor {
+            return Err(anyhow!("non-monotonic memory replay"));
+        }
+        socket
+            .send(Message::Text(
+                json!({
+                    "type":"events", "from_sequence":events[0].sequence,
+                    "to_sequence":next, "events":events
+                })
+                .to_string(),
+            ))
+            .await?;
+        *cursor = next;
     }
 }
 
@@ -867,7 +1006,7 @@ mod tests {
                 entity_id: id.into(),
                 authority: 60,
                 confidence: Some(0.9),
-                expected_entity_version: None,
+                expected_entity_version: Some(0),
             },
             source: MemorySource {
                 kind: "task".into(),

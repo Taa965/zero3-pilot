@@ -45,6 +45,8 @@ export class MemorySyncClient {
   #reconnectTimer = null
   #flushing = false
   #ready = false
+  #messageTail = Promise.resolve()
+  #flushTask = null
 
   constructor(config) {
     const store = config?.store
@@ -89,18 +91,28 @@ export class MemorySyncClient {
     const socket = this.#socket
     this.#socket = null
     socket?.close?.()
+    await this.#messageTail
+    await this.#flushTask?.catch(() => {})
     this.#emitState('stopped')
   }
 
-  async flushPending() {
+  flushPending() {
+    if (!this.#flushTask) {
+      this.#flushTask = this.#flushPending().finally(() => { this.#flushTask = null })
+    }
+    return this.#flushTask
+  }
+
+  async #flushPending() {
     if (this.#flushing || this.#stopped) return
     this.#flushing = true
     try {
       while (!this.#stopped) {
-        const pending = await this.#config.store.nextBatch(MAX_BATCH)
+        const claimed = typeof this.#config.store.claimBatch === 'function'
+        const pending = await (claimed ? this.#config.store.claimBatch(MAX_BATCH) : this.#config.store.nextBatch(MAX_BATCH))
         if (!pending.length) break
         const ids = pending.map(item => item.event_id)
-        await this.#config.store.markSending(ids)
+        if (!claimed) await this.#config.store.markSending(ids)
         let response
         try {
           response = await this.#config.fetchImpl(httpUrl(this.#config.baseUrl, '/v1/memory/events:batch'), {
@@ -113,35 +125,46 @@ export class MemorySyncClient {
             body: JSON.stringify({ events: pending.map(item => item.payload) })
           })
         } catch (error) {
-          await this.#config.store.resetInflight()
           throw new MemorySyncError('batch_network_error', error instanceof Error ? error.message : String(error))
         }
         if (!response?.ok) {
-          await this.#config.store.resetInflight()
           throw new MemorySyncError('batch_http_error', `memory batch returned HTTP ${response?.status ?? 'unknown'}`)
         }
-        const body = await response.json()
+        let body
+        try { body = await response.json() } catch {
+          throw new MemorySyncError('invalid_batch_response', 'memory batch response is not JSON')
+        }
         if (!Array.isArray(body?.results)) {
-          await this.#config.store.resetInflight()
           throw new MemorySyncError('invalid_batch_response', 'memory batch response is missing results')
         }
         const byId = new Map(body.results.map(item => [item.event_id, item]))
+        if (byId.size !== ids.length || body.results.length !== ids.length || [...byId.keys()].some(id => !ids.includes(id))) {
+          throw new MemorySyncError('invalid_batch_response', 'memory batch results do not match the submitted events')
+        }
+        let retryable = false
         for (const id of ids) {
           const result = byId.get(id)
           if (!result) {
-            await this.#config.store.markRejected(id, 'missing_batch_result')
-            continue
+            throw new MemorySyncError('invalid_batch_response', 'memory batch result is missing an event')
           }
           if ((result.status === 'accepted' || result.status === 'duplicate') && Number.isSafeInteger(result.sequence) && result.sequence > 0) {
             await this.#config.store.markAcked(id, result.sequence)
           } else if (result.status === 'conflict') {
             await this.#config.store.markConflict(id, result.error ?? 'memory_conflict')
-          } else {
+          } else if (result.status === 'rejected') {
             await this.#config.store.markRejected(id, result.error ?? 'memory_event_rejected')
+          } else if (result.status === 'retryable') {
+            retryable = true
+          } else {
+            throw new MemorySyncError('invalid_batch_response', 'memory batch result has an invalid status or sequence')
           }
         }
+        if (retryable) throw new MemorySyncError('batch_retryable', 'memory server temporarily unavailable; unconfirmed events remain pending')
         if (pending.length < MAX_BATCH) break
       }
+    } catch (error) {
+      await this.#config.store.resetInflight()
+      throw error
     } finally {
       this.#flushing = false
     }
@@ -161,8 +184,13 @@ export class MemorySyncClient {
         return
       }
       this.#socket = socket
-      socket.onOpen(() => { void this.#onOpen(socket) })
-      socket.onMessage(message => { void this.#onMessage(socket, message) })
+      socket.onOpen(() => { void this.#onOpen(socket).catch(error => this.#onDisconnect(socket, error)) })
+      // A cursor must never pass an event whose persistence is still in flight.
+      socket.onMessage(message => {
+        this.#messageTail = this.#messageTail
+          .then(() => this.#onMessage(socket, message))
+          .catch(error => this.#onDisconnect(socket, error))
+      })
       socket.onClose(() => { this.#onDisconnect(socket, null) })
       socket.onError(error => { this.#onDisconnect(socket, error) })
     } catch (error) {
@@ -191,8 +219,7 @@ export class MemorySyncClient {
     try {
       message = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(String(raw))
     } catch {
-      this.#config.onError(new MemorySyncError('invalid_sync_frame', 'memory sync frame is not valid JSON'))
-      return
+      throw new MemorySyncError('invalid_sync_frame', 'memory sync frame is not valid JSON')
     }
     switch (message?.type) {
       case 'ready':
@@ -203,6 +230,9 @@ export class MemorySyncClient {
         break
       case 'events':
         if (!Array.isArray(message.events)) throw new MemorySyncError('invalid_sync_frame', 'events frame must contain events')
+        for (let i = 1; i < message.events.length; i++) {
+          if (message.events[i].sequence <= message.events[i - 1].sequence) throw new MemorySyncError('invalid_sync_frame', 'replay events must be strictly ordered')
+        }
         for (const committed of message.events) await this.#applyCommitted(socket, committed)
         break
       case 'memory.changed':
@@ -214,7 +244,7 @@ export class MemorySyncClient {
       case 'error': {
         const error = new MemorySyncError(message.code ?? 'server_sync_error', message.message ?? 'memory sync server error', { retryable: Boolean(message.retryable) })
         this.#config.onError(error)
-        if (message.retryable) this.#onDisconnect(socket, error)
+        this.#onDisconnect(socket, error)
         break
       }
       default:
@@ -225,9 +255,14 @@ export class MemorySyncClient {
   async #applyCommitted(socket, committed) {
     const sequence = committed?.sequence
     const event = committed?.event
-    if (!Number.isSafeInteger(sequence) || sequence < 1 || !event || typeof event !== 'object') {
+    if (!Number.isSafeInteger(sequence) || sequence < 1 || !event || typeof event !== 'object' || typeof event.event_id !== 'string' || !event.event_id) {
       throw new MemorySyncError('invalid_committed_event', 'committed memory event is malformed')
     }
+    if (!this.#config.projects.includes(event.scope?.project_id)) {
+      throw new MemorySyncError('project_denied', 'committed event is outside the subscription')
+    }
+    const cursor = await this.#config.store.getCursor(this.#config.clientId)
+    if (sequence <= (cursor?.last_sequence ?? 0)) return
     await this.#config.store.cacheServerEvent(sequence, event.event_id, event)
     await this.#config.store.setCursor(this.#config.clientId, this.#config.deviceId, sequence)
     socket.send(JSON.stringify({ type: 'ack', sequence }))

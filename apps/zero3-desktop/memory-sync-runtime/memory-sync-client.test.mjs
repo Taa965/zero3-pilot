@@ -84,8 +84,8 @@ test('startup catchup advances cursor event-by-event and ACKs', async () => {
   })
   socket.emitMessage({ type: 'ready', latest_sequence: 2 })
   socket.emitMessage({ type: 'events', from_sequence: 1, to_sequence: 2, events: [
-    { sequence: 1, event: { event_id: 'evt-1', payload: { value: 1 } } },
-    { sequence: 2, event: { event_id: 'evt-2', payload: { value: 2 } } }
+    { sequence: 1, event: { event_id: 'evt-1', scope: { project_id: 'project-a' }, payload: { value: 1 } } },
+    { sequence: 2, event: { event_id: 'evt-2', scope: { project_id: 'project-a' }, payload: { value: 2 } } }
   ] })
   await tick()
   assert.deepEqual(store.cached.map(item => item.sequence), [1, 2])
@@ -99,7 +99,7 @@ test('live memory.changed is persisted before ACK', async () => {
   await client.start()
   socket.emitOpen()
   socket.emitMessage({ type: 'ready', latest_sequence: 3 })
-  socket.emitMessage({ type: 'memory.changed', sequence: 3, event: { event_id: 'evt-3', payload: { ok: true } } })
+  socket.emitMessage({ type: 'memory.changed', sequence: 3, event: { event_id: 'evt-3', scope: { project_id: 'project-a' }, payload: { ok: true } } })
   await tick()
   assert.equal(store.cached[0].eventId, 'evt-3')
   assert.equal(store.cursor.last_sequence, 3)
@@ -169,5 +169,41 @@ test('socket close schedules bounded reconnect', async () => {
   callbacks[0].callback()
   await tick()
   assert.equal(calls, 2)
+  await client.stop()
+})
+
+test('a retryable item does not discard later accepted/conflict results in the same batch', async () => {
+  const store = new FakeStore()
+  store.pending = ['a', 'b', 'c'].map(event_id => ({ event_id, payload: { event_id } }))
+  const { client } = makeClient({ store, fetchImpl: async () => ({ ok: true, json: async () => ({ results: [
+    { event_id: 'a', status: 'retryable', error: 'memory_unavailable' },
+    { event_id: 'b', status: 'accepted', sequence: 10 },
+    { event_id: 'c', status: 'conflict', error: 'entity_version_conflict' }
+  ] }) }) })
+  await client.start()
+  await assert.rejects(() => client.flushPending(), error => error.code === 'batch_retryable')
+  assert.deepEqual(store.acked, [{ id: 'b', sequence: 10 }])
+  assert.equal(store.conflicts[0].id, 'c')
+  await client.stop()
+})
+
+test('out of order replay cannot advance a cursor past an unapplied event', async () => {
+  const { client, socket, store, errors } = makeClient()
+  await client.start()
+  socket.emitMessage({ type: 'events', events: [2, 1].map(sequence => ({ sequence, event: { event_id: `event-${sequence}`, scope: { project_id: 'project-a' } } })) })
+  await tick()
+  assert.equal(store.cursor, null)
+  assert.equal(errors[0].code, 'invalid_sync_frame')
+  await client.stop()
+})
+
+test('foreign project events are rejected before persistence', async () => {
+  const { client, socket, store, errors } = makeClient()
+  await client.start()
+  socket.emitMessage({ type: 'events', events: [{ sequence: 1, event: { event_id: 'foreign', scope: { project_id: 'project-b' } } }] })
+  await tick()
+  assert.equal(store.cursor, null)
+  assert.equal(store.cached.length, 0)
+  assert.equal(errors[0].code, 'project_denied')
   await client.stop()
 })

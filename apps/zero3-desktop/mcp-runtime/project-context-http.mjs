@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import http from 'node:http'
+import fs from 'node:fs/promises'
 
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server'
 import { toNodeHandler } from '@modelcontextprotocol/node'
@@ -20,6 +21,19 @@ const PORT = (() => {
 const WRITE_VERIFIED = process.env.ZERO3_MCP_HTTP_WRITE_VERIFIED === '1'
 const STATE_DIR = process.env.ZERO3_MCP_HTTP_STATE_DIR
 const core = createProjectContextCore({ rootDir: process.env.ZERO3_PROJECT_CONTEXT_DIR })
+const sharedProjects = new Map()
+async function readProject(projectId) {
+  const configPath = process.env.ZERO3_SHARED_MEMORY_CONFIG?.trim()
+  if (!configPath) return core.getProject(projectId)
+  if (!JSON.parse(await fs.readFile(configPath, 'utf8')).projects?.includes(projectId)) return core.getProject(projectId)
+  if (!sharedProjects.has(projectId)) {
+    const opening = import('../memory-sync-runtime/shared-memory-runtime.mjs')
+      .then(({ openSharedMemory }) => openSharedMemory({ configPath, projectId }))
+      .catch(error => { sharedProjects.delete(projectId); throw error })
+    sharedProjects.set(projectId, opening)
+  }
+  return (await sharedProjects.get(projectId)).getProject(projectId)
+}
 
 function toolResult(value) {
   return { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value }
@@ -40,8 +54,8 @@ function serverFactory() {
   }, async ({ projectId }) => {
     await allowedProject(projectId, 'project_get_context')
     try {
-      const current = await core.getProject(projectId)
-      const outbound = { projectId, version: current.version, updatedAt: current.updatedAt ?? null, payload: filterWebEgressPayload(current.payload) }
+      const current = await readProject(projectId)
+      const outbound = { projectId, version: current.version, updatedAt: current.updatedAt ?? null, payload: filterWebEgressPayload(current.payload), ...(current.sync ? { sync: current.sync } : {}) }
       await appendHttpAudit({ tool: 'project_get_context', projectId, result: 'ok' }, { stateDir: STATE_DIR })
       return toolResult(outbound)
     } catch (error) {
@@ -49,7 +63,7 @@ function serverFactory() {
       throw error
     }
   })
-  if (WRITE_VERIFIED) {
+  if (WRITE_VERIFIED && !process.env.ZERO3_SHARED_MEMORY_CONFIG) {
     server.registerTool('project_put_context', {
       title: 'Update Zero3 Project Context',
       description: 'Update only the web-approved project-memory fields with optimistic version control.',
@@ -124,6 +138,11 @@ const httpServer = http.createServer(async (request, response) => {
 })
 await readBearerToken({ stateDir: STATE_DIR })
 httpServer.listen(PORT, HOST, () => console.error(`[${SERVER_NAME}] listening on http://${HOST}:${PORT}/mcp (${WRITE_VERIFIED ? 'read/write verified' : 'read-only'})`))
-async function shutdown() { httpServer.close(); await mcpHandler.close() }
+async function shutdown() {
+  httpServer.close()
+  await mcpHandler.close()
+  await Promise.allSettled([...sharedProjects.values()].map(async opening => (await opening).close()))
+  sharedProjects.clear()
+}
 process.once('SIGTERM', () => void shutdown())
 process.once('SIGINT', () => void shutdown())

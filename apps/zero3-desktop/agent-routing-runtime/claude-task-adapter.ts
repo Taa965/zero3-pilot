@@ -55,7 +55,8 @@ export function zero3ClaudeProjectMcpConfig(
         env: {
           ELECTRON_RUN_AS_NODE: '1',
           ZERO3_PROJECT_CONTEXT_DIR: stateDir,
-          ZERO3_ACTIVE_PROJECT_ID: projectId
+          ZERO3_ACTIVE_PROJECT_ID: projectId,
+          ...(process.env.ZERO3_SHARED_MEMORY_CONFIG ? { ZERO3_SHARED_MEMORY_CONFIG: process.env.ZERO3_SHARED_MEMORY_CONFIG } : {})
         }
       }
     }

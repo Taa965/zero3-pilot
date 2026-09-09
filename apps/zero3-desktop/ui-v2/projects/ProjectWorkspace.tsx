@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { McpHttpAccessCard } from './McpHttpAccessCard'
+import { SharedMemoryCard } from './SharedMemoryCard'
 
 interface ProjectWorkspaceProps {
   project: Zero3ProjectRecord | null
@@ -49,7 +50,8 @@ export function ProjectWorkspace({
           <McpHttpAccessCard projectId={project.id} />
         </div>}
         {activeTab === 'files' && <div className="text-sm text-(--ui-text-secondary)">文件树视图建设中...</div>}
-        {!['overview', 'files'].includes(activeTab) && <div className="text-sm text-(--ui-text-secondary)">{tabs.find(tab => tab.id === activeTab)?.label}视图建设中...</div>}
+        {activeTab === 'context' && <SharedMemoryCard key={project.id} projectId={project.id} />}
+        {!['overview', 'files', 'context'].includes(activeTab) && <div className="text-sm text-(--ui-text-secondary)">{tabs.find(tab => tab.id === activeTab)?.label}视图建设中...</div>}
       </div>
     </div>
   )

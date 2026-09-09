@@ -1,0 +1,64 @@
+name: Shared memory integration
+on:
+  push:
+    branches: [main]
+    paths: ['apps/memory-server/**', 'apps/zero3-desktop/memory-sync-runtime/**', 'apps/zero3-desktop/mcp-runtime/**', 'deployment/memory/**', '.github/workflows/memory-shared-integration.yml']
+  pull_request:
+    paths: ['apps/memory-server/**', 'apps/zero3-desktop/memory-sync-runtime/**', 'apps/zero3-desktop/mcp-runtime/**', 'deployment/memory/**', '.github/workflows/memory-shared-integration.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: zero3_memory_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d zero3_memory_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: zero3_memory_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/memory-server
+      - run: cargo fmt --manifest-path apps/memory-server/Cargo.toml -- --check
+      - run: cargo clippy --locked --manifest-path apps/memory-server/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path apps/memory-server/Cargo.toml
+      - name: Database migrations and concurrency
+        run: |
+          for migration in deployment/memory/migrations/*.sql; do psql -X -v ON_ERROR_STOP=1 -f "$migration"; done
+          for test in deployment/memory/tests/*.sql; do psql -X -v ON_ERROR_STOP=1 -f "$test"; done
+          bash deployment/memory/tests/concurrency_v2_1.sh
+      - name: Start isolated authority
+        env:
+          ZERO3_MEMORY_DATABASE_URL: host=127.0.0.1 user=postgres password=postgres dbname=zero3_memory_test
+          ZERO3_MEMORY_BIND: 127.0.0.1:8793
+          ZERO3_MEMORY_AUTH_JSON: '[{"token":"memory-verification-token-20260910","client_id":"integration","projects":["*"],"agent_types":["codex","zero3"],"max_authority":60}]'
+        run: |
+          cargo build --locked --manifest-path apps/memory-server/Cargo.toml
+          apps/memory-server/target/debug/zero3-memory-server > "$RUNNER_TEMP/memory-server.log" 2>&1 &
+          for attempt in $(seq 1 30); do if curl -fsS http://127.0.0.1:8793/ready; then exit 0; fi; sleep 1; done
+          cat "$RUNNER_TEMP/memory-server.log"
+          exit 1
+      - name: Offline queue and real authority tests
+        env:
+          ZERO3_MEMORY_TEST_URL: http://127.0.0.1:8793
+          ZERO3_MEMORY_TEST_TOKEN: memory-verification-token-20260910
+        run: node --test apps/zero3-desktop/memory-sync-runtime/*.test.mjs apps/zero3-desktop/memory-v21-runtime/*.test.mjs apps/zero3-desktop/agent-memory-runtime/*.test.mjs apps/zero3-desktop/mcp-runtime/*.test.mjs

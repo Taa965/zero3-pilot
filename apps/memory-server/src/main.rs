@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("ZERO3_MEMORY_AUTH_JSON").context("ZERO3_MEMORY_AUTH_JSON is required")?;
     let auth = AuthPolicy::from_json(&auth_json).context("load memory auth policy")?;
     let bind: SocketAddr = std::env::var("ZERO3_MEMORY_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:8790".into())
+        .unwrap_or_else(|_| "127.0.0.1:8791".into())
         .parse()
         .context("parse ZERO3_MEMORY_BIND")?;
     let repo = Arc::new(PostgresRepository::new(database_url));

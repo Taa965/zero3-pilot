@@ -57,7 +57,7 @@ INSERT INTO memory_events (
 ) VALUES (
   '11111111-1111-4111-8111-111111111111', 'project-a', 'codex-1', 'codex',
   'decision.recorded', 'project', 60, 0.9, 'decision', 'decision-1', 0,
-  '{"text":"AWS is the shared memory authority"}'::jsonb, 'task', now()
+  '{"text":"AWS is the shared memory authority"}'::jsonb, 'task', (SELECT created_at FROM memory_events WHERE event_id='11111111-1111-4111-8111-111111111111')
 )
 ON CONFLICT (event_id) DO NOTHING;
 
