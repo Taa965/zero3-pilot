@@ -129,6 +129,22 @@ function chatGptNavigationUrl(value: unknown): string {
   return parsed.toString()
 }
 
+function allowChatGptClipboardWrite(
+  contents: WebContents | null,
+  permission: string,
+  requestingUrl: string,
+  isMainFrame: boolean
+): boolean {
+  if (permission !== 'clipboard-sanitized-write' || !isMainFrame || !contents || contents.isDestroyed()) return false
+  try {
+    const requester = safeHttpsUrl(requestingUrl, 'clipboard requesting URL')
+    const page = safeHttpsUrl(contents.getURL(), 'clipboard page URL')
+    return requester.origin === `https://${CHATGPT_HOST}` && page.origin === `https://${CHATGPT_HOST}`
+  } catch {
+    return false
+  }
+}
+
 function resumeChatGptUrl(entry: Zero3GptWebWorkspaceEntry): string {
   for (const candidate of [entry.conversationUrl, entry.currentUrl]) {
     if (!candidate) continue
@@ -722,8 +738,14 @@ export class Zero3GptWebProvider {
   private getProfileSession(): Session {
     if (this.profileSession) return this.profileSession
     const profile = electronSession.fromPartition(ZERO3_GPT_WEB_PARTITION, { cache: true })
-    profile.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
-    profile.setPermissionCheckHandler(() => false)
+    // ChatGPT's response/code copy buttons use the Async Clipboard API. Both
+    // handlers must allow writes; clipboard reads and other permissions stay denied.
+    profile.setPermissionRequestHandler((contents, permission, callback, details) => {
+      callback(allowChatGptClipboardWrite(contents, permission, details.requestingUrl, details.isMainFrame))
+    })
+    profile.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+      return allowChatGptClipboardWrite(contents, permission, requestingOrigin, details.isMainFrame)
+    })
     this.profileSession = profile
     return profile
   }
