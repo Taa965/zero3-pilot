@@ -5,8 +5,16 @@ export type Zero3GeminiWebBounds = { x: number; y: number; width: number; height
 
 export type Zero3GeminiWebState = 'created' | 'loading' | 'ready' | 'shown' | 'hidden' | 'suspended' | 'error'
 
+export type Zero3GeminiWebExecutionHealth = 'active' | 'idle' | 'stalled'
+export type Zero3GeminiWebExecutionStatus = {
+  executing: boolean
+  health: Zero3GeminiWebExecutionHealth | null
+  lastProgressAt: number | null
+  idleForMs: number
+}
+
 export type Zero3GeminiWebEvent =
-  | { kind: 'execution'; entryId: string; executing: boolean }
+  | ({ kind: 'execution'; entryId: string } & Zero3GeminiWebExecutionStatus)
   | { kind: 'state'; entryId: string; state: Zero3GeminiWebState; detail?: string }
   | {
       kind: 'navigation'

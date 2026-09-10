@@ -19,6 +19,8 @@ on:
       - 'docs/EXECUTION_SYSTEM_V1.md'
       - 'docs/EXECUTION_REPORTER_V1.md'
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V1.md'
+      - 'docs/WEB_GPT_WORKER_PROTOCOL_V2.md'
+      - 'scripts/check-worker-protocol-v2-p1.mjs'
       - 'skills/zero3-web-worker/**'
       - 'skills/README.md'
       - '.github/workflows/execution-system-v1.yml'
@@ -40,6 +42,8 @@ on:
       - 'docs/EXECUTION_SYSTEM_V1.md'
       - 'docs/EXECUTION_REPORTER_V1.md'
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V1.md'
+      - 'docs/WEB_GPT_WORKER_PROTOCOL_V2.md'
+      - 'scripts/check-worker-protocol-v2-p1.mjs'
       - 'skills/zero3-web-worker/**'
       - 'skills/README.md'
       - '.github/workflows/execution-system-v1.yml'
@@ -72,5 +76,9 @@ jobs:
         run: node --check apps/zero3-desktop/execution-runtime/zero3-exec.mjs
       - name: Web GPT worker protocol tests
         run: node --test apps/zero3-desktop/worker-runtime/worker-protocol.test.mjs
+      - name: Worker Protocol v2 P1 guard
+        run: node scripts/check-worker-protocol-v2-p1.mjs
+      - name: Worker Protocol v2 P1 contracts
+        run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/p1-contracts.test.ts
       - name: Web MCP access policy tests
         run: node --test apps/zero3-desktop/mcp-runtime/project-context-http-policy.test.mjs

@@ -66,3 +66,7 @@ The MCP HTTP process remains loopback-only by default and requires the existing 
 Phase 2 adds the reviewed cloud transport in [`WEB_GPT_PRIVATE_GATEWAY_V1.md`](WEB_GPT_PRIVATE_GATEWAY_V1.md). The public ChatGPT-facing endpoint is the existing AWS `zero3-web` service at `/mcp`; it stores only durable, leased Worker RPC forwarding records. The local Zero3 application actively long-polls those records over authenticated HTTPS and maps them through an exact six-tool adapter into this Worker Runtime.
 
 This transport does not move WorkUnit/Claim authority to AWS and does not require Remote Codex execution to be enabled. `ZERO3_WORKER_TUNNEL_ENABLED` is independent from `ZERO3_REMOTE_HOST_ENABLED`.
+
+## V2 migration note
+
+Worker Protocol v2 is additive. P1 introduces long-lived Workflow worker contracts, structured WorkUnit/Artifact schemas, signed generation-fenced Worker Binding Tickets, and explicit V1 adapters under `worker-runtime/v2/`. The six V1 tools and existing SQLite runtime remain unchanged during this compatibility cycle. See `WEB_GPT_WORKER_PROTOCOL_V2.md`.

@@ -1,4 +1,5 @@
 export type WorkspaceProvider = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'zero3'
+export type WorkspaceExecutionHealth = 'active' | 'idle' | 'stalled'
 
 export type WorkspaceSession = {
   id: string
@@ -10,6 +11,9 @@ export type WorkspaceSession = {
   source: 'web' | 'local'
   archived?: boolean
   executing?: boolean
+  executionHealth?: WorkspaceExecutionHealth | null
+  lastProgressAt?: number | null
+  executionIdleForMs?: number
   completionUnread?: boolean
 }
 

@@ -176,6 +176,7 @@ type Zero3GptWebEvent =
       conversationUrl: string | null
       pageTitle: string | null
     }
+  | { kind: 'execution'; entryId: string; executing: boolean; health: 'active' | 'idle' | 'stalled' | null; lastProgressAt: number | null; idleForMs: number }
 `
 
 const globalWindowSurface = String.raw`    zero3GptWeb: {
@@ -186,6 +187,7 @@ const globalWindowSurface = String.raw`    zero3GptWeb: {
       show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>
       warm: (request: { id: string }) => Promise<{ state: 'warming' | 'warm' | 'visible' }>
       snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>
+      executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | null; lastProgressAt: number | null; idleForMs: number }>
       hide: (request: { id: string }) => Promise<{ hidden: boolean }>
       setChromeVisible: (request: { id: string; visible: boolean }) => Promise<{ visible: boolean }>
       toolbarAction: (request: { id: string; action: Zero3GptWebToolbarAction }) => Promise<{ action: Zero3GptWebToolbarAction; invoked: true }>
@@ -370,14 +372,16 @@ export function applyZero3GptWebProvider() {
       "  hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),"
   }])
   patchFile('src/global.d.ts', [{
-    label: 'GPT Web execution event type',
-    from: "      pageTitle: string | null\n    }\n\ntype Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry",
-    to: "      pageTitle: string | null\n    }\n  | { kind: 'execution'; entryId: string; executing: boolean }\n\ntype Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry"
+    label: 'GPT Web execution event health fields',
+    already: "health: 'active' | 'idle' | 'stalled' | null",
+    from: "  | { kind: 'execution'; entryId: string; executing: boolean }",
+    to: "  | { kind: 'execution'; entryId: string; executing: boolean; health: 'active' | 'idle' | 'stalled' | null; lastProgressAt: number | null; idleForMs: number }"
   }])
   patchFile('src/global.d.ts', [{
     label: 'GPT Web execution status renderer method',
-    from: "      snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>\n      hide: (request: { id: string }) => Promise<{ hidden: boolean }>",
-    to: "      snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>\n      executionStatus: (request: { id: string }) => Promise<{ executing: boolean }>\n      hide: (request: { id: string }) => Promise<{ hidden: boolean }>"
+    already: "executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health:",
+    from: "      executionStatus: (request: { id: string }) => Promise<{ executing: boolean }>",
+    to: "      executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | null; lastProgressAt: number | null; idleForMs: number }>"
   }])
 
   applyZero3GptWebUi()
