@@ -41,14 +41,15 @@ test('renderer only receives fixed robot operations', () => {
 
 test('robot default Zero3 path is read-only and elevated agents require channel approval', () => {
   const runtime = read('robot-runtime/weixin-robot-runtime.ts')
-  const providers = read('scripts/apply-session-provider-runtime.mjs')
+  const overlay = read('scripts/apply-weixin-robot-runtime.mjs')
 
   assert.match(runtime, /defaultBackend: 'zero3'/)
   assert.match(runtime, /body\.approved !== true/)
   assert.match(runtime, /approvalRequired = true/)
   assert.match(runtime, /routeZero3/)
-  assert.match(providers, /async function zero3ApiRobotTurn/)
-  assert.match(providers, /sandbox: robotSafe \? 'read-only' : 'danger-full-access'/)
+  assert.match(overlay, /sandbox: 'read-only'/)
+  assert.match(overlay, /zero3ApiAgentBridge\.register/)
+  assert.match(overlay, /zero3ApiAgentWaitForTurn/)
 })
 
 test('desktop build carries Weixin binary and QQ transport bridge', () => {

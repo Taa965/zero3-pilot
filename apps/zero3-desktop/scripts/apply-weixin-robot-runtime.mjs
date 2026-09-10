@@ -71,11 +71,42 @@ export function applyZero3WeixinRobotRuntime() {
       to: `const zero3CodexAppServer = createZero3CodexAppServer()
 const disposeZero3WeixinRobotIpc = registerWeixinRobotDesktopIpc({
   listZero3Profiles: zero3ListApiProfiles,
-  runZero3: async (profileId, request) => {
+  runZero3: async (profileId, requestValue) => {
+    const request = zero3SessionRecord(requestValue)
     const state = await zero3ApiProfileRead()
     const profile = state.profiles[profileId]
     if (!profile) throw new Error('Zero3 API Profile 不存在')
-    return zero3ApiRobotTurn(profile, request)
+    const text = zero3SessionText(request.text, 'Zero3 robot prompt', 128_000)
+    const cwd = zero3SessionText(request.cwd, 'Zero3 robot cwd', 4096)
+    const projectId = zero3SessionText(request.projectId, 'Zero3 robot projectId', 256)
+    if (!/^[A-Za-z0-9._:-]+$/.test(projectId)) throw new Error('Zero3 robot projectId contains unsupported characters')
+    const requestedThreadId = zero3SessionOptionalText(request.threadId, 512)
+    const apiKey = await zero3DecryptApiKey(profile.encryptedApiKey)
+    const bridge = await zero3ApiAgentBridge.register(profile, apiKey)
+    const runtimeOverrides = {
+      model: profile.model,
+      modelProvider: bridge.providerId,
+      cwd,
+      approvalPolicy: 'never',
+      sandbox: 'read-only',
+      config: zero3ApiAgentConfig(bridge.providerId, bridge.baseUrl),
+      developerInstructions: 'You are Zero3 Pilot answering through an authenticated messaging channel. The workspace is read-only for this turn. You may inspect files and use read-only tools, but never mutate the computer or project. If the user requests a write/elevated action, explain that it requires an authorized Codex or Claude execution.'
+    }
+    let threadId
+    if (requestedThreadId) {
+      const resumed = await zero3CodexAppServer.request('thread/resume', { threadId: requestedThreadId, ...runtimeOverrides })
+      threadId = zero3ApiAgentId(resumed, 'thread')
+    } else {
+      const started = await zero3CodexAppServer.request('thread/start', { ...runtimeOverrides, zero3ProjectId: projectId, ephemeral: false })
+      threadId = zero3ApiAgentId(started, 'thread')
+    }
+    const turn = await zero3CodexAppServer.request('turn/start', {
+      threadId,
+      input: [{ type: 'text', text: zero3ApiAgentPrompt(text, request.history), textElements: [] }]
+    })
+    const turnId = zero3ApiAgentId(turn, 'turn')
+    const responseText = await zero3ApiAgentWaitForTurn(threadId, turnId)
+    return { text: responseText, model: profile.model, profileId: profile.id, threadId }
   },
   runCodex: request => zero3RunCodexCliTurn(request),
   runClaude: request => zero3RunClaudeTurn(request),
