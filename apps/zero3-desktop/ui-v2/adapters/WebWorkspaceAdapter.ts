@@ -39,7 +39,7 @@ function relativeTime(iso: string): string {
   return then.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
 }
 
-function toSession(entry: WorkspaceEntry, executing = false): WorkspaceSession {
+function toSession(entry: WorkspaceEntry, execution: Awaited<ReturnType<Window['zero3GptWeb']['executionStatus']>>): WorkspaceSession {
   return {
     id: entry.id,
     provider: entry.kind === 'gpt_web' ? 'gpt' : 'gemini',
@@ -49,15 +49,19 @@ function toSession(entry: WorkspaceEntry, executing = false): WorkspaceSession {
     projectId: entry.projectId,
     source: 'web',
     archived: entry.archived === true,
-    executing
+    executing: execution.executing === true,
+    executionHealth: execution.health,
+    lastProgressAt: execution.lastProgressAt,
+    executionIdleForMs: execution.idleForMs
   }
 }
 
-async function executionState(entry: WorkspaceEntry): Promise<boolean> {
+async function executionState(entry: WorkspaceEntry): Promise<Awaited<ReturnType<Window['zero3GptWeb']['executionStatus']>>> {
   const bridge = entry.kind === 'gpt_web' ? window.zero3GptWeb : window.zero3GeminiWeb
   const probe = bridge.executionStatus
-  if (typeof probe !== 'function') return false
-  return probe({ id: entry.id }).then(result => result.executing === true).catch(() => false)
+  const stopped = { executing: false, health: null, lastProgressAt: null, idleForMs: 0 } as const
+  if (typeof probe !== 'function') return stopped
+  return probe({ id: entry.id }).catch(() => stopped)
 }
 
 export const WebWorkspaceAdapter = {
@@ -68,7 +72,7 @@ export const WebWorkspaceAdapter = {
     const entries = await window.zero3Workspace.list()
     const sorted = entries.slice().sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt))
     const execution = await Promise.all(sorted.map(executionState))
-    return sorted.map((entry, index) => toSession(entry, execution[index] === true))
+    return sorted.map((entry, index) => toSession(entry, execution[index]))
   },
 
   async createGptWeb(projectId: string | null = null): Promise<string> {
@@ -117,15 +121,15 @@ export const WebWorkspaceAdapter = {
 
   subscribe(
     onChange: () => void,
-    onExecutionChange?: (sessionId: string, executing: boolean) => void
+    onExecutionChange?: (sessionId: string, status: Awaited<ReturnType<Window['zero3GptWeb']['executionStatus']>>) => void
   ): () => void {
     if (!bridgeAvailable()) return () => {}
     const gpt = window.zero3GptWeb.onEvent(event => {
-      if (event.kind === 'execution') onExecutionChange?.(event.entryId, event.executing)
+      if (event.kind === 'execution') onExecutionChange?.(event.entryId, { executing: event.executing, health: event.health, lastProgressAt: event.lastProgressAt, idleForMs: event.idleForMs })
       else if (event.kind === 'navigation') onChange()
     })
     const gemini = window.zero3GeminiWeb.onEvent(event => {
-      if (event.kind === 'execution') onExecutionChange?.(event.entryId, event.executing)
+      if (event.kind === 'execution') onExecutionChange?.(event.entryId, { executing: event.executing, health: event.health, lastProgressAt: event.lastProgressAt, idleForMs: event.idleForMs })
       else if (event.kind === 'navigation') onChange()
     })
     return () => {

@@ -92,10 +92,12 @@ type Zero3GeminiWebBounds = { x: number; y: number; width: number; height: numbe
 type Zero3GeminiWebEvent =
   | { kind: 'state'; entryId: string; state: 'created' | 'loading' | 'ready' | 'shown' | 'hidden' | 'suspended' | 'error'; detail?: string }
   | { kind: 'navigation'; entryId: string; previousEntryId: string | null; logicalSessionId: string; currentUrl: string; conversationUrl: string | null; pageTitle: string | null }
+  | { kind: 'execution'; entryId: string; executing: boolean; health: 'active' | 'idle' | 'stalled' | null; lastProgressAt: number | null; idleForMs: number }
 `
 const windowSurface = String.raw`    zero3GeminiWeb: {
       create: (request?: { projectId?: string | null }) => Promise<Zero3GeminiWebWorkspaceEntry>
       show: (request: { id: string; bounds: Zero3GeminiWebBounds }) => Promise<Zero3GeminiWebWorkspaceEntry>
+      executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | null; lastProgressAt: number | null; idleForMs: number }>
       hide: (request: { id: string }) => Promise<{ hidden: boolean }>
       setBounds: (request: { id: string; bounds: Zero3GeminiWebBounds }) => Promise<{ ok: true }>
       reload: (request: { id: string }) => Promise<{ ok: true }>
@@ -131,15 +133,16 @@ export function applyZero3GeminiWebProvider() {
       "  hide: request => ipcRenderer.invoke('zero3:gemini-web:hide', request),"
   }])
   patchFile('src/global.d.ts', [{
-    label: 'Gemini Web execution event type',
-    from: "  | { kind: 'navigation'; entryId: string; previousEntryId: string | null; logicalSessionId: string; currentUrl: string; conversationUrl: string | null; pageTitle: string | null }",
-    to: "  | { kind: 'navigation'; entryId: string; previousEntryId: string | null; logicalSessionId: string; currentUrl: string; conversationUrl: string | null; pageTitle: string | null }\n" +
-      "  | { kind: 'execution'; entryId: string; executing: boolean }"
+    label: 'Gemini Web execution event health fields',
+    already: "health: 'active' | 'idle' | 'stalled' | null",
+    from: "  | { kind: 'execution'; entryId: string; executing: boolean }",
+    to: "  | { kind: 'execution'; entryId: string; executing: boolean; health: 'active' | 'idle' | 'stalled' | null; lastProgressAt: number | null; idleForMs: number }"
   }])
   patchFile('src/global.d.ts', [{
     label: 'Gemini Web execution status renderer method',
-    from: "      show: (request: { id: string; bounds: Zero3GeminiWebBounds }) => Promise<Zero3GeminiWebWorkspaceEntry>\n      hide: (request: { id: string }) => Promise<{ hidden: boolean }>",
-    to: "      show: (request: { id: string; bounds: Zero3GeminiWebBounds }) => Promise<Zero3GeminiWebWorkspaceEntry>\n      executionStatus: (request: { id: string }) => Promise<{ executing: boolean }>\n      hide: (request: { id: string }) => Promise<{ hidden: boolean }>"
+    already: "executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health:",
+    from: "      executionStatus: (request: { id: string }) => Promise<{ executing: boolean }>",
+    to: "      executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | null; lastProgressAt: number | null; idleForMs: number }>"
   }])
 
 }

@@ -99,13 +99,20 @@ export function Zero3AppShell() {
     })
   }, [])
 
-  const setWebSessionExecution = useCallback((sessionId: string, executing: boolean) => {
+  const setWebSessionExecution = useCallback((
+    sessionId: string,
+    status: Awaited<ReturnType<Window['zero3GptWeb']['executionStatus']>>
+  ) => {
     const previous = webExecutionStatesRef.current.get(sessionId)
-    webExecutionStatesRef.current.set(sessionId, executing)
-    setWebSessions(current => current.map(session =>
-      session.id === sessionId && session.executing !== executing ? { ...session, executing } : session
-    ))
-    if (previous === true && !executing) {
+    webExecutionStatesRef.current.set(sessionId, status.executing)
+    setWebSessions(current => current.map(session => session.id === sessionId ? {
+      ...session,
+      executing: status.executing,
+      executionHealth: status.health,
+      lastProgressAt: status.lastProgressAt,
+      executionIdleForMs: status.idleForMs
+    } : session))
+    if (previous === true && !status.executing) {
       setSessionCompletionUnread(sessionId, viewedSessionIdRef.current !== sessionId)
     }
   }, [setSessionCompletionUnread])
@@ -165,7 +172,7 @@ export function Zero3AppShell() {
     void refreshWebSessions()
     return WebWorkspaceAdapter.subscribe(
       () => void refreshWebSessions(),
-      (sessionId, executing) => setWebSessionExecution(sessionId, executing)
+      (sessionId, status) => setWebSessionExecution(sessionId, status)
     )
   }, [refreshWebSessions, setWebSessionExecution])
 

@@ -10,7 +10,8 @@ import {
   ZERO3_GEMINI_WEB_MAX_LIVE_VIEWS,
   ZERO3_GEMINI_WEB_PARTITION,
   type Zero3GeminiWebBounds,
-  type Zero3GeminiWebEvent
+  type Zero3GeminiWebEvent,
+  type Zero3GeminiWebExecutionStatus
 } from './gemini-web-types'
 
 type LiveView = { entryId: string; view: WebContentsView; parentWindowId: number | null; lastUsedAt: number }
@@ -22,6 +23,8 @@ const MAX_ID = 256
 const MAX_URL = 8192
 const MAX_BOUND = 16384
 const EXECUTION_PROBE_INTERVAL_MS = 800
+const EXECUTION_IDLE_AFTER_MS = 90_000
+const EXECUTION_STALLED_AFTER_MS = 5 * 60_000
 const GENERIC_TITLES = new Set(['Gemini', 'Google Gemini'])
 const GEMINI_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
   const selectors = [
@@ -41,7 +44,27 @@ const GEMINI_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
     const style = getComputedStyle(element)
     return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0
   }
-  return selectors.some(selector => Array.from(document.querySelectorAll(selector)).some(visible))
+  const executing = selectors.some(selector => Array.from(document.querySelectorAll(selector)).some(visible))
+  const responses = document.querySelectorAll('model-response, [data-test-id="model-response"], .model-response')
+  const root = responses.item(responses.length - 1)?.parentElement || document.querySelector('main') || document.body
+  const key = '__zero3ExecutionWatchdogV1'
+  let watchdog = window[key]
+  if (!watchdog || watchdog.root !== root) {
+    watchdog?.observer?.disconnect?.()
+    watchdog = { root, executing: false, lastProgressAt: Date.now(), observer: null }
+    const observer = new MutationObserver(records => {
+      if (records.some(record => record.type === 'characterData' || record.type === 'childList' || record.type === 'attributes')) {
+        watchdog.lastProgressAt = Date.now()
+      }
+    })
+    observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-busy', 'data-state'] })
+    watchdog.observer = observer
+    window[key] = watchdog
+  }
+  if (executing && !watchdog.executing) watchdog.lastProgressAt = Date.now()
+  watchdog.executing = executing
+  if (!executing) watchdog.lastProgressAt = Date.now()
+  return { executing, lastProgressAt: watchdog.lastProgressAt }
 })()`
 
 function text(value: unknown, label: string, max: number): string {
@@ -113,6 +136,22 @@ function bounds(value: unknown): Zero3GeminiWebBounds {
 // ships a 90% default zoom, so an unconverted rect oversizes the view and
 // pushes its lower-right corner past the window edge. Same conversion as the
 // GPT Web provider.
+function stoppedExecutionStatus(): Zero3GeminiWebExecutionStatus {
+  return { executing: false, health: null, lastProgressAt: null, idleForMs: 0 }
+}
+
+function executionStatusFromProbe(value: unknown, now = Date.now()): Zero3GeminiWebExecutionStatus {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return stoppedExecutionStatus()
+  const raw = value as Record<string, unknown>
+  if (raw.executing !== true) return stoppedExecutionStatus()
+  const observed = typeof raw.lastProgressAt === 'number' && Number.isFinite(raw.lastProgressAt)
+    ? Math.min(now, Math.max(0, raw.lastProgressAt)) : now
+  const idleForMs = Math.max(0, now - observed)
+  const health = idleForMs >= EXECUTION_STALLED_AFTER_MS ? 'stalled'
+    : idleForMs >= EXECUTION_IDLE_AFTER_MS ? 'idle' : 'active'
+  return { executing: true, health, lastProgressAt: observed, idleForMs }
+}
+
 function dipBounds(value: Zero3GeminiWebBounds, window: BrowserWindow | null): Zero3GeminiWebBounds {
   const raw =
     !window || window.isDestroyed() || window.webContents.isDestroyed() ? 1 : window.webContents.getZoomFactor()
@@ -128,7 +167,7 @@ function dipBounds(value: Zero3GeminiWebBounds, window: BrowserWindow | null): Z
 
 export class Zero3GeminiWebProvider {
   private readonly live = new Map<string, LiveView>()
-  private readonly executionStates = new Map<string, boolean>()
+  private readonly executionStates = new Map<string, Zero3GeminiWebExecutionStatus>()
   private profile: Session | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
   private executionProbeTimer: NodeJS.Timeout | null = null
@@ -162,13 +201,13 @@ export class Zero3GeminiWebProvider {
     return (await this.entries.get(live.entryId)) as Zero3GeminiWebWorkspaceEntry
   }
 
-  async executionStatus(idValue: unknown): Promise<{ executing: boolean }> {
+  async executionStatus(idValue: unknown): Promise<Zero3GeminiWebExecutionStatus> {
     const id = text(idValue, 'Gemini entry id', MAX_ID)
     const live = this.live.get(id)
-    if (!live || live.view.webContents.isDestroyed()) return { executing: false }
+    if (!live || live.view.webContents.isDestroyed()) return stoppedExecutionStatus()
     const detected = await this.readExecutionState(live)
     if (detected !== null) this.publishExecutionState(live.entryId, detected)
-    return { executing: detected ?? this.executionStates.get(live.entryId) === true }
+    return detected ?? this.executionStates.get(live.entryId) ?? stoppedExecutionStatus()
   }
 
   async hide(idValue: unknown) {
@@ -226,27 +265,28 @@ export class Zero3GeminiWebProvider {
     for (const id of [...this.live.keys()]) this.destroy(id)
   }
 
-  private async readExecutionState(live: LiveView): Promise<boolean | null> {
+  private async readExecutionState(live: LiveView): Promise<Zero3GeminiWebExecutionStatus | null> {
     const contents = live.view.webContents
-    if (contents.isDestroyed()) return false
+    if (contents.isDestroyed()) return stoppedExecutionStatus()
     try {
-      return (await contents.executeJavaScript(GEMINI_EXECUTION_STATUS_SCRIPT, false)) === true
+      return executionStatusFromProbe(await contents.executeJavaScript(GEMINI_EXECUTION_STATUS_SCRIPT, false))
     } catch {
       return null
     }
   }
 
-  private publishExecutionState(entryId: string, executing: boolean) {
+  private publishExecutionState(entryId: string, status: Zero3GeminiWebExecutionStatus) {
     const previous = this.executionStates.get(entryId)
-    this.executionStates.set(entryId, executing)
-    if (previous === executing || (previous === undefined && !executing)) return
-    this.emit({ kind: 'execution', entryId, executing })
+    this.executionStates.set(entryId, status)
+    const unchanged = previous?.executing === status.executing && previous?.health === status.health
+    if (unchanged || (previous === undefined && !status.executing)) return
+    this.emit({ kind: 'execution', entryId, ...status })
   }
 
   private clearExecutionState(entryId: string) {
     const previous = this.executionStates.get(entryId)
     this.executionStates.delete(entryId)
-    if (previous === true) this.emit({ kind: 'execution', entryId, executing: false })
+    if (previous?.executing) this.emit({ kind: 'execution', entryId, ...stoppedExecutionStatus() })
   }
 
   private async probeExecutionStates() {
@@ -348,7 +388,7 @@ export class Zero3GeminiWebProvider {
     contents.on('did-navigate-in-page', observe)
     contents.on('page-title-updated', observe)
     contents.on('did-start-loading', () => {
-      this.publishExecutionState(live.entryId, false)
+      this.publishExecutionState(live.entryId, stoppedExecutionStatus())
       this.emit({ kind: 'state', entryId: live.entryId, state: 'loading' })
     })
     contents.on('did-stop-loading', () => { observe(); this.emit({ kind: 'state', entryId: live.entryId, state: 'ready' }) })

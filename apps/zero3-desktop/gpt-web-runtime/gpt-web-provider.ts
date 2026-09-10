@@ -25,6 +25,7 @@ import {
   type Zero3ChatGptRemoteProject,
   type Zero3GptWebBounds,
   type Zero3GptWebEvent,
+  type Zero3GptWebExecutionStatus,
   type Zero3GptWebSnapshotResult,
   type Zero3GptWebWarmResult
 } from './gpt-web-types'
@@ -58,6 +59,8 @@ const MAX_BOUND = 16_384
 const CHATGPT_HOST = 'chatgpt.com'
 const MAINTENANCE_INTERVAL_MS = 15_000
 const EXECUTION_PROBE_INTERVAL_MS = 800
+const EXECUTION_IDLE_AFTER_MS = 90_000
+const EXECUTION_STALLED_AFTER_MS = 5 * 60_000
 const RENDER_WAIT_TIMEOUT_MS = 8_000
 const SNAPSHOT_MAX_COUNT = 30
 const SNAPSHOT_MAX_WIDTH = 1_280
@@ -82,7 +85,27 @@ const CHATGPT_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
     const style = getComputedStyle(element)
     return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0
   }
-  return selectors.some(selector => Array.from(document.querySelectorAll(selector)).some(visible))
+  const executing = selectors.some(selector => Array.from(document.querySelectorAll(selector)).some(visible))
+  const turns = document.querySelectorAll('article[data-testid^="conversation-turn-"]')
+  const root = turns.item(turns.length - 1)?.parentElement || document.querySelector('main') || document.body
+  const key = '__zero3ExecutionWatchdogV1'
+  let watchdog = window[key]
+  if (!watchdog || watchdog.root !== root) {
+    watchdog?.observer?.disconnect?.()
+    watchdog = { root, executing: false, lastProgressAt: Date.now(), observer: null }
+    const observer = new MutationObserver(records => {
+      if (records.some(record => record.type === 'characterData' || record.type === 'childList' || record.type === 'attributes')) {
+        watchdog.lastProgressAt = Date.now()
+      }
+    })
+    observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-busy', 'data-state'] })
+    watchdog.observer = observer
+    window[key] = watchdog
+  }
+  if (executing && !watchdog.executing) watchdog.lastProgressAt = Date.now()
+  watchdog.executing = executing
+  if (!executing) watchdog.lastProgressAt = Date.now()
+  return { executing, lastProgressAt: watchdog.lastProgressAt }
 })()`
 
 // Zero3 owns the outer navigation and toolbar. Keep ChatGPT's own conversation
@@ -264,10 +287,26 @@ function windowZoomFactor(window: BrowserWindow | null): number {
   return window.webContents.getZoomFactor()
 }
 
+function stoppedExecutionStatus(): Zero3GptWebExecutionStatus {
+  return { executing: false, health: null, lastProgressAt: null, idleForMs: 0 }
+}
+
+function executionStatusFromProbe(value: unknown, now = Date.now()): Zero3GptWebExecutionStatus {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return stoppedExecutionStatus()
+  const raw = value as Record<string, unknown>
+  if (raw.executing !== true) return stoppedExecutionStatus()
+  const observed = typeof raw.lastProgressAt === 'number' && Number.isFinite(raw.lastProgressAt)
+    ? Math.min(now, Math.max(0, raw.lastProgressAt)) : now
+  const idleForMs = Math.max(0, now - observed)
+  const health = idleForMs >= EXECUTION_STALLED_AFTER_MS ? 'stalled'
+    : idleForMs >= EXECUTION_IDLE_AFTER_MS ? 'idle' : 'active'
+  return { executing: true, health, lastProgressAt: observed, idleForMs }
+}
+
 export class Zero3GptWebProvider {
   private readonly live = new Map<string, LiveGptWebView>()
   private readonly snapshots = new Map<string, SnapshotRecord>()
-  private readonly executionStates = new Map<string, boolean>()
+  private readonly executionStates = new Map<string, Zero3GptWebExecutionStatus>()
   private profileSession: Session | null = null
   private loginWindow: BrowserWindow | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
@@ -570,13 +609,13 @@ export class Zero3GptWebProvider {
     }
   }
 
-  async executionStatus(idValue: unknown): Promise<{ executing: boolean }> {
+  async executionStatus(idValue: unknown): Promise<Zero3GptWebExecutionStatus> {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     const live = this.live.get(id)
-    if (!live || live.view.webContents.isDestroyed()) return { executing: false }
+    if (!live || live.view.webContents.isDestroyed()) return stoppedExecutionStatus()
     const detected = await this.readExecutionState(live)
     if (detected !== null) this.publishExecutionState(live.entryId, detected)
-    return { executing: detected ?? this.executionStates.get(live.entryId) === true }
+    return detected ?? this.executionStates.get(live.entryId) ?? stoppedExecutionStatus()
   }
 
   snapshot(idValue: unknown): Zero3GptWebSnapshotResult {
@@ -775,27 +814,28 @@ export class Zero3GptWebProvider {
     this.snapshots.clear()
   }
 
-  private async readExecutionState(live: LiveGptWebView): Promise<boolean | null> {
+  private async readExecutionState(live: LiveGptWebView): Promise<Zero3GptWebExecutionStatus | null> {
     const contents = live.view.webContents
-    if (contents.isDestroyed()) return false
+    if (contents.isDestroyed()) return stoppedExecutionStatus()
     try {
-      return (await contents.executeJavaScript(CHATGPT_EXECUTION_STATUS_SCRIPT, false)) === true
+      return executionStatusFromProbe(await contents.executeJavaScript(CHATGPT_EXECUTION_STATUS_SCRIPT, false))
     } catch {
       return null
     }
   }
 
-  private publishExecutionState(entryId: string, executing: boolean): void {
+  private publishExecutionState(entryId: string, status: Zero3GptWebExecutionStatus): void {
     const previous = this.executionStates.get(entryId)
-    this.executionStates.set(entryId, executing)
-    if (previous === executing || (previous === undefined && !executing)) return
-    this.emitEvent({ kind: 'execution', entryId, executing })
+    this.executionStates.set(entryId, status)
+    const unchanged = previous?.executing === status.executing && previous?.health === status.health
+    if (unchanged || (previous === undefined && !status.executing)) return
+    this.emitEvent({ kind: 'execution', entryId, ...status })
   }
 
   private clearExecutionState(entryId: string): void {
     const previous = this.executionStates.get(entryId)
     this.executionStates.delete(entryId)
-    if (previous === true) this.emitEvent({ kind: 'execution', entryId, executing: false })
+    if (previous?.executing) this.emitEvent({ kind: 'execution', entryId, ...stoppedExecutionStatus() })
   }
 
   private async probeExecutionStates(): Promise<void> {
@@ -987,7 +1027,7 @@ export class Zero3GptWebProvider {
     contents.on('did-navigate-in-page', observe)
     contents.on('page-title-updated', () => observe())
     contents.on('did-start-loading', () => {
-      this.publishExecutionState(live.entryId, false)
+      this.publishExecutionState(live.entryId, stoppedExecutionStatus())
       live.loadState = 'warming'
       this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'warming' })
     })
