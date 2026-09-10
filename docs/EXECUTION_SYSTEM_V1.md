@@ -35,13 +35,13 @@ The v1 scheduler is deterministic. It validates unknown dependencies, duplicate 
 
 The contract supports dynamic DAG expansion by incrementing the workflow revision and adding Steps. This is required for workflows such as visual planning that discover the eventual number of image/video production batches at runtime.
 
-## Web worker boundary
+## Web callback and worker boundaries
 
-The first narrow reporter/worker boundary is now implemented as the Web-GPT Worker Protocol. Web GPT communicates through six bounded MCP tools for registration, claiming, progress, batch completion, failure reporting, and context recovery. Remote Desktop Commander may still be used as a development/operations transport, but it is not part of the Worker protocol.
+Two narrow boundaries now exist and serve different layers. [`EXECUTION_REPORTER_V1.md`](EXECUTION_REPORTER_V1.md) is the macro Step callback path: a bound GPT/Gemini web session may use Remote Desktop Commander to invoke the packaged `zero3-exec` client and report session start, progress, logical Artifacts, blocking/human-wait states, or a completion request. Every report is authorized by a signed Assignment Ticket and accepted only by the loopback Zero3 reporter service.
 
-Batched WorkUnits and Claims live in a SQLite Worker Runtime under the macro `ExecutionTask -> ExecutionStep -> ExecutionAssignment` authority. A web worker can drive its WorkUnits to `STAGE_WORK_COMPLETE`, which emits a completion request; it still cannot set the macro Step to `completed`. Zero3's Completion Gate retains that authority. See [`WEB_GPT_WORKER_PROTOCOL_V1.md`](WEB_GPT_WORKER_PROTOCOL_V1.md).
+[`WEB_GPT_WORKER_PROTOCOL_V1.md`](WEB_GPT_WORKER_PROTOCOL_V1.md) is the batched WorkUnit path. Web GPT communicates through six bounded MCP tools for registration, claiming, progress, batch completion, failure reporting, and context recovery. Batched WorkUnits and Claims live in a SQLite Worker Runtime under the macro `ExecutionTask -> ExecutionStep -> ExecutionAssignment` authority. Neither boundary can mark the macro Step `completed`; Zero3's Completion Gate retains that authority.
 
-## Phase 1 status
+## Phase 1 + Phase 2 status
 
 Implemented in `apps/zero3-desktop/execution-runtime/`:
 
@@ -50,6 +50,11 @@ Implemented in `apps/zero3-desktop/execution-runtime/`:
 - deterministic DAG scheduling and concurrency gating;
 - checksum-protected durable snapshot store;
 - monotonic idempotent event ledger;
-- runtime controller for task creation, dynamic Step expansion, Assignment creation, session binding, progress/artifact events, completion requests, gate pass/fail, and automatic dependency release.
+- runtime controller for task creation, dynamic Step expansion, Assignment creation, session binding, progress/artifact events, completion requests, gate pass/fail, and automatic dependency release;
+- HMAC-signed, expiring Assignment Tickets scoped to concrete web SessionBindings;
+- idempotent `zero3.pilot.execution-report.v1` callback handling for start/progress/artifact/block/human/completion events;
+- bearer-protected loopback HTTP reporter with a private endpoint descriptor;
+- DC-callable `zero3-exec.mjs` client plus packaged Windows `zero3-exec.ps1`;
+- Electron main/preload bridge for real Execution Runtime state and reporter-ticket issuance.
 
-The existing Task UI remains a demo until the later UI phase is wired to this authority.
+The existing Task UI remains a demo until the later UI phase is wired to this authority. Physical Web Artifact collection is also intentionally deferred; Phase 2 records authoritative logical Artifact events but does not claim that a ChatGPT-hosted binary has already entered the shared Artifact Store.

@@ -11,6 +11,7 @@ for (const required of [
   path.join(hermesDesktopDir, 'build', 'zero3-codex', 'codex.exe'),
   path.join(hermesDesktopDir, 'build', 'zero3-weixin', 'zero3-pilot-weixin.exe'),
   path.join(hermesDesktopDir, 'build', 'zero3-robots', 'qqbot_bridge.py'),
+  path.join(hermesDesktopDir, 'build', 'zero3-execution-tools', 'zero3-exec.ps1'),
   path.join(hermesDesktopDir, 'build', 'zero3-legal', 'LICENSE-Zero3-Pilot.txt'),
   path.join(hermesDesktopDir, 'build', 'zero3-legal', 'NOTICE-Zero3-Pilot.txt'),
   path.join(hermesDesktopDir, 'build', 'zero3-legal', 'LICENSE-OpenAI-Codex.txt'),
@@ -29,7 +30,7 @@ packageJson.scripts = packageJson.scripts ?? {}
 packageJson.scripts['dist:win'] = 'npm run build && npm run builder -- --win nsis --publish never'
 packageJson.build = packageJson.build ?? {}
 packageJson.build.win = packageJson.build.win ?? {}
-const managedTargets = new Set(['zero3-codex/codex.exe', 'zero3-weixin/zero3-pilot-weixin.exe', 'zero3-robots', 'legal'])
+const managedTargets = new Set(['zero3-codex/codex.exe', 'zero3-weixin/zero3-pilot-weixin.exe', 'zero3-robots', 'zero3-execution-tools', 'legal'])
 const extraResources = Array.isArray(packageJson.build.win.extraResources)
   ? packageJson.build.win.extraResources.filter(item => !managedTargets.has(item?.to))
   : []
@@ -45,6 +46,10 @@ extraResources.push(
   {
     from: 'build/zero3-robots',
     to: 'zero3-robots'
+  },
+  {
+    from: 'build/zero3-execution-tools',
+    to: 'zero3-execution-tools'
   },
   {
     from: 'build/zero3-legal',

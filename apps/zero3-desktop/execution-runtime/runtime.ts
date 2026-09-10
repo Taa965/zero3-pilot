@@ -23,6 +23,7 @@ import {
 } from './contracts.ts'
 import { computeTaskProgress, dependencyReady, planExecutionSchedule, type ExecutionSchedulePlan } from './scheduler.ts'
 import { assertSessionBindingTransition, assertStepTransition, assertTaskTransition } from './state-machine.ts'
+import { stableJson } from '../group-runtime/store/atomic-file.ts'
 import { Zero3ExecutionStore } from './store.ts'
 
 const ACTIVE_STEPS = new Set<ExecutionStepStatus>(['dispatching', 'running', 'waiting_report', 'verifying'])
@@ -41,6 +42,18 @@ export interface BindExecutionSessionInput {
   conversationUrl?: string | null
   state?: ExecutionSessionBindingState
   metadata?: Readonly<Record<string, unknown>>
+}
+
+export interface ExecutionEventIdentity {
+  eventId?: string
+  payload?: Readonly<Record<string, unknown>>
+}
+
+function eventPayload(
+  base: Readonly<Record<string, unknown>>,
+  identity?: ExecutionEventIdentity
+): Readonly<Record<string, unknown>> {
+  return identity?.payload ? { ...base, ...identity.payload } : base
 }
 
 function now(): string { return new Date().toISOString() }
@@ -103,11 +116,46 @@ export class Zero3ExecutionRuntime {
     runtime: ExecutionRuntimeState,
     input: Omit<ExecutionEvent, 'contract' | 'eventId' | 'sequence' | 'at'> & { eventId?: string; at?: string }
   ): Promise<{ runtime: ExecutionRuntimeState; event: ExecutionEvent }> {
-    const sequence = (await this.store.readEvents(input.taskId)).length + 1
+    const events = await this.store.readEvents(input.taskId)
+    const explicitId = input.eventId?.trim() || null
+    if (explicitId) {
+      const existing = events.find(event => event.eventId === explicitId)
+      if (existing) {
+        const expected = {
+          taskId: input.taskId,
+          stepId: input.stepId ?? null,
+          assignmentId: input.assignmentId ?? null,
+          type: input.type,
+          payload: input.payload ?? null
+        }
+        const observed = {
+          taskId: existing.taskId,
+          stepId: existing.stepId ?? null,
+          assignmentId: existing.assignmentId ?? null,
+          type: existing.type,
+          payload: existing.payload ?? null
+        }
+        if (stableJson(expected) !== stableJson(observed)) {
+          throw new Error(`event id ${explicitId} was reused with different execution report content`)
+        }
+        const steps = runtime.steps.map(step => step.stepId === input.stepId
+          ? { ...step, lastEventSequence: Math.max(step.lastEventSequence, existing.sequence), updatedAt: existing.at }
+          : step)
+        return {
+          event: existing,
+          runtime: {
+            ...runtime,
+            task: { ...runtime.task, lastEventSequence: Math.max(runtime.task.lastEventSequence, existing.sequence), updatedAt: existing.at },
+            steps
+          }
+        }
+      }
+    }
+    const sequence = events.length + 1
     const at = input.at ?? now()
     const event: ExecutionEvent = {
       contract: ZERO3_EXECUTION_EVENT,
-      eventId: input.eventId ?? `evt-${randomUUID()}`,
+      eventId: explicitId ?? `evt-${randomUUID()}`,
       sequence,
       taskId: input.taskId,
       ...(input.stepId ? { stepId: input.stepId } : {}),
@@ -338,7 +386,7 @@ export class Zero3ExecutionRuntime {
     })
   }
 
-  async transitionStep(taskId: string, stepId: string, status: ExecutionStepStatus, reason?: string): Promise<ExecutionTaskSnapshot> {
+  async transitionStep(taskId: string, stepId: string, status: ExecutionStepStatus, reason?: string, identity?: ExecutionEventIdentity): Promise<ExecutionTaskSnapshot> {
     return this.mutate(taskId, async () => {
       const snapshot = await this.store.loadSnapshot(taskId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
@@ -353,52 +401,53 @@ export class Zero3ExecutionRuntime {
         } : step)
       }
       const type: ExecutionEventType = status === 'waiting_human' ? 'waiting_human' : status === 'blocked' ? 'blocked' : status === 'outcome_unknown' ? 'outcome_unknown' : 'step.state_changed'
-      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type, payload: { from: current.status, to: status, ...(reason ? { reason } : {}) } })
+      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type, eventId: identity?.eventId, payload: eventPayload({ from: current.status, to: status, ...(reason ? { reason } : {}) }, identity) })
       runtime = refreshDerived(recorded.runtime)
       await this.store.writeSnapshot(snapshot.definition, runtime)
       return this.snapshot(taskId)
     })
   }
 
-  async recordProgress(taskId: string, stepId: string, progress: number, currentActivity?: string | null): Promise<ExecutionTaskSnapshot> {
+  async recordProgress(taskId: string, stepId: string, progress: number, currentActivity?: string | null, identity?: ExecutionEventIdentity): Promise<ExecutionTaskSnapshot> {
     return this.mutate(taskId, async () => {
       const snapshot = await this.store.loadSnapshot(taskId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!current) throw new Error(`execution step not found: ${stepId}`)
-      if (!['dispatching', 'running', 'waiting_report'].includes(current.status)) throw new Error(`step ${stepId} cannot report progress while ${current.status}`)
+      if (!['dispatching', 'running', 'waiting_report', 'fix_required'].includes(current.status)) throw new Error(`step ${stepId} cannot report progress while ${current.status}`)
       const normalized = boundedProgress(progress)
+      if (current.status !== 'running') assertStepTransition(current.status, 'running')
       let runtime: ExecutionRuntimeState = {
         ...snapshot.runtime,
-        steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? { ...step, progress: normalized, currentActivity: currentActivity?.trim() || null } : step)
+        steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? { ...step, status: 'running', progress: normalized, currentActivity: currentActivity?.trim() || null, blocker: null } : step)
       }
-      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'progress.updated', payload: { progress: normalized, currentActivity: currentActivity?.trim() || null } })
+      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'progress.updated', eventId: identity?.eventId, payload: eventPayload({ progress: normalized, currentActivity: currentActivity?.trim() || null, fromStatus: current.status, toStatus: 'running' }, identity) })
       runtime = refreshDerived(recorded.runtime)
       await this.store.writeSnapshot(snapshot.definition, runtime)
       return this.snapshot(taskId)
     })
   }
 
-  async recordArtifact(taskId: string, stepId: string, artifact: Readonly<Record<string, unknown>>): Promise<ExecutionTaskSnapshot> {
+  async recordArtifact(taskId: string, stepId: string, artifact: Readonly<Record<string, unknown>>, identity?: ExecutionEventIdentity): Promise<ExecutionTaskSnapshot> {
     return this.mutate(taskId, async () => {
       const snapshot = await this.store.loadSnapshot(taskId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!current) throw new Error(`execution step not found: ${stepId}`)
       let runtime = snapshot.runtime
-      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'artifact.produced', payload: artifact })
+      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'artifact.produced', eventId: identity?.eventId, payload: eventPayload(artifact, identity) })
       runtime = refreshDerived(recorded.runtime)
       await this.store.writeSnapshot(snapshot.definition, runtime)
       return this.snapshot(taskId)
     })
   }
 
-  async requestCompletion(taskId: string, stepId: string): Promise<ExecutionTaskSnapshot> {
+  async requestCompletion(taskId: string, stepId: string, identity?: ExecutionEventIdentity): Promise<ExecutionTaskSnapshot> {
     return this.mutate(taskId, async () => {
       const snapshot = await this.store.loadSnapshot(taskId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!current) throw new Error(`execution step not found: ${stepId}`)
       assertStepTransition(current.status, 'verifying')
       let runtime: ExecutionRuntimeState = { ...snapshot.runtime, steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? { ...step, status: 'verifying', progress: Math.max(step.progress, 0.95) } : step) }
-      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'completion.requested', payload: { from: current.status, to: 'verifying' } })
+      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'completion.requested', eventId: identity?.eventId, payload: eventPayload({ from: current.status, to: 'verifying' }, identity) })
       runtime = refreshDerived(recorded.runtime)
       await this.store.writeSnapshot(snapshot.definition, runtime)
       return this.snapshot(taskId)

@@ -16,6 +16,7 @@ import {
 } from './config.mjs'
 import { applyZero3DataDirectory } from './apply-data-directory.mjs'
 import { applyDevelopmentGroupBridge } from './apply-development-group-bridge.mjs'
+import { applyExecutionRuntimeBridge } from './apply-execution-runtime-bridge.mjs'
 
 const mode = process.argv[2] ?? 'dev'
 const allowedModes = new Set(['dev', 'typecheck', 'dist:win'])
@@ -234,6 +235,18 @@ function stageZero3RobotResourcesForWindowsPackage() {
   console.log(`[Zero3] Staged QQBot transport bridge for Windows package: ${targetDir}`)
 }
 
+function stageZero3ExecutionToolsForWindowsPackage() {
+  if (process.platform !== 'win32') throw new Error('Execution tools Windows staging requires Windows.')
+  const targetDir = path.join(hermesDesktopDir, 'build', 'zero3-execution-tools')
+  fs.rmSync(targetDir, { recursive: true, force: true })
+  fs.mkdirSync(targetDir, { recursive: true })
+  copyRequiredFile(
+    path.join(repoRoot, 'apps', 'zero3-desktop', 'execution-runtime', 'zero3-exec.ps1'),
+    path.join(targetDir, 'zero3-exec.ps1')
+  )
+  console.log(`[Zero3] Staged execution reporter client for Windows package: ${targetDir}`)
+}
+
 function hermesVenvPython() {
   return path.join(
     hermesRoot,
@@ -323,6 +336,7 @@ if (!externallyPrepared) {
     // A desktop reload only rebuilds Electron/React. Replaying Rust patches into
     // a concurrently edited core checkout can fail or interfere with core work.
     applyDevelopmentGroupBridge()
+    applyExecutionRuntimeBridge()
     console.log('[Zero3] Desktop reload: reusing the compiled Codex core.')
   } else {
     runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])
@@ -361,6 +375,7 @@ if (mode === 'dev') {
   stagePinnedCodexForWindowsPackage(codexBinary)
   stageZero3WeixinForWindowsPackage(weixinBinary)
   stageZero3RobotResourcesForWindowsPackage()
+  stageZero3ExecutionToolsForWindowsPackage()
   runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-windows-package.mjs')])
 } else {
   codexBinary = pinnedCodexBinary('debug')
