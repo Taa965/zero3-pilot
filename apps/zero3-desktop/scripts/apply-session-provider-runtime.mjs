@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { hermesDesktopDir } from './config.mjs'
+import { hermesDesktopDir, repoRoot } from './config.mjs'
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
 function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
@@ -1225,6 +1225,22 @@ async function zero3SessionProviderStatus(provider?: string) {
   return provider ? Object.fromEntries(Object.entries(statuses).filter(([id]) => id === provider)) : statuses
 }
 
+const zero3ReadProviderUsage = createProviderUsageService({
+  fetchJson: fetchUsageJson,
+  profile: async id => {
+    const profile = (await zero3ApiProfileRead()).profiles[id]
+    return profile ? { id: profile.id, baseUrl: profile.baseUrl, updatedAt: profile.updatedAt, apiKey: await zero3DecryptApiKey(profile.encryptedApiKey) } : null
+  }
+})
+ipcMain.handle('zero3:session-providers:usage', async (_event, value: unknown) => {
+  const request = zero3SessionRecord(value)
+  const provider = zero3SessionProvider(request.provider)
+  if (provider === 'gpt' || provider === 'gemini') throw new Error('该平台不支持本地额度查询')
+  try {
+    return await zero3ReadProviderUsage({ provider, profileId: zero3SessionOptionalText(request.profileId, 128), force: request.force === true })
+  } catch { return emptyUsage('额度或 API 配置暂不可读取') }
+})
+
 ipcMain.handle('zero3:session-providers:status', (_event, request: unknown) => {
   const provider = zero3SessionRecord(request).provider
   return zero3SessionProviderStatus(provider == null ? undefined : zero3SessionProvider(provider))
@@ -1286,6 +1302,7 @@ app.on('before-quit', () => zero3ApiAgentBridge.stop())
 
 const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionProviders', {
   status: request => ipcRenderer.invoke('zero3:session-providers:status', request),
+  usage: request => ipcRenderer.invoke('zero3:session-providers:usage', request),
   authorize: request => ipcRenderer.invoke('zero3:session-providers:authorize', request),
   listZero3Profiles: () => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:list'),
   saveZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:save', request),
@@ -1328,6 +1345,7 @@ type Zero3ApiProfile = {
 `
 
 const globalSurface = String.raw`    zero3SessionProviders: {
+      usage: (request: { provider: 'codex' | 'claude' | 'antigravity' | 'zero3'; profileId?: string | null; force?: boolean }) => Promise<import('../electron/zero3/provider-usage/provider-usage').ProviderUsage>
       status: (request?: { provider: Zero3SessionProviderId }) => Promise<Partial<Zero3SessionProviderStatusMap>>
       authorize: (request: { provider: Zero3SessionProviderId }) => Promise<{ opened: boolean; detail: string }>
       listZero3Profiles: () => Promise<Zero3ApiProfile[]>
@@ -1342,6 +1360,7 @@ const globalSurface = String.raw`    zero3SessionProviders: {
     zero3AgentTask: {`
 
 export function applyZero3SessionProviderRuntime() {
+  fs.cpSync(path.join(repoRoot, 'apps/zero3-desktop/provider-usage-runtime'), path.join(hermesDesktopDir, 'electron/zero3/provider-usage'), { recursive: true })
   patchFile('electron/main.ts', [
     {
       label: 'windows CLI resolver import',
@@ -1349,7 +1368,9 @@ export function applyZero3SessionProviderRuntime() {
       to:
         "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'\n" +
         "import { describeResolution, diagnoseWindowsCommand, resolveWindowsCommand } from './zero3/executor-runtime/external/windows-command'\n" +
-        "import { claudeCliEnvironment } from './zero3/executor-runtime/external/claude-environment'"
+        "import { claudeCliEnvironment } from './zero3/executor-runtime/external/claude-environment'\n" +
+        "import { createProviderUsageService, emptyUsage } from './zero3/provider-usage/provider-usage'\n" +
+        "import { fetchUsageJson } from './zero3/provider-usage/usage-fetch'"
     },
     {
       label: 'session provider IPC before Agent orchestrator',

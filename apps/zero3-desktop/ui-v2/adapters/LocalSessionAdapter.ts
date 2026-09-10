@@ -1,3 +1,4 @@
+import { localTurnMessageText } from '../conversations/local-turn-failure'
 import type {
   LocalSessionMessage,
   LocalSessionProvider,
@@ -142,7 +143,8 @@ export const LocalSessionAdapter = {
   },
 
   toWorkspaceSession(record: LocalSessionRecord): WorkspaceSession {
-    const last = record.messages.at(-1)?.content ?? `${providerLabel(record.provider)} 本地会话`
+    const lastMessage = record.messages.at(-1)
+    const last = lastMessage ? localTurnMessageText(record.provider, lastMessage) : `${providerLabel(record.provider)} 本地会话`
     return {
       id: record.id,
       provider: record.provider,

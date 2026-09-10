@@ -69,7 +69,7 @@ test('slow unused provider cannot delay another provider; storage and IPC errors
 test('single-provider IPC runs only the requested CLI, including skipping Antigravity discovery', async () => {
   const runtime = source('scripts/apply-session-provider-runtime.mjs')
   const start = runtime.indexOf('const ZERO3_PROVIDER_PROBE_DEADLINE_MS')
-  const end = runtime.indexOf("ipcMain.handle('zero3:session-providers:status'", start)
+  const end = runtime.indexOf('const zero3ReadProviderUsage', start)
   const calls = []
   const api = evaluate(runtime.slice(start, end) + '\nexport { zero3SessionProviderStatus };', {
     zero3ProbeCodexCli: async () => { calls.push('codex'); return ready },

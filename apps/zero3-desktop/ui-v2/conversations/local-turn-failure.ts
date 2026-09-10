@@ -20,8 +20,27 @@ export function localTurnFailureMessage(error: unknown): string {
   return message
 }
 
+export function localTurnQuotaMessage(provider: string, message: string | null): string | null {
+  if (provider !== 'claude' || !message) return null
+  const detail = localTurnFailureMessage(message)
+  // A plain 429 can mean a short rate limit. Only explicit usage exhaustion
+  // warrants telling the user their allowance is used up.
+  if (!/(?:you['’]ve hit your (?:(?:session|weekly|usage) )?limit|(?:session|weekly|usage) limit (?:reached|exceeded)|(?:reached|exceeded) your (?:session|weekly|usage) limit)/i.test(detail)) return null
+  const scope = /\bsession limit\b/i.test(detail) ? '当前会话' : /\bweekly limit\b/i.test(detail) ? '本周' : '使用'
+  // Keep the provider's reset time/timezone verbatim; don't infer a date or
+  // promise a countdown from a historical message. Diagnostic logs stay saved.
+  const reset = detail.match(/\bresets?\s+([^\r\n]+?)(?=\s*（完整输出见|$)/i)?.[1]?.trim()
+  return `Claude ${scope}额度已用完。${reset ? `服务端提示的额度恢复时间：${reset}。` : '请在 Claude 中查看额度恢复时间。'}额度恢复后可在当前会话继续发送。`
+}
+
+export function localTurnMessageText(provider: string, message: { role: string; content: string }): string {
+  if (message.role !== 'assistant' || !message.content.startsWith('执行失败：')) return message.content
+  return localTurnQuotaMessage(provider, message.content) ?? `执行失败：${localTurnFailureMessage(message.content)}`
+}
+
 export function localTurnRecovery(provider: string, message: string | null): 'model' | 'auth' | null {
   if (!message) return null
+  if (localTurnQuotaMessage(provider, message)) return null
   if ((provider === 'codex' || provider === 'claude') && /(?:model.*(?:not supported|not found|does not exist|unavailable)|unsupported model)/i.test(message)) return 'model'
   if ((provider === 'codex' || provider === 'claude') && /(?:failed to authenticate|not logged in|authentication|unauthorized|\b401\b|\b403\b)/i.test(message)) return 'auth'
   // Old Codex errors lost the actual JSON cause. Let the user clear the

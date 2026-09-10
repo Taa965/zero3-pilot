@@ -6,7 +6,8 @@ import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { ProjectLinkAdapter } from '../adapters/ProjectLinkAdapter'
 import type { LocalSessionProvider, LocalSessionRecord } from './session-types'
 import { providerReadiness } from './provider-readiness'
-import { localTurnFailureMessage, localTurnRecovery } from './local-turn-failure'
+import { ProviderUsageBadge } from './ProviderUsageBadge'
+import { localTurnFailureMessage, localTurnMessageText, localTurnQuotaMessage, localTurnRecovery } from './local-turn-failure'
 
 interface LocalConversationSurfaceProps {
   provider: LocalSessionProvider
@@ -148,8 +149,9 @@ export function LocalConversationSurface({ provider, session, project, onChanged
   const savedFailure = lastMessage?.role === 'assistant' && lastMessage.content.startsWith('执行失败：')
     ? localTurnFailureMessage(lastMessage.content) : null
   const failureMessage = error ?? savedFailure
+  const quotaMessage = localTurnQuotaMessage(provider, failureMessage)
   const recovery = localTurnRecovery(provider, failureMessage)
-  const canReauthorize = provider === 'codex' || provider === 'claude'
+  const canReauthorize = !quotaMessage && (provider === 'codex' || provider === 'claude')
 
   const recover = async () => {
     if (!session || busy) return
@@ -230,10 +232,11 @@ export function LocalConversationSurface({ provider, session, project, onChanged
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-(--ui-border) px-4">
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-3 border-b border-(--ui-border) px-4 py-2">
         <div className="font-medium">{providerLabel(provider)}</div>
-        <div className="truncate text-xs text-(--ui-text-tertiary)">{subtitle}</div>
-        {project && <div className="ml-auto rounded bg-(--ui-control-background) px-2 py-1 text-xs text-(--ui-text-secondary)">{project.name}</div>}
+        <div className="min-w-0 flex-1 truncate text-xs text-(--ui-text-tertiary)">{subtitle}</div>
+        <ProviderUsageBadge provider={provider} profileId={session.zero3ProfileId} refreshToken={session.updatedAt} />
+        {project && <div className="max-w-48 truncate rounded bg-(--ui-control-background) px-2 py-1 text-xs text-(--ui-text-secondary)">{project.name}</div>}
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
@@ -245,7 +248,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
         {messages.map(message => (
           <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[82%] whitespace-pre-wrap rounded-xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'bg-blue-600 text-white' : 'border border-(--ui-border) bg-(--ui-pane-background)'}`}>
-              {message.content.startsWith('执行失败：') ? `执行失败：${localTurnFailureMessage(message.content)}` : message.content}
+              {localTurnMessageText(provider, message)}
             </div>
           </div>
         ))}
@@ -270,10 +273,11 @@ export function LocalConversationSurface({ provider, session, project, onChanged
         )}
         {busy && provider !== 'codex' && <div className="text-xs text-(--ui-text-tertiary)">正在执行 {providerLabel(provider)}…</div>}
         {failureMessage && (
-          <div role="alert" className="space-y-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-600">
+          <div role="alert" className={`space-y-2 rounded-md border px-3 py-2 text-xs ${quotaMessage ? 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-400' : 'border-red-500/30 bg-red-500/5 text-red-600'}`}>
+            {quotaMessage && <div>{quotaMessage}</div>}
             {recovery === 'model' && <div>当前模型可能不受账号支持。恢复本机默认设置后重新发送，或在新建会话时填写账号可用的模型。</div>}
             {recovery === 'auth' && <div>服务端拒绝了请求。本地存在登录凭证并不代表当前授权可用；请重新登录后重试，若仍返回 403，请检查账号访问权限和网络。</div>}
-            {!recovery && <div>{failureMessage}</div>}
+            {!quotaMessage && !recovery && <div>{failureMessage}</div>}
             {(recovery || canReauthorize) && <button disabled={busy} onClick={() => void recover()} className="rounded border border-current px-2 py-1 disabled:opacity-50">{recovery === 'model' ? '恢复本机默认设置' : '重新登录'}</button>}
           </div>
         )}
