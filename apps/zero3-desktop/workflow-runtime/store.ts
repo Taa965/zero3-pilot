@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import {
   ZERO3_WORKFLOW_ARTIFACT,
   type WorkflowArtifactRecord,
+  type WorkflowArtifactRelocation,
   type WorkflowArtifactSeed,
   type WorkflowEventRecord,
   type WorkflowItemRecord,
@@ -364,6 +365,36 @@ export class Zero3WorkflowStore {
     })
   }
 
+
+  relocateArtifact(runIdValue: string, artifactIdValue: string, relocation: WorkflowArtifactRelocation): WorkflowArtifactRecord {
+    return this.transaction(() => {
+      const runId = id(runIdValue, 'workflowRunId')
+      const artifactId = id(artifactIdValue, 'artifactId')
+      const row = this.db.prepare('SELECT * FROM workflow_artifacts WHERE workflow_run_id=? AND artifact_id=?').get(runId, artifactId) as any
+      if (!row) throw new Error(`workflow artifact not found: ${artifactId}`)
+      const previous = this.artifactView(row)
+      const metadata = { ...previous.metadata, ...(relocation.metadataPatch ?? {}) }
+      const at = now()
+      this.db.prepare(`UPDATE workflow_artifacts SET storage_json=?,sha256=?,size_bytes=?,state=?,metadata_json=? WHERE workflow_run_id=? AND artifact_id=?`)
+        .run(
+          json(relocation.storage),
+          relocation.sha256 === undefined ? previous.sha256 : relocation.sha256,
+          relocation.sizeBytes === undefined ? previous.sizeBytes : relocation.sizeBytes,
+          relocation.state ?? previous.state,
+          json(metadata),
+          runId,
+          artifactId
+        )
+      const updated = this.artifactView(this.db.prepare('SELECT * FROM workflow_artifacts WHERE workflow_run_id=? AND artifact_id=?').get(runId, artifactId))
+      this.appendEventTx(runId, updated.itemId, updated.stageRunId, 'artifact.relocated', {
+        artifactId,
+        from: previous.storage,
+        to: updated.storage,
+        state: updated.state
+      }, at)
+      return updated
+    })
+  }
 
   private missingRequiredOutputsTx(runId: string, itemId: string, stageId: string): string[] {
     const plan = parse<WorkflowRunPlan>(this.requireRunRow(runId).plan_json, {} as WorkflowRunPlan)

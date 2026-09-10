@@ -51,7 +51,7 @@ The module declares logical WorkerDefinitions (`script-worker`, `visual-worker`,
 - local -> local -> local storage;
 - local/remote boundary -> remote-compute transport.
 
-Actual provider credentials remain outside Workflow definitions. `GoogleDriveArtifactProvider` is an injected port so the authenticated Drive implementation can be connected without giving workflow code OAuth secrets.
+Actual provider credentials remain outside Workflow definitions. `GoogleDriveArtifactProvider` remains an injected contract, while `GoogleDriveRestArtifactPort` now implements authenticated Drive v3 verify/download/folder creation/idempotent upload. The desktop runtime enables it only when credentials are supplied outside the renderer.
 
 ## Task Center UI
 
@@ -61,4 +61,8 @@ The cognitive-store run view shows fixed GPT workstations plus a per-WorkItem pi
 
 ## Current boundary
 
-V1 implements the module registry, durable per-item runtime, Artifact registry/router contract, cognitive-store module definition, Electron IPC/preload bridge, and module-host Task Center UI. Authenticated Google Drive byte transfer, Web Worker wakeup/session rotation, and concrete AIGate remote execution are integration adapters that connect to this runtime; they are not faked by the Task Center.
+V1 now implements the module registry, durable per-item runtime, Artifact registry/router, direct Google Drive REST adapter, automatic LOCAL→Drive input ingest, cognitive-store module definition, Electron IPC/preload bridge, and module-host Task Center UI. Web Worker wakeup/session rotation and concrete AIGate remote execution remain separate integration adapters; they are not faked by the Task Center.
+
+### Google Drive direct configuration
+
+Zero3 never exposes Drive tokens to the renderer. The desktop main process enables direct Drive when either `ZERO3_GOOGLE_DRIVE_ACCESS_TOKEN_FILE` points to an externally refreshed bearer token file, or the refresh-token triplet `ZERO3_GOOGLE_DRIVE_CLIENT_ID`, `ZERO3_GOOGLE_DRIVE_CLIENT_SECRET_FILE`, and `ZERO3_GOOGLE_DRIVE_REFRESH_TOKEN_FILE` is configured. Local scripts are then uploaded idempotently by Artifact id, relocated to a Drive locator, verified, and only then release that WorkItem's `script-rewrite` StageRun. Interactive OAuth account-connection UI is still a later product step.

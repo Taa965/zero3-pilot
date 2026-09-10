@@ -108,6 +108,14 @@ export interface WorkflowArtifactSeed {
   metadata?: Readonly<Record<string, unknown>>
 }
 
+export interface WorkflowArtifactRelocation {
+  storage: WorkflowArtifactLocator
+  sha256?: string | null
+  sizeBytes?: number | null
+  state?: WorkflowArtifactState
+  metadataPatch?: Readonly<Record<string, unknown>>
+}
+
 export interface WorkflowRunPlan {
   contract: typeof ZERO3_WORKFLOW_RUN
   workflowRunId: string

@@ -16,6 +16,7 @@ import {
   COGNITIVE_STORE_VISUAL_PROMPT,
   COGNITIVE_STORE_VISUAL_PROMPT_REVISION
 } from './prompts.ts'
+import { cognitiveStoreDriveLayout } from './handoff.ts'
 
 export interface CognitiveStoreScriptInput {
   itemId?: string
@@ -102,11 +103,23 @@ export const cognitiveStoreVideoModule: WorkflowModule = {
         ? { provider: 'GOOGLE_DRIVE', fileId: script.driveFileId.trim(), webUrl: script.driveWebUrl?.trim() || undefined, parentFolderId: driveRootFolderId || undefined }
         : { provider: 'LOCAL', path: script.localPath!.trim() }
       const alreadyInDrive = storage.provider === 'GOOGLE_DRIVE'
+      const driveLayout = cognitiveStoreDriveLayout(workflowRunId, itemId)
       return {
         itemId,
         title: script.title.trim(),
-        metadata: { sourceOrdinal: index + 1 },
-        initialArtifacts: [{ stageId: 'input-ingest', logicalName: '原始脚本', kind: 'script', storage, state: 'AVAILABLE' as const, metadata: { sourceName: script.title.trim() } }],
+        metadata: { sourceOrdinal: index + 1, driveLayout },
+        initialArtifacts: [{
+          stageId: 'input-ingest',
+          logicalName: '原始脚本',
+          kind: 'script',
+          storage,
+          state: 'AVAILABLE' as const,
+          metadata: {
+            sourceName: script.title.trim(),
+            drivePathSegments: ['Zero3', 'runs', workflowRunId, itemId, '00_input'],
+            driveLayout
+          }
+        }],
         completedStageIds: alreadyInDrive ? ['input-ingest'] : []
       }
     })

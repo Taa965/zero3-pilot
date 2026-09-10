@@ -1,4 +1,6 @@
-import type { WorkflowSnapshot, WorkflowStage } from '../../WorkflowAdapter'
+import { useState } from 'react'
+
+import { WorkflowAdapter, type WorkflowSnapshot, type WorkflowStage } from '../../WorkflowAdapter'
 
 const stageOrder = ['input-ingest', 'script-rewrite', 'visual-plan', 'image-production', 'local-ingest', 'cloud-render', 'pullback']
 const shortLabels: Record<string, string> = {
@@ -25,11 +27,22 @@ function statusClass(status: string): string {
 }
 
 export function CognitiveStoreVideoRunView({ snapshot }: { snapshot: WorkflowSnapshot }) {
+  const [ingestBusy, setIngestBusy] = useState(false)
+  const [ingestError, setIngestError] = useState<string | null>(null)
   const workers = snapshot.plan.workers.map(worker => {
     const stages = snapshot.stages.filter(stage => stage.workerDefinitionId === worker.workerDefinitionId)
     const active = stages.find(stage => ['RUNNING', 'CLAIMED', 'VERIFYING', 'FIX_REQUIRED'].includes(stage.status))
     return { worker, stages, active, completed: stages.filter(stage => stage.status === 'COMPLETED').length, ready: stages.filter(stage => ['READY', 'FIX_REQUIRED'].includes(stage.status)).length }
   })
+  const inputStages = snapshot.stages.filter(stage => stage.stageId === 'input-ingest')
+  const pendingInputCount = inputStages.filter(stage => ['READY', 'FIX_REQUIRED', 'BLOCKED', 'WAITING_HUMAN'].includes(stage.status)).length
+  const retryInputIngest = async () => {
+    setIngestBusy(true); setIngestError(null)
+    try { await WorkflowAdapter.ingestInputs(snapshot.run.workflowRunId) }
+    catch (reason) { setIngestError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setIngestBusy(false) }
+  }
+
   const stagesByItem = new Map<string, Map<string, WorkflowStage>>()
   for (const stage of snapshot.stages) {
     const map = stagesByItem.get(stage.itemId) ?? new Map<string, WorkflowStage>()
@@ -39,6 +52,7 @@ export function CognitiveStoreVideoRunView({ snapshot }: { snapshot: WorkflowSna
 
   return (
     <div className="h-full overflow-y-auto p-6">
+      {pendingInputCount > 0 && <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs"><div><div className="font-medium text-amber-500">有 {pendingInputCount} 个输入脚本尚未进入 Google Drive</div>{ingestError && <div className="mt-1 text-red-500">{ingestError}</div>}</div><button disabled={ingestBusy} onClick={() => { void retryInputIngest() }} className="rounded border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background) disabled:opacity-50">{ingestBusy ? '处理中…' : '重试输入上传'}</button></div>}
       <div className="grid grid-cols-4 gap-3">
         <Metric label="WorkItem" value={String(snapshot.items.length)} />
         <Metric label="总进度" value={`${Math.round(snapshot.run.progress * 100)}%`} />

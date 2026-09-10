@@ -80,6 +80,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Execution
 })
 
 contextBridge.exposeInMainWorld('zero3Workflow', {
+  runtimeCapabilities: () => ipcRenderer.invoke('zero3:workflow:runtime-capabilities'),
   listModules: () => ipcRenderer.invoke('zero3:workflow:list-modules'),
   validateCreateInput: (moduleId, input, moduleVersion) => ipcRenderer.invoke('zero3:workflow:validate-create-input', moduleId, input, moduleVersion),
   listRuns: () => ipcRenderer.invoke('zero3:workflow:list-runs'),
@@ -95,7 +96,8 @@ contextBridge.exposeInMainWorld('zero3Workflow', {
   gateFailed: (runId, stageRunId, reason) => ipcRenderer.invoke('zero3:workflow:gate-failed', runId, stageRunId, reason),
   blockStage: (runId, stageRunId, reason, waitingHuman) => ipcRenderer.invoke('zero3:workflow:block-stage', runId, stageRunId, reason, waitingHuman),
   resumeStage: (runId, stageRunId) => ipcRenderer.invoke('zero3:workflow:resume-stage', runId, stageRunId),
-  pickInputFiles: () => ipcRenderer.invoke('zero3:workflow:pick-input-files')
+  pickInputFiles: () => ipcRenderer.invoke('zero3:workflow:pick-input-files'),
+  ingestInputs: runId => ipcRenderer.invoke('zero3:workflow:ingest-inputs', runId)
 })
 
 contextBridge.exposeInMainWorld('hermesDesktop', {`
@@ -115,6 +117,7 @@ const globalBridgeProperty = String.raw`    zero3Execution: {
       issueReporterTicket: (assignmentId: string, request?: Record<string, unknown>) => Promise<{ ticket: string; endpointFile: string; client: { kind: 'node' | 'powershell'; command: string; argsPrefix: string[] } }>
     }
     zero3Workflow: {
+      runtimeCapabilities: () => Promise<unknown>
       listModules: () => Promise<unknown>
       validateCreateInput: (moduleId: string, input: unknown, moduleVersion?: string | null) => Promise<unknown>
       listRuns: () => Promise<unknown>
@@ -131,6 +134,7 @@ const globalBridgeProperty = String.raw`    zero3Execution: {
       blockStage: (runId: string, stageRunId: string, reason: string, waitingHuman?: boolean) => Promise<unknown>
       resumeStage: (runId: string, stageRunId: string) => Promise<unknown>
       pickInputFiles: () => Promise<{ path: string; name: string }[]>
+      ingestInputs: (runId: string) => Promise<unknown>
     }
     hermesDesktop: {`
 

@@ -1,3 +1,13 @@
+export type WorkflowRuntimeCapabilities = {
+  protocol: string
+  artifactProviders: {
+    GOOGLE_DRIVE?: { configured: boolean; mode?: string }
+    LOCAL?: { configured: boolean }
+    REMOTE_COMPUTE?: { configured: boolean }
+  }
+  automaticInputIngest: boolean
+}
+
 export type WorkflowRunSummary = {
   workflowRunId: string
   moduleId: string
@@ -79,6 +89,7 @@ export type WorkflowSnapshot = {
 }
 
 type WorkflowBridge = {
+  runtimeCapabilities: () => Promise<WorkflowRuntimeCapabilities>
   listModules: () => Promise<WorkflowModuleManifest[]>
   validateCreateInput: (moduleId: string, input: unknown, moduleVersion?: string | null) => Promise<{ valid: boolean; errors: string[]; warnings: string[] }>
   listRuns: () => Promise<WorkflowRunSummary[]>
@@ -86,6 +97,7 @@ type WorkflowBridge = {
   createRun: (request: { moduleId: string; moduleVersion?: string | null; input: unknown; start?: boolean }) => Promise<WorkflowSnapshot>
   resumeStage: (runId: string, stageRunId: string) => Promise<WorkflowSnapshot>
   pickInputFiles: () => Promise<{ path: string; name: string }[]>
+  ingestInputs: (runId: string) => Promise<WorkflowSnapshot>
 }
 
 function bridge(): WorkflowBridge | null {
@@ -93,6 +105,7 @@ function bridge(): WorkflowBridge | null {
 }
 
 export const WorkflowAdapter = {
+  runtimeCapabilities: async (): Promise<WorkflowRuntimeCapabilities | null> => bridge()?.runtimeCapabilities() ?? null,
   available: () => bridge() !== null,
   listModules: async () => bridge()?.listModules() ?? [],
   listRuns: async () => bridge()?.listRuns() ?? [],
@@ -120,5 +133,10 @@ export const WorkflowAdapter = {
     const runtime = bridge()
     if (!runtime) throw new Error('Zero3 Workflow Runtime 尚未加载')
     return runtime.pickInputFiles()
+  },
+  ingestInputs: async (runId: string) => {
+    const runtime = bridge()
+    if (!runtime) throw new Error('Zero3 Workflow Runtime 尚未加载')
+    return runtime.ingestInputs(runId)
   }
 }

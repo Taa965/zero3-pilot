@@ -52,6 +52,29 @@ export interface GoogleDriveArtifactPort {
   downloadFile(fileId: string, targetRoot: string): Promise<{ path: string }>
 }
 
+export interface GoogleDriveUploadRequest {
+  sourcePath: string
+  artifactId: string
+  fileName?: string
+  mimeType?: string
+  parentFolderId?: string | null
+  appProperties?: Readonly<Record<string, string>>
+}
+
+export interface GoogleDriveUploadResult {
+  fileId: string
+  webUrl?: string
+  sizeBytes: number
+  sha256: string
+  reused: boolean
+}
+
+export interface GoogleDriveWritableArtifactPort extends GoogleDriveArtifactPort {
+  ensureFolder(parentFolderId: string | null, name: string, appProperties?: Readonly<Record<string, string>>): Promise<{ fileId: string; webUrl?: string }>
+  ensureFolderPath(rootFolderId: string | null, segments: readonly string[], scopeKey: string): Promise<{ fileId: string; webUrl?: string }>
+  uploadFile(request: GoogleDriveUploadRequest): Promise<GoogleDriveUploadResult>
+}
+
 export class GoogleDriveArtifactProvider implements WorkflowArtifactProvider {
   readonly kind = 'GOOGLE_DRIVE' as const
   constructor(private readonly port: GoogleDriveArtifactPort) {}

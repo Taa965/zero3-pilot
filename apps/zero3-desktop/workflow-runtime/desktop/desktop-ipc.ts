@@ -26,6 +26,7 @@ function records(value: unknown, label: string): Record<string, unknown>[] {
 
 export function registerWorkflowDesktopIpc(port: WorkflowDesktopPort): () => void {
   const channels = Object.values(WORKFLOW_DESKTOP_CHANNELS)
+  ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.runtimeCapabilities, () => port.runtimeCapabilities())
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.listModules, () => port.listModules())
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.validateCreateInput, (_event, moduleId: unknown, input: unknown, moduleVersion: unknown) =>
     port.validateCreateInput(id(moduleId, 'moduleId'), input, moduleVersion == null ? null : text(moduleVersion, 'moduleVersion', 128)))
@@ -63,6 +64,8 @@ export function registerWorkflowDesktopIpc(port: WorkflowDesktopPort): () => voi
     port.blockStage(id(runId, 'workflowRunId'), id(stageRunId, 'stageRunId'), text(reason, 'reason'), waitingHuman === true))
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.resumeStage, (_event, runId: unknown, stageRunId: unknown) =>
     port.resumeStage(id(runId, 'workflowRunId'), id(stageRunId, 'stageRunId')))
+  ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.ingestInputs, (_event, runId: unknown) =>
+    port.ingestInputs(id(runId, 'workflowRunId')))
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.pickInputFiles, async () => {
     const result = await dialog.showOpenDialog({
       title: '选择工作流输入脚本',

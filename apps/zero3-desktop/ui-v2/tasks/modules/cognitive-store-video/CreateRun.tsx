@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { ProjectAdapter, type Zero3ProjectRecord } from '../../../adapters/ProjectAdapter'
-import { WorkflowAdapter } from '../../WorkflowAdapter'
+import { WorkflowAdapter, type WorkflowRuntimeCapabilities } from '../../WorkflowAdapter'
 import { setTaskSelection } from '../../task-selection'
 
 function stem(name: string): string { return name.replace(/\.[^.]+$/u, '') || name }
@@ -19,12 +19,17 @@ export function CognitiveStoreVideoCreateRun({ moduleVersion }: { moduleVersion:
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
+  const [capabilities, setCapabilities] = useState<WorkflowRuntimeCapabilities | null>(null)
 
   useEffect(() => {
     void ProjectAdapter.list().then(values => {
       setProjects(values)
       if (!projectId && values[0]) setProjectId(values[0].id)
     })
+  }, [])
+
+  useEffect(() => {
+    void WorkflowAdapter.runtimeCapabilities().then(setCapabilities).catch(() => setCapabilities(null))
   }, [])
 
   const driveScripts = useMemo(() => driveRows.split(/\r?\n/u).map(line => line.trim()).filter(Boolean).map((line, index) => {
@@ -45,6 +50,9 @@ export function CognitiveStoreVideoCreateRun({ moduleVersion }: { moduleVersion:
   async function create() {
     setBusy(true); setError(null); setWarnings([])
     try {
+      if (files.length > 0 && capabilities?.artifactProviders.GOOGLE_DRIVE?.configured !== true) {
+        throw new Error('当前 Zero3 Desktop 尚未配置 Google Drive 直连。请先配置 Drive OAuth，或改用已有 Drive fileId 输入。')
+      }
       const input = {
         projectId,
         title: title.trim() || undefined,
@@ -91,6 +99,9 @@ export function CognitiveStoreVideoCreateRun({ moduleVersion }: { moduleVersion:
         <label className="grid gap-1.5 text-sm"><span className="font-medium">Google Drive 工作流根目录 ID（可选）</span>
           <input value={driveFolderId} onChange={event => setDriveFolderId(event.target.value)} placeholder="后续 Artifact Provider 用于创建 run 子目录" className="rounded border border-(--ui-border) bg-background px-3 py-2" />
         </label>
+        <div className={`rounded-lg border p-3 text-xs ${capabilities?.artifactProviders.GOOGLE_DRIVE?.configured ? 'border-green-500/30 bg-green-500/5 text-green-500' : 'border-amber-500/30 bg-amber-500/5 text-amber-500'}`}>
+          Google Drive 直连：{capabilities?.artifactProviders.GOOGLE_DRIVE?.configured ? '已配置，可自动上传本地脚本并验证 fileId' : '未配置；本地脚本不会自动进入流水线，只能使用已有 Drive fileId'}
+        </div>
 
         <div className="grid grid-cols-3 gap-3 text-sm">
           {[['脚本 Worker', scriptWorkers, setScriptWorkers], ['视觉 Worker', visualWorkers, setVisualWorkers], ['图片 Worker', imageWorkers, setImageWorkers]].map(([label, value, setter]) => (

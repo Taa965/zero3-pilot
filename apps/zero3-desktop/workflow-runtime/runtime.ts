@@ -1,4 +1,4 @@
-import type { WorkflowArtifactSeed, WorkflowRunSnapshot, WorkflowValidationResult } from './contracts.ts'
+import type { WorkflowArtifactRelocation, WorkflowArtifactSeed, WorkflowRunSnapshot, WorkflowValidationResult } from './contracts.ts'
 import { Zero3WorkflowRegistry } from './registry.ts'
 import { Zero3WorkflowStore } from './store.ts'
 
@@ -45,5 +45,8 @@ export class Zero3WorkflowRuntime {
   resumeStage(runId: string, stageRunId: string) { return this.store.resumeStage(runId, stageRunId) }
   registerArtifact(runId: string, itemId: string, artifact: WorkflowArtifactSeed) {
     return this.store.registerArtifact(runId, itemId, artifact)
+  }
+  relocateArtifact(runId: string, artifactId: string, relocation: WorkflowArtifactRelocation) {
+    return this.store.relocateArtifact(runId, artifactId, relocation)
   }
 }

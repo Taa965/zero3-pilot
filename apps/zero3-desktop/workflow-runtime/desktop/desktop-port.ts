@@ -2,6 +2,7 @@ import type { WorkflowArtifactSeed } from '../contracts.ts'
 import type { CreateWorkflowRunRequest } from '../runtime.ts'
 
 export interface WorkflowDesktopPort {
+  runtimeCapabilities(): Promise<unknown> | unknown
   listModules(): Promise<unknown> | unknown
   validateCreateInput(moduleId: string, input: unknown, moduleVersion?: string | null): Promise<unknown> | unknown
   listRuns(): Promise<unknown> | unknown
@@ -17,9 +18,11 @@ export interface WorkflowDesktopPort {
   gateFailed(runId: string, stageRunId: string, reason: string): Promise<unknown> | unknown
   blockStage(runId: string, stageRunId: string, reason: string, waitingHuman?: boolean): Promise<unknown> | unknown
   resumeStage(runId: string, stageRunId: string): Promise<unknown> | unknown
+  ingestInputs(runId: string): Promise<unknown> | unknown
 }
 
 export const WORKFLOW_DESKTOP_CHANNELS = {
+  runtimeCapabilities: 'zero3:workflow:runtime-capabilities',
   listModules: 'zero3:workflow:list-modules',
   validateCreateInput: 'zero3:workflow:validate-create-input',
   listRuns: 'zero3:workflow:list-runs',
@@ -35,5 +38,6 @@ export const WORKFLOW_DESKTOP_CHANNELS = {
   gateFailed: 'zero3:workflow:gate-failed',
   blockStage: 'zero3:workflow:block-stage',
   resumeStage: 'zero3:workflow:resume-stage',
-  pickInputFiles: 'zero3:workflow:pick-input-files'
+  pickInputFiles: 'zero3:workflow:pick-input-files',
+  ingestInputs: 'zero3:workflow:ingest-inputs'
 } as const

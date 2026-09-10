@@ -2,6 +2,8 @@ import path from 'node:path'
 
 import type { WorkflowArtifactSeed } from '../contracts.ts'
 import { Zero3WorkflowRuntime, type CreateWorkflowRunRequest } from '../runtime.ts'
+import { createGoogleDriveArtifactPortFromEnv } from '../google-drive-rest.ts'
+import { Zero3WorkflowInputIngestService } from '../input-ingest.ts'
 import { Zero3WorkflowStore } from '../store.ts'
 import { createBuiltinWorkflowRegistry } from '../../workflow-modules/index.ts'
 import type { WorkflowDesktopPort } from './desktop-port.ts'
@@ -9,20 +11,41 @@ import type { WorkflowDesktopPort } from './desktop-port.ts'
 export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
   readonly store: Zero3WorkflowStore
   readonly runtime: Zero3WorkflowRuntime
+  readonly drivePort = createGoogleDriveArtifactPortFromEnv()
+  readonly inputIngest: Zero3WorkflowInputIngestService | null
 
   constructor(root: string) {
     const absolute = path.resolve(root)
     this.store = new Zero3WorkflowStore(path.join(absolute, 'workflow-runtime.sqlite3'))
     this.runtime = new Zero3WorkflowRuntime(this.store, createBuiltinWorkflowRegistry())
+    this.inputIngest = this.drivePort ? new Zero3WorkflowInputIngestService(this.runtime, this.drivePort) : null
   }
 
+  runtimeCapabilities() {
+    return {
+      protocol: 'zero3.pilot.workflow-runtime.v1',
+      artifactProviders: {
+        GOOGLE_DRIVE: { configured: Boolean(this.drivePort), mode: this.drivePort ? 'direct-oauth' : 'unconfigured' },
+        LOCAL: { configured: true },
+        REMOTE_COMPUTE: { configured: false }
+      },
+      automaticInputIngest: Boolean(this.inputIngest)
+    }
+  }
   listModules() { return this.runtime.listModules() }
   validateCreateInput(moduleId: string, input: unknown, moduleVersion?: string | null) {
     return this.runtime.validateCreateInput(moduleId, input, moduleVersion)
   }
   listRuns() { return this.runtime.listRuns() }
   getRun(runId: string) { return this.runtime.getRun(runId) }
-  createRun(request: CreateWorkflowRunRequest) { return this.runtime.createRun(request) }
+  async createRun(request: CreateWorkflowRunRequest) {
+    const created = this.runtime.createRun(request)
+    if (request.start !== false && this.inputIngest) {
+      await this.inputIngest.ingestRun(created.run.workflowRunId)
+      return this.runtime.getRun(created.run.workflowRunId)
+    }
+    return created
+  }
   startRun(runId: string) { return this.runtime.startRun(runId) }
   readyStages(runId: string, workerDefinitionId?: string | null) { return this.runtime.readyStages(runId, workerDefinitionId) }
   claimStage(runId: string, stageRunId: string, ownerId: string) { return this.runtime.claimStage(runId, stageRunId, ownerId) }
@@ -41,6 +64,11 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
     return this.runtime.blockStage(runId, stageRunId, reason, waitingHuman)
   }
   resumeStage(runId: string, stageRunId: string) { return this.runtime.resumeStage(runId, stageRunId) }
+  async ingestInputs(runId: string) {
+    if (!this.inputIngest) throw new Error('Google Drive direct provider is not configured in Zero3 Desktop')
+    await this.inputIngest.ingestRun(runId)
+    return this.runtime.getRun(runId)
+  }
 
   close(): void { this.store.close() }
 }
