@@ -1,0 +1,39 @@
+name: Cross-App Execution System V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/execution-runtime/**'
+      - 'apps/zero3-desktop/group-runtime/store/atomic-file.ts'
+      - 'docs/EXECUTION_SYSTEM_V1.md'
+      - '.github/workflows/execution-system-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/execution-runtime/**'
+      - 'apps/zero3-desktop/group-runtime/store/atomic-file.ts'
+      - '.github/workflows/execution-system-v1.yml'
+  workflow_dispatch: {}
+
+jobs:
+  execution-core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - name: Diff hygiene
+        shell: bash
+        run: git diff --check HEAD^...HEAD
+      - name: Repository architecture guard
+        run: node scripts/check-architecture.mjs
+      - name: Execution core behavior tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/execution-runtime/execution-runtime.test.ts
