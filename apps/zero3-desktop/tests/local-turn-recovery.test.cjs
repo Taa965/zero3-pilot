@@ -180,6 +180,7 @@ test('the actual conversation restores a failed prompt, resets its model, and se
     '@/components/ui/codicon': { Codicon: () => null },
     '../adapters/LocalSessionAdapter': { LocalSessionAdapter: store },
     '../adapters/ProjectLinkAdapter': { ProjectLinkAdapter: {} },
+    './ProviderUsageBadge': { ProviderUsageBadge: () => null },
     './provider-readiness': load('ui-v2/conversations/provider-readiness.ts', { window: dom.window }),
     './local-turn-failure': recovery
   })
@@ -230,6 +231,7 @@ test('Claude quota failure renders as allowance notice on saved and new turns, w
     '@/components/ui/codicon': { Codicon: () => null },
     '../adapters/LocalSessionAdapter': { LocalSessionAdapter: store },
     '../adapters/ProjectLinkAdapter': { ProjectLinkAdapter: {} },
+    './ProviderUsageBadge': { ProviderUsageBadge: () => null },
     './provider-readiness': { providerReadiness }, './local-turn-failure': recovery
   })
   function Harness() {

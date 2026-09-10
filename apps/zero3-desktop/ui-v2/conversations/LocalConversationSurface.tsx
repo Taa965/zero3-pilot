@@ -6,6 +6,7 @@ import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { ProjectLinkAdapter } from '../adapters/ProjectLinkAdapter'
 import type { LocalSessionProvider, LocalSessionRecord } from './session-types'
 import { providerReadiness } from './provider-readiness'
+import { ProviderUsageBadge } from './ProviderUsageBadge'
 import { localTurnFailureMessage, localTurnMessageText, localTurnQuotaMessage, localTurnRecovery } from './local-turn-failure'
 
 interface LocalConversationSurfaceProps {
@@ -231,10 +232,11 @@ export function LocalConversationSurface({ provider, session, project, onChanged
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-(--ui-border) px-4">
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-3 border-b border-(--ui-border) px-4 py-2">
         <div className="font-medium">{providerLabel(provider)}</div>
-        <div className="truncate text-xs text-(--ui-text-tertiary)">{subtitle}</div>
-        {project && <div className="ml-auto rounded bg-(--ui-control-background) px-2 py-1 text-xs text-(--ui-text-secondary)">{project.name}</div>}
+        <div className="min-w-0 flex-1 truncate text-xs text-(--ui-text-tertiary)">{subtitle}</div>
+        <ProviderUsageBadge provider={provider} profileId={session.zero3ProfileId} refreshToken={session.updatedAt} />
+        {project && <div className="max-w-48 truncate rounded bg-(--ui-control-background) px-2 py-1 text-xs text-(--ui-text-secondary)">{project.name}</div>}
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
