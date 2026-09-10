@@ -1,0 +1,55 @@
+name: Workflow Module Runtime V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/workflow-runtime/**'
+      - 'apps/zero3-desktop/workflow-modules/**'
+      - 'apps/zero3-desktop/ui-v2/tasks/**'
+      - 'apps/zero3-desktop/scripts/apply-execution-runtime-bridge.mjs'
+      - 'apps/zero3-desktop/tests/workflow-task-ui.test.cjs'
+      - 'scripts/check-workflow-module-runtime-v1.mjs'
+      - 'docs/WORKFLOW_MODULE_RUNTIME_V1.md'
+      - '.github/workflows/workflow-runtime-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/zero3-desktop/workflow-runtime/**'
+      - 'apps/zero3-desktop/workflow-modules/**'
+      - 'apps/zero3-desktop/ui-v2/tasks/**'
+      - 'apps/zero3-desktop/scripts/apply-execution-runtime-bridge.mjs'
+      - 'apps/zero3-desktop/tests/workflow-task-ui.test.cjs'
+      - 'scripts/check-workflow-module-runtime-v1.mjs'
+      - 'docs/WORKFLOW_MODULE_RUNTIME_V1.md'
+      - '.github/workflows/workflow-runtime-v1.yml'
+
+jobs:
+  workflow-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - name: Diff hygiene
+        shell: bash
+        run: git diff --check HEAD^...HEAD
+      - name: Workflow architecture guard
+        run: node scripts/check-workflow-module-runtime-v1.mjs
+      - name: Workflow runtime behavior
+        run: >-
+          node --experimental-transform-types --test
+          apps/zero3-desktop/workflow-runtime/workflow-runtime.test.ts
+          apps/zero3-desktop/workflow-runtime/artifact-router.test.ts
+          apps/zero3-desktop/workflow-modules/cognitive-store-video/cognitive-store-video.test.ts
+      - name: Task Center static UI contract
+        run: node --test apps/zero3-desktop/tests/workflow-task-ui.test.cjs
+      - name: Existing architecture guard
+        run: node scripts/check-architecture.mjs

@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url'
 import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const executionSource = path.join(repoRoot, 'apps', 'zero3-desktop', 'execution-runtime')
+const workflowSource = path.join(repoRoot, 'apps', 'zero3-desktop', 'workflow-runtime')
+const workflowModulesSource = path.join(repoRoot, 'apps', 'zero3-desktop', 'workflow-modules')
 const electronZero3 = path.join(hermesDesktopDir, 'electron', 'zero3')
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
@@ -53,6 +55,12 @@ app.on('before-quit', () => {
   disposeZero3ExecutionIpc()
   void zero3ExecutionRuntime.stop().catch(() => undefined)
 })
+const zero3WorkflowRuntime = createWorkflowDesktopRuntime(path.join(app.getPath('userData'), 'workflow'))
+const disposeZero3WorkflowIpc = registerWorkflowDesktopIpc(zero3WorkflowRuntime)
+app.on('before-quit', () => {
+  disposeZero3WorkflowIpc()
+  zero3WorkflowRuntime.close()
+})
 `
 
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Execution', {
@@ -68,6 +76,25 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Execution
   gatePassed: (taskId, stepId, evidence) => ipcRenderer.invoke('zero3:execution:gate-passed', taskId, stepId, evidence),
   gateFailed: (taskId, stepId, reason) => ipcRenderer.invoke('zero3:execution:gate-failed', taskId, stepId, reason),
   issueReporterTicket: (assignmentId, request) => ipcRenderer.invoke('zero3:execution:issue-reporter-ticket', assignmentId, request)
+})
+
+contextBridge.exposeInMainWorld('zero3Workflow', {
+  listModules: () => ipcRenderer.invoke('zero3:workflow:list-modules'),
+  validateCreateInput: (moduleId, input, moduleVersion) => ipcRenderer.invoke('zero3:workflow:validate-create-input', moduleId, input, moduleVersion),
+  listRuns: () => ipcRenderer.invoke('zero3:workflow:list-runs'),
+  getRun: runId => ipcRenderer.invoke('zero3:workflow:get-run', runId),
+  createRun: request => ipcRenderer.invoke('zero3:workflow:create-run', request),
+  startRun: runId => ipcRenderer.invoke('zero3:workflow:start-run', runId),
+  readyStages: (runId, workerDefinitionId) => ipcRenderer.invoke('zero3:workflow:ready-stages', runId, workerDefinitionId),
+  claimStage: (runId, stageRunId, ownerId) => ipcRenderer.invoke('zero3:workflow:claim-stage', runId, stageRunId, ownerId),
+  startStage: (runId, stageRunId, ownerId) => ipcRenderer.invoke('zero3:workflow:start-stage', runId, stageRunId, ownerId),
+  reportProgress: (runId, stageRunId, progress, activity) => ipcRenderer.invoke('zero3:workflow:report-progress', runId, stageRunId, progress, activity),
+  requestVerification: (runId, stageRunId, artifacts) => ipcRenderer.invoke('zero3:workflow:request-verification', runId, stageRunId, artifacts),
+  gatePassed: (runId, stageRunId, evidence) => ipcRenderer.invoke('zero3:workflow:gate-passed', runId, stageRunId, evidence),
+  gateFailed: (runId, stageRunId, reason) => ipcRenderer.invoke('zero3:workflow:gate-failed', runId, stageRunId, reason),
+  blockStage: (runId, stageRunId, reason, waitingHuman) => ipcRenderer.invoke('zero3:workflow:block-stage', runId, stageRunId, reason, waitingHuman),
+  resumeStage: (runId, stageRunId) => ipcRenderer.invoke('zero3:workflow:resume-stage', runId, stageRunId),
+  pickInputFiles: () => ipcRenderer.invoke('zero3:workflow:pick-input-files')
 })
 
 contextBridge.exposeInMainWorld('hermesDesktop', {`
@@ -86,15 +113,35 @@ const globalBridgeProperty = String.raw`    zero3Execution: {
       gateFailed: (taskId: string, stepId: string, reason: string) => Promise<unknown>
       issueReporterTicket: (assignmentId: string, request?: Record<string, unknown>) => Promise<{ ticket: string; endpointFile: string; client: { kind: 'node' | 'powershell'; command: string; argsPrefix: string[] } }>
     }
+    zero3Workflow: {
+      listModules: () => Promise<unknown>
+      validateCreateInput: (moduleId: string, input: unknown, moduleVersion?: string | null) => Promise<unknown>
+      listRuns: () => Promise<unknown>
+      getRun: (runId: string) => Promise<unknown>
+      createRun: (request: Record<string, unknown>) => Promise<unknown>
+      startRun: (runId: string) => Promise<unknown>
+      readyStages: (runId: string, workerDefinitionId?: string | null) => Promise<unknown>
+      claimStage: (runId: string, stageRunId: string, ownerId: string) => Promise<unknown>
+      startStage: (runId: string, stageRunId: string, ownerId?: string | null) => Promise<unknown>
+      reportProgress: (runId: string, stageRunId: string, progress: number, activity?: string | null) => Promise<unknown>
+      requestVerification: (runId: string, stageRunId: string, artifacts?: Record<string, unknown>[]) => Promise<unknown>
+      gatePassed: (runId: string, stageRunId: string, evidence?: Record<string, unknown>) => Promise<unknown>
+      gateFailed: (runId: string, stageRunId: string, reason: string) => Promise<unknown>
+      blockStage: (runId: string, stageRunId: string, reason: string, waitingHuman?: boolean) => Promise<unknown>
+      resumeStage: (runId: string, stageRunId: string) => Promise<unknown>
+      pickInputFiles: () => Promise<{ path: string; name: string }[]>
+    }
     hermesDesktop: {`
 
 export function applyExecutionRuntimeBridge() {
   copyProductionTree(executionSource, path.join(electronZero3, 'execution-runtime'))
+  copyProductionTree(workflowSource, path.join(electronZero3, 'workflow-runtime'))
+  copyProductionTree(workflowModulesSource, path.join(electronZero3, 'workflow-modules'))
   patchFile('electron/main.ts', [
     {
       label: 'Execution runtime import boundary',
       from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
-      to: "import { createExecutionDesktopRuntime, registerExecutionDesktopIpc } from './zero3/execution-runtime/desktop/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      to: "import { createExecutionDesktopRuntime, registerExecutionDesktopIpc } from './zero3/execution-runtime/desktop/index'\nimport { createWorkflowDesktopRuntime, registerWorkflowDesktopIpc } from './zero3/workflow-runtime/desktop/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
     },
     {
       label: 'Development Group composition boundary',
