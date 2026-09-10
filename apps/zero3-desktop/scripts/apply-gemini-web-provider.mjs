@@ -12,7 +12,7 @@ function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = read(file)
   for (const replacement of replacements) {
-    if (source.includes(replacement.to)) continue
+    if ((replacement.already && source.includes(replacement.already)) || source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) throw new Error(`Zero3 Gemini Web overlay drift in ${relativePath}: missing ${replacement.label}`)
     source = source.replace(replacement.from, replacement.to)
   }
@@ -109,12 +109,37 @@ const windowSurface = String.raw`    zero3GeminiWeb: {
 export function applyZero3GeminiWebProvider() {
   copySources()
   patchFile('electron/main.ts', [
-    { label: 'Gemini provider import', from: "import { Zero3GptWebProvider } from './zero3/gpt-web/index'", to: "import { Zero3GptWebProvider } from './zero3/gpt-web/index'\nimport { Zero3GeminiWebProvider } from './zero3/gemini-web/index'" },
-    { label: 'Gemini IPC handlers', from: 'const zero3CodexAppServer = createZero3CodexAppServer()', to: mainHandlers + '\nconst zero3CodexAppServer = createZero3CodexAppServer()' }
+    { label: 'Gemini provider import', already: "import { Zero3GeminiWebProvider } from './zero3/gemini-web/index'", from: "import { Zero3GptWebProvider } from './zero3/gpt-web/index'", to: "import { Zero3GptWebProvider } from './zero3/gpt-web/index'\nimport { Zero3GeminiWebProvider } from './zero3/gemini-web/index'" },
+    { label: 'Gemini IPC handlers', already: 'const zero3GeminiWeb = new Zero3GeminiWebProvider', from: 'const zero3CodexAppServer = createZero3CodexAppServer()', to: mainHandlers + '\nconst zero3CodexAppServer = createZero3CodexAppServer()' }
   ])
-  patchFile('electron/preload.ts', [{ label: 'Gemini preload surface', from: "contextBridge.exposeInMainWorld('zero3Control', {", to: preload }])
+  patchFile('electron/preload.ts', [{ label: 'Gemini preload surface', already: "contextBridge.exposeInMainWorld('zero3GeminiWeb'", from: "contextBridge.exposeInMainWorld('zero3Control', {", to: preload }])
   patchFile('src/global.d.ts', [
-    { label: 'Gemini renderer types', from: 'type Zero3ControlStatus = { configured: boolean; baseUrl: string | null }', to: typeDefinitions + '\ntype Zero3ControlStatus = { configured: boolean; baseUrl: string | null }' },
-    { label: 'Gemini renderer window surface', from: '    zero3Control: {', to: windowSurface }
+    { label: 'Gemini renderer types', already: 'type Zero3GeminiWebEvent =', from: 'type Zero3ControlStatus = { configured: boolean; baseUrl: string | null }', to: typeDefinitions + '\ntype Zero3ControlStatus = { configured: boolean; baseUrl: string | null }' },
+    { label: 'Gemini renderer window surface', already: '    zero3GeminiWeb: {', from: '    zero3Control: {', to: windowSurface }
   ])
+
+  patchFile('electron/main.ts', [{
+    label: 'Gemini Web execution status IPC handler',
+    from: "ipcMain.handle('zero3:gemini-web:hide', (_event, request: unknown) => zero3GeminiWeb.hide(zero3GeminiId(request)))",
+    to: "ipcMain.handle('zero3:gemini-web:execution-status', (_event, request: unknown) => zero3GeminiWeb.executionStatus(zero3GeminiId(request)))\n" +
+      "ipcMain.handle('zero3:gemini-web:hide', (_event, request: unknown) => zero3GeminiWeb.hide(zero3GeminiId(request)))"
+  }])
+  patchFile('electron/preload.ts', [{
+    label: 'Gemini Web execution status preload method',
+    from: "  hide: request => ipcRenderer.invoke('zero3:gemini-web:hide', request),",
+    to: "  executionStatus: request => ipcRenderer.invoke('zero3:gemini-web:execution-status', request),\n" +
+      "  hide: request => ipcRenderer.invoke('zero3:gemini-web:hide', request),"
+  }])
+  patchFile('src/global.d.ts', [{
+    label: 'Gemini Web execution event type',
+    from: "  | { kind: 'navigation'; entryId: string; previousEntryId: string | null; logicalSessionId: string; currentUrl: string; conversationUrl: string | null; pageTitle: string | null }",
+    to: "  | { kind: 'navigation'; entryId: string; previousEntryId: string | null; logicalSessionId: string; currentUrl: string; conversationUrl: string | null; pageTitle: string | null }\n" +
+      "  | { kind: 'execution'; entryId: string; executing: boolean }"
+  }])
+  patchFile('src/global.d.ts', [{
+    label: 'Gemini Web execution status renderer method',
+    from: "      show: (request: { id: string; bounds: Zero3GeminiWebBounds }) => Promise<Zero3GeminiWebWorkspaceEntry>\n      hide: (request: { id: string }) => Promise<{ hidden: boolean }>",
+    to: "      show: (request: { id: string; bounds: Zero3GeminiWebBounds }) => Promise<Zero3GeminiWebWorkspaceEntry>\n      executionStatus: (request: { id: string }) => Promise<{ executing: boolean }>\n      hide: (request: { id: string }) => Promise<{ hidden: boolean }>"
+  }])
+
 }

@@ -30,6 +30,7 @@ export function Zero3AppShell() {
   const [provider, setProvider] = useState<WorkspaceProvider>('gpt')
   const [webSessions, setWebSessions] = useState<WorkspaceSession[]>([])
   const [localSessions, setLocalSessions] = useState<LocalSessionRecord[]>([])
+  const [executingLocalSessionIds, setExecutingLocalSessionIds] = useState<Set<string>>(() => new Set())
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [projects, setProjects] = useState<Zero3ProjectRecord[]>([])
@@ -42,9 +43,12 @@ export function Zero3AppShell() {
   const [binding, setBinding] = useState<{ project: Zero3ProjectRecord; thenCreate: boolean } | null>(null)
 
   const sessions = useMemo<WorkspaceSession[]>(() => {
-    const local = localSessions.map(LocalSessionAdapter.toWorkspaceSession)
+    const local = localSessions.map(record => ({
+      ...LocalSessionAdapter.toWorkspaceSession(record),
+      executing: executingLocalSessionIds.has(record.id)
+    }))
     return [...webSessions, ...local]
-  }, [webSessions, localSessions])
+  }, [webSessions, localSessions, executingLocalSessionIds])
   const activeSession = useMemo(
     () => sessions.find(session => session.id === activeSessionId) ?? null,
     [sessions, activeSessionId]
@@ -112,6 +116,17 @@ export function Zero3AppShell() {
     } catch {}
   }, [activeProjectId])
 
+  const setLocalSessionExecution = useCallback((sessionId: string, executing: boolean) => {
+    setExecutingLocalSessionIds(current => {
+      const alreadyMatches = current.has(sessionId) === executing
+      if (alreadyMatches) return current
+      const next = new Set(current)
+      if (executing) next.add(sessionId)
+      else next.delete(sessionId)
+      return next
+    })
+  }, [])
+
   const selectSession = useCallback((session: WorkspaceSession) => {
     setActiveSessionId(session.id)
     setFocusedProjectId(session.projectId)
@@ -126,6 +141,7 @@ export function Zero3AppShell() {
           if (record?.runtimeId) await window.zero3Antigravity.stop({ logicalSessionId: record.runtimeId }).catch(() => {})
         }
         LocalSessionAdapter.remove(session.id)
+        setLocalSessionExecution(session.id, false)
         refreshLocalSessions()
       } else {
         await WebWorkspaceAdapter.remove(session)
@@ -136,7 +152,7 @@ export function Zero3AppShell() {
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
-  }, [refreshLocalSessions, refreshWebSessions])
+  }, [refreshLocalSessions, refreshWebSessions, setLocalSessionExecution])
 
   const archiveSession = useCallback(async (session: WorkspaceSession, archived: boolean) => {
     try {
@@ -341,6 +357,7 @@ export function Zero3AppShell() {
           activeProject={activeProject}
           activeProjectSessionCount={activeProjectSessionCount}
           onLocalSessionChanged={refreshLocalSessions}
+          onLocalSessionExecutionChange={setLocalSessionExecution}
           onBindChatGptProject={rebindProject}
           onUnbindChatGptProject={project => void unbindProject(project)}
           onOpenPowerShell={() => setInspectorOpen(true)}

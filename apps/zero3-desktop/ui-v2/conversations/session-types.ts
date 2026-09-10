@@ -9,6 +9,7 @@ export type WorkspaceSession = {
   projectId: string | null
   source: 'web' | 'local'
   archived?: boolean
+  executing?: boolean
 }
 
 export type LocalSessionProvider = Exclude<WorkspaceProvider, 'gpt' | 'gemini'>

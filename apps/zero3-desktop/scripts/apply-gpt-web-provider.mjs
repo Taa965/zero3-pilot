@@ -320,6 +320,7 @@ export function applyZero3GptWebProvider() {
     },
     {
       label: 'GPT Web warm/snapshot renderer methods',
+      already: '      snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>',
       from: "      show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>\n" +
         "      hide: (request: { id: string }) => Promise<{ hidden: boolean }>",
       to:
@@ -353,6 +354,30 @@ export function applyZero3GptWebProvider() {
     label: 'GPT Web rename renderer method',
     from: '      listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>',
     to: '      listRemoteProjects: () => Promise<Zero3ChatGptRemoteProject[]>\n      rename: (request: { id: string; title: string }) => Promise<Zero3WorkspaceEntry>'
+  }])
+
+  patchFile('electron/main.ts', [{
+    label: 'GPT Web execution status IPC handler',
+    from: "ipcMain.handle('zero3:gpt-web:hide', (_event, request: unknown) => zero3GptWeb.hide(zero3GptWebId(request)))",
+    to: "ipcMain.handle('zero3:gpt-web:execution-status', (_event, request: unknown) => zero3GptWeb.executionStatus(zero3GptWebId(request)))\n" +
+      "ipcMain.handle('zero3:gpt-web:hide', (_event, request: unknown) => zero3GptWeb.hide(zero3GptWebId(request)))"
+  }])
+
+  patchFile('electron/preload.ts', [{
+    label: 'GPT Web execution status preload method',
+    from: "  hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),",
+    to: "  executionStatus: request => ipcRenderer.invoke('zero3:gpt-web:execution-status', request),\n" +
+      "  hide: request => ipcRenderer.invoke('zero3:gpt-web:hide', request),"
+  }])
+  patchFile('src/global.d.ts', [{
+    label: 'GPT Web execution event type',
+    from: "      pageTitle: string | null\n    }\n\ntype Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry",
+    to: "      pageTitle: string | null\n    }\n  | { kind: 'execution'; entryId: string; executing: boolean }\n\ntype Zero3WorkspaceEntry = Zero3GptWebWorkspaceEntry | Zero3GeminiWebWorkspaceEntry"
+  }])
+  patchFile('src/global.d.ts', [{
+    label: 'GPT Web execution status renderer method',
+    from: "      snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>\n      hide: (request: { id: string }) => Promise<{ hidden: boolean }>",
+    to: "      snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>\n      executionStatus: (request: { id: string }) => Promise<{ executing: boolean }>\n      hide: (request: { id: string }) => Promise<{ hidden: boolean }>"
   }])
 
   applyZero3GptWebUi()

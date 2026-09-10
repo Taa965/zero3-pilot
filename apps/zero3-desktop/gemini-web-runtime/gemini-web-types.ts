@@ -6,6 +6,7 @@ export type Zero3GeminiWebBounds = { x: number; y: number; width: number; height
 export type Zero3GeminiWebState = 'created' | 'loading' | 'ready' | 'shown' | 'hidden' | 'suspended' | 'error'
 
 export type Zero3GeminiWebEvent =
+  | { kind: 'execution'; entryId: string; executing: boolean }
   | { kind: 'state'; entryId: string; state: Zero3GeminiWebState; detail?: string }
   | {
       kind: 'navigation'

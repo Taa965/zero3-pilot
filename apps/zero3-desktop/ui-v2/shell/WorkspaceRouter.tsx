@@ -20,6 +20,7 @@ interface WorkspaceRouterProps {
   activeProject: Zero3ProjectRecord | null
   activeProjectSessionCount: number
   onLocalSessionChanged: () => void
+  onLocalSessionExecutionChange: (sessionId: string, executing: boolean) => void
   onBindChatGptProject: (project: Zero3ProjectRecord) => void
   onUnbindChatGptProject: (project: Zero3ProjectRecord) => void
   onOpenPowerShell: () => void
@@ -45,6 +46,7 @@ export function WorkspaceRouter({
   activeProject,
   activeProjectSessionCount,
   onLocalSessionChanged,
+  onLocalSessionExecutionChange,
   onBindChatGptProject,
   onUnbindChatGptProject,
   onOpenPowerShell,
@@ -98,6 +100,7 @@ export function WorkspaceRouter({
             session={localSession}
             project={activeProject}
             onChanged={onLocalSessionChanged}
+            onExecutionChange={onLocalSessionExecutionChange}
           />
         ) : activeModule === 'tasks' ? (
           <TaskWorkspace />

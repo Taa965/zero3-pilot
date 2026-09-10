@@ -14,6 +14,7 @@ interface LocalConversationSurfaceProps {
   session: LocalSessionRecord | null
   project: Zero3ProjectRecord | null
   onChanged: () => void
+  onExecutionChange: (sessionId: string, executing: boolean) => void
 }
 
 function providerLabel(provider: LocalSessionProvider) {
@@ -107,7 +108,7 @@ async function runZero3Turn(session: LocalSessionRecord, project: Zero3ProjectRe
   return result.text
 }
 
-export function LocalConversationSurface({ provider, session, project, onChanged }: LocalConversationSurfaceProps) {
+export function LocalConversationSurface({ provider, session, project, onChanged, onExecutionChange }: LocalConversationSurfaceProps) {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -184,6 +185,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
     const prompt = input.trim()
     setInput('')
     setBusy(true)
+    onExecutionChange(session.id, true)
     setError(null)
     setRecoveryNotice(null)
     const codexRequestId = provider === 'codex' ? crypto.randomUUID() : null
@@ -216,6 +218,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
       if (codexRequestId && activeCodexRequestId.current === codexRequestId) {
         activeCodexRequestId.current = null
       }
+      onExecutionChange(session.id, false)
       setBusy(false)
     }
   }

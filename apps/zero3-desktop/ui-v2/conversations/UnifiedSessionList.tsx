@@ -149,6 +149,7 @@ export function UnifiedSessionList({
   const renderSession = (session: WorkspaceSession) => {
     const active = session.id === activeId
     const archived = session.archived === true
+    const executing = session.executing === true
     const mark = PROVIDER_MARKS[session.provider]
     return (
       <button
@@ -162,6 +163,7 @@ export function UnifiedSessionList({
         onFocus={() => queuePrewarm(session)}
         onBlur={() => cancelPrewarm(session.id)}
         onContextMenu={event => openMenu(session, event)}
+        data-session-executing={executing ? '' : undefined}
         className={cn(
           'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
           active ? 'border-(--ui-border) bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'
@@ -169,7 +171,18 @@ export function UnifiedSessionList({
       >
         <div className="flex w-full items-center justify-between">
           <div className="flex min-w-0 items-center gap-1.5 font-medium">
-            <span className={cn('text-xs', mark.color)}>{mark.symbol}</span>
+            <span
+              className="relative grid size-4 shrink-0 place-items-center"
+              title={executing ? '正在执行' : undefined}
+            >
+              {executing && (
+                <>
+                  <span className="pointer-events-none absolute inset-[-2px] rounded-full border border-emerald-500" />
+                  <span className="pointer-events-none absolute inset-[-2px] rounded-full border border-emerald-400/80 motion-safe:animate-ping" />
+                </>
+              )}
+              <span className={cn('relative z-10 text-xs', mark.color)}>{mark.symbol}</span>
+            </span>
             <span className="truncate">{session.title}</span>
             {archived && <Codicon name="archive" className="size-3.5 shrink-0 text-(--ui-text-tertiary)" />}
           </div>

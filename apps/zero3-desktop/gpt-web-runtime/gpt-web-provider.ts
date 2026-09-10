@@ -57,6 +57,7 @@ const MAX_ENTRY_ID = 256
 const MAX_BOUND = 16_384
 const CHATGPT_HOST = 'chatgpt.com'
 const MAINTENANCE_INTERVAL_MS = 15_000
+const EXECUTION_PROBE_INTERVAL_MS = 800
 const RENDER_WAIT_TIMEOUT_MS = 8_000
 const SNAPSHOT_MAX_COUNT = 30
 const SNAPSHOT_MAX_WIDTH = 1_280
@@ -65,6 +66,24 @@ const CHATGPT_LOGIN_STATUS_SCRIPT = String.raw`fetch('/api/auth/session', { cred
   .then(response => response.ok ? response.json() : null)
   .then(session => Boolean(session && typeof session.accessToken === 'string' && session.accessToken))
   .catch(() => false)`
+const CHATGPT_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
+  const selectors = [
+    '[data-testid="stop-button"]',
+    'button[aria-label="Stop"]',
+    'button[aria-label="Stop streaming"]',
+    'button[aria-label="Stop generating"]',
+    'button[aria-label="停止"]',
+    'button[aria-label="停止生成"]',
+    'button[aria-label="停止响应"]',
+    'button[aria-label="停止回答"]'
+  ]
+  const visible = element => {
+    if (!(element instanceof HTMLElement)) return false
+    const style = getComputedStyle(element)
+    return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0
+  }
+  return selectors.some(selector => Array.from(document.querySelectorAll(selector)).some(visible))
+})()`
 
 // Zero3 owns the outer navigation and toolbar. Keep ChatGPT's own conversation
 // rail suppressed by default, and collapse its page header so the same controls
@@ -245,12 +264,15 @@ function windowZoomFactor(window: BrowserWindow | null): number {
 export class Zero3GptWebProvider {
   private readonly live = new Map<string, LiveGptWebView>()
   private readonly snapshots = new Map<string, SnapshotRecord>()
+  private readonly executionStates = new Map<string, boolean>()
   private profileSession: Session | null = null
   private loginWindow: BrowserWindow | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
   private catalogTail: Promise<unknown> = Promise.resolve()
   private conversationMutationTail: Promise<unknown> = Promise.resolve()
   private maintenanceTimer: NodeJS.Timeout | null = null
+  private executionProbeTimer: NodeJS.Timeout | null = null
+  private executionProbeInFlight = false
 
   constructor(
     private readonly entries: Zero3WorkspaceEntryStore,
@@ -259,6 +281,8 @@ export class Zero3GptWebProvider {
   ) {
     this.maintenanceTimer = setInterval(() => this.maintainHotPool(), MAINTENANCE_INTERVAL_MS)
     this.maintenanceTimer.unref?.()
+    this.executionProbeTimer = setInterval(() => void this.probeExecutionStates(), EXECUTION_PROBE_INTERVAL_MS)
+    this.executionProbeTimer.unref?.()
   }
 
   async create(projectId?: string | null): Promise<Zero3GptWebWorkspaceEntry> {
@@ -543,6 +567,15 @@ export class Zero3GptWebProvider {
     }
   }
 
+  async executionStatus(idValue: unknown): Promise<{ executing: boolean }> {
+    const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
+    const live = this.live.get(id)
+    if (!live || live.view.webContents.isDestroyed()) return { executing: false }
+    const detected = await this.readExecutionState(live)
+    if (detected !== null) this.publishExecutionState(live.entryId, detected)
+    return { executing: detected ?? this.executionStates.get(live.entryId) === true }
+  }
+
   snapshot(idValue: unknown): Zero3GptWebSnapshotResult {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     const record = this.snapshots.get(id)
@@ -731,8 +764,48 @@ export class Zero3GptWebProvider {
       clearInterval(this.maintenanceTimer)
       this.maintenanceTimer = null
     }
+    if (this.executionProbeTimer) {
+      clearInterval(this.executionProbeTimer)
+      this.executionProbeTimer = null
+    }
     for (const id of [...this.live.keys()]) this.destroyLive(id, 'suspended')
     this.snapshots.clear()
+  }
+
+  private async readExecutionState(live: LiveGptWebView): Promise<boolean | null> {
+    const contents = live.view.webContents
+    if (contents.isDestroyed()) return false
+    try {
+      return (await contents.executeJavaScript(CHATGPT_EXECUTION_STATUS_SCRIPT, false)) === true
+    } catch {
+      return null
+    }
+  }
+
+  private publishExecutionState(entryId: string, executing: boolean): void {
+    const previous = this.executionStates.get(entryId)
+    this.executionStates.set(entryId, executing)
+    if (previous === executing || (previous === undefined && !executing)) return
+    this.emitEvent({ kind: 'execution', entryId, executing })
+  }
+
+  private clearExecutionState(entryId: string): void {
+    const previous = this.executionStates.get(entryId)
+    this.executionStates.delete(entryId)
+    if (previous === true) this.emitEvent({ kind: 'execution', entryId, executing: false })
+  }
+
+  private async probeExecutionStates(): Promise<void> {
+    if (this.executionProbeInFlight) return
+    this.executionProbeInFlight = true
+    try {
+      await Promise.all([...this.live.values()].map(async live => {
+        const detected = await this.readExecutionState(live)
+        if (detected !== null) this.publishExecutionState(live.entryId, detected)
+      }))
+    } finally {
+      this.executionProbeInFlight = false
+    }
   }
 
   private getProfileSession(): Session {
@@ -911,6 +984,7 @@ export class Zero3GptWebProvider {
     contents.on('did-navigate-in-page', observe)
     contents.on('page-title-updated', () => observe())
     contents.on('did-start-loading', () => {
+      this.publishExecutionState(live.entryId, false)
       live.loadState = 'warming'
       this.emitEvent({ kind: 'state', entryId: live.entryId, state: 'warming' })
     })
@@ -937,6 +1011,7 @@ export class Zero3GptWebProvider {
       })
     })
     contents.on('render-process-gone', (_event, details) => {
+      this.clearExecutionState(live.entryId)
       live.loadState = 'error'
       this.emitEvent({
         kind: 'state',
@@ -949,6 +1024,7 @@ export class Zero3GptWebProvider {
       if (!contents.isDestroyed()) contents.close({ waitForBeforeUnload: false })
     })
     contents.on('destroyed', () => {
+      this.clearExecutionState(live.entryId)
       const current = this.live.get(live.entryId)
       if (current?.view === live.view) this.live.delete(live.entryId)
     })
@@ -975,6 +1051,9 @@ export class Zero3GptWebProvider {
           live.lastUsedAt = Date.now()
           this.live.set(live.entryId, live)
           this.bump(live.entryId)
+          const sourceExecution = this.executionStates.get(sourceEntryId)
+          this.executionStates.delete(sourceEntryId)
+          if (sourceExecution !== undefined) this.executionStates.set(live.entryId, sourceExecution)
 
           const sourceSnapshot = this.snapshots.get(sourceEntryId)
           if (sourceSnapshot) {
@@ -1143,6 +1222,7 @@ export class Zero3GptWebProvider {
     const live = this.live.get(entryId)
     if (!live) return
     this.live.delete(entryId)
+    this.clearExecutionState(entryId)
     this.detachFromParent(live)
     if (!live.view.webContents.isDestroyed()) live.view.webContents.close({ waitForBeforeUnload: false })
     this.emitEvent({ kind: 'state', entryId, state })

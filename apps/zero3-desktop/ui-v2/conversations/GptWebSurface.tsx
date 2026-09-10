@@ -79,6 +79,7 @@ export function GptWebSurface({ entryId }: GptWebSurfaceProps) {
         setPageTitle(event.pageTitle)
         return
       }
+      if (event.kind !== 'state') return
       const next = normalizeState(event.state)
       if (next) setStatus(next)
       if (next === 'visible') {

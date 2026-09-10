@@ -31,6 +31,7 @@ export type Zero3GptWebState =
   | 'error'
 
 export type Zero3GptWebEvent =
+  | { kind: 'execution'; entryId: string; executing: boolean }
   | {
       kind: 'state'
       entryId: string

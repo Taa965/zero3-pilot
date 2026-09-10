@@ -39,7 +39,7 @@ function relativeTime(iso: string): string {
   return then.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
 }
 
-function toSession(entry: WorkspaceEntry): WorkspaceSession {
+function toSession(entry: WorkspaceEntry, executing = false): WorkspaceSession {
   return {
     id: entry.id,
     provider: entry.kind === 'gpt_web' ? 'gpt' : 'gemini',
@@ -48,8 +48,16 @@ function toSession(entry: WorkspaceEntry): WorkspaceSession {
     updatedAt: relativeTime(entry.lastActiveAt),
     projectId: entry.projectId,
     source: 'web',
-    archived: entry.archived === true
+    archived: entry.archived === true,
+    executing
   }
+}
+
+async function executionState(entry: WorkspaceEntry): Promise<boolean> {
+  const bridge = entry.kind === 'gpt_web' ? window.zero3GptWeb : window.zero3GeminiWeb
+  const probe = bridge.executionStatus
+  if (typeof probe !== 'function') return false
+  return probe({ id: entry.id }).then(result => result.executing === true).catch(() => false)
 }
 
 export const WebWorkspaceAdapter = {
@@ -58,10 +66,9 @@ export const WebWorkspaceAdapter = {
   async list(): Promise<WorkspaceSession[]> {
     if (!bridgeAvailable()) return []
     const entries = await window.zero3Workspace.list()
-    return entries
-      .slice()
-      .sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt))
-      .map(toSession)
+    const sorted = entries.slice().sort((left, right) => right.lastActiveAt.localeCompare(left.lastActiveAt))
+    const execution = await Promise.all(sorted.map(executionState))
+    return sorted.map((entry, index) => toSession(entry, execution[index] === true))
   },
 
   async createGptWeb(projectId: string | null = null): Promise<string> {
@@ -111,10 +118,10 @@ export const WebWorkspaceAdapter = {
   subscribe(onChange: () => void): () => void {
     if (!bridgeAvailable()) return () => {}
     const gpt = window.zero3GptWeb.onEvent(event => {
-      if (event.kind === 'navigation') onChange()
+      if (event.kind === 'navigation' || event.kind === 'execution') onChange()
     })
     const gemini = window.zero3GeminiWeb.onEvent(event => {
-      if (event.kind === 'navigation') onChange()
+      if (event.kind === 'navigation' || event.kind === 'execution') onChange()
     })
     return () => {
       gpt()

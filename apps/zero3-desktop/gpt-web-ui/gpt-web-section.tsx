@@ -118,7 +118,7 @@ export function Zero3GptWebSection({ onNewCodexSession }: Zero3GptWebSectionProp
       if (event.kind === 'navigation') {
         if (event.previousEntryId) setActiveEntryId(current => current === event.previousEntryId ? event.entryId : current)
         void refresh()
-      } else if (event.state === 'created' || event.state === 'suspended') void refresh()
+      } else if (event.kind === 'state' && (event.state === 'created' || event.state === 'suspended')) void refresh()
       if (event.kind === 'state' && event.state === 'error') setError(event.detail || 'GPT 网页会话发生错误。')
     })
   }, [available, refresh])

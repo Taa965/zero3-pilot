@@ -21,7 +21,28 @@ const MAX_TEXT = 512
 const MAX_ID = 256
 const MAX_URL = 8192
 const MAX_BOUND = 16384
+const EXECUTION_PROBE_INTERVAL_MS = 800
 const GENERIC_TITLES = new Set(['Gemini', 'Google Gemini'])
+const GEMINI_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
+  const selectors = [
+    '[data-test-id="stop-button"]',
+    '[data-testid="stop-button"]',
+    'button.stop-button',
+    'button[aria-label="Stop"]',
+    'button[aria-label="Stop response"]',
+    'button[aria-label="Stop generating"]',
+    'button[aria-label="停止"]',
+    'button[aria-label="停止回答"]',
+    'button[aria-label="停止响应"]',
+    'button[aria-label="停止生成"]'
+  ]
+  const visible = element => {
+    if (!(element instanceof HTMLElement)) return false
+    const style = getComputedStyle(element)
+    return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0
+  }
+  return selectors.some(selector => Array.from(document.querySelectorAll(selector)).some(visible))
+})()`
 
 function text(value: unknown, label: string, max: number): string {
   const normalized = typeof value === 'string' ? value.trim() : ''
@@ -107,10 +128,16 @@ function dipBounds(value: Zero3GeminiWebBounds, window: BrowserWindow | null): Z
 
 export class Zero3GeminiWebProvider {
   private readonly live = new Map<string, LiveView>()
+  private readonly executionStates = new Map<string, boolean>()
   private profile: Session | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
+  private executionProbeTimer: NodeJS.Timeout | null = null
+  private executionProbeInFlight = false
 
-  constructor(private readonly entries: Zero3WorkspaceEntryStore, private readonly emit: EventSink) {}
+  constructor(private readonly entries: Zero3WorkspaceEntryStore, private readonly emit: EventSink) {
+    this.executionProbeTimer = setInterval(() => void this.probeExecutionStates(), EXECUTION_PROBE_INTERVAL_MS)
+    this.executionProbeTimer.unref?.()
+  }
 
   async create(projectId?: string | null): Promise<Zero3GeminiWebWorkspaceEntry> {
     const entry = await this.entries.createGeminiWeb({ projectId: projectId ?? null })
@@ -133,6 +160,15 @@ export class Zero3GeminiWebProvider {
     this.bump(live.entryId)
     this.emit({ kind: 'state', entryId: live.entryId, state: 'shown' })
     return (await this.entries.get(live.entryId)) as Zero3GeminiWebWorkspaceEntry
+  }
+
+  async executionStatus(idValue: unknown): Promise<{ executing: boolean }> {
+    const id = text(idValue, 'Gemini entry id', MAX_ID)
+    const live = this.live.get(id)
+    if (!live || live.view.webContents.isDestroyed()) return { executing: false }
+    const detected = await this.readExecutionState(live)
+    if (detected !== null) this.publishExecutionState(live.entryId, detected)
+    return { executing: detected ?? this.executionStates.get(live.entryId) === true }
   }
 
   async hide(idValue: unknown) {
@@ -182,7 +218,49 @@ export class Zero3GeminiWebProvider {
     return { opened: true }
   }
 
-  stop() { for (const id of [...this.live.keys()]) this.destroy(id) }
+  stop() {
+    if (this.executionProbeTimer) {
+      clearInterval(this.executionProbeTimer)
+      this.executionProbeTimer = null
+    }
+    for (const id of [...this.live.keys()]) this.destroy(id)
+  }
+
+  private async readExecutionState(live: LiveView): Promise<boolean | null> {
+    const contents = live.view.webContents
+    if (contents.isDestroyed()) return false
+    try {
+      return (await contents.executeJavaScript(GEMINI_EXECUTION_STATUS_SCRIPT, false)) === true
+    } catch {
+      return null
+    }
+  }
+
+  private publishExecutionState(entryId: string, executing: boolean) {
+    const previous = this.executionStates.get(entryId)
+    this.executionStates.set(entryId, executing)
+    if (previous === executing || (previous === undefined && !executing)) return
+    this.emit({ kind: 'execution', entryId, executing })
+  }
+
+  private clearExecutionState(entryId: string) {
+    const previous = this.executionStates.get(entryId)
+    this.executionStates.delete(entryId)
+    if (previous === true) this.emit({ kind: 'execution', entryId, executing: false })
+  }
+
+  private async probeExecutionStates() {
+    if (this.executionProbeInFlight) return
+    this.executionProbeInFlight = true
+    try {
+      await Promise.all([...this.live.values()].map(async live => {
+        const detected = await this.readExecutionState(live)
+        if (detected !== null) this.publishExecutionState(live.entryId, detected)
+      }))
+    } finally {
+      this.executionProbeInFlight = false
+    }
+  }
 
   private session(): Session {
     if (this.profile) return this.profile
@@ -269,9 +347,13 @@ export class Zero3GeminiWebProvider {
     contents.on('did-navigate', observe)
     contents.on('did-navigate-in-page', observe)
     contents.on('page-title-updated', observe)
-    contents.on('did-start-loading', () => this.emit({ kind: 'state', entryId: live.entryId, state: 'loading' }))
+    contents.on('did-start-loading', () => {
+      this.publishExecutionState(live.entryId, false)
+      this.emit({ kind: 'state', entryId: live.entryId, state: 'loading' })
+    })
     contents.on('did-stop-loading', () => { observe(); this.emit({ kind: 'state', entryId: live.entryId, state: 'ready' }) })
     contents.on('render-process-gone', (_event, details) => {
+      this.clearExecutionState(live.entryId)
       this.emit({ kind: 'state', entryId: live.entryId, state: 'error', detail: `Gemini renderer exited: ${details.reason}` })
       this.detach(live)
       this.live.delete(live.entryId)
@@ -294,6 +376,9 @@ export class Zero3GeminiWebProvider {
         this.live.delete(sourceId)
         live.entryId = resolved.entry.id
         this.live.set(live.entryId, live)
+        const sourceExecution = this.executionStates.get(sourceId)
+        this.executionStates.delete(sourceId)
+        if (sourceExecution !== undefined) this.executionStates.set(live.entryId, sourceExecution)
       }
       this.emit({ kind: 'navigation', entryId: resolved.entry.id, previousEntryId: resolved.previousEntryId,
         logicalSessionId: resolved.entry.logicalSessionId, currentUrl: resolved.entry.currentUrl,
@@ -321,6 +406,7 @@ export class Zero3GeminiWebProvider {
     const live = this.live.get(id)
     if (!live) return
     this.live.delete(id)
+    this.clearExecutionState(id)
     this.detach(live)
     if (!live.view.webContents.isDestroyed()) live.view.webContents.close({ waitForBeforeUnload: false })
     this.emit({ kind: 'state', entryId: id, state: 'suspended' })
