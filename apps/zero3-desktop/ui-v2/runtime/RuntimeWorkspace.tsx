@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { WeixinRobotWorkspace } from './WeixinRobotWorkspace'
+import { QqRobotWorkspace } from './QqRobotWorkspace'
 import type { RuntimeTarget } from './runtime-types'
 
 type ShellState = {
@@ -148,5 +149,7 @@ function KernelRuntimeWorkspace() {
 }
 
 export function RuntimeWorkspace({ target }: { target: RuntimeTarget }) {
-  return target === 'weixin' ? <WeixinRobotWorkspace /> : <KernelRuntimeWorkspace />
+  if (target === 'weixin') return <WeixinRobotWorkspace />
+  if (target === 'qq') return <QqRobotWorkspace />
+  return <KernelRuntimeWorkspace />
 }

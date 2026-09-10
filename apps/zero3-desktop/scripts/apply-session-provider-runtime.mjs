@@ -601,7 +601,7 @@ async function zero3ApiAgentWaitForTurn(threadId: string, turnId: string) {
   }
   throw new Error('Codex Agent Kernel turn 超时')
 }
-async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: unknown) {
+async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: unknown, robotSafe = false) {
   const request = zero3SessionRecord(requestValue)
   const text = zero3SessionText(request.text, 'Zero3 prompt', 128_000)
   const cwd = zero3SessionText(request.cwd, 'Zero3 project cwd', 4096)
@@ -616,12 +616,13 @@ async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: u
     modelProvider: bridge.providerId,
     cwd,
     approvalPolicy: 'never',
-    sandbox: 'danger-full-access',
+    sandbox: robotSafe ? 'read-only' : 'danger-full-access',
     config,
-    developerInstructions:
-      'You are Zero3 Pilot running through its pinned open-source Codex Agent Kernel. ' +
-      'You have the Codex tools and the bound project workspace available. ' +
-      'When the user asks about local files, directories, code, commands, or project state, inspect the workspace with tools instead of claiming that local access is unavailable.'
+    developerInstructions: robotSafe
+      ? 'You are Zero3 Pilot answering through an authenticated messaging channel. The workspace is read-only for this turn. You may inspect files and use read-only tools, but never mutate the computer or project. If the user requests a write/elevated action, explain that it requires an authorized Codex or Claude execution.'
+      : 'You are Zero3 Pilot running through its pinned open-source Codex Agent Kernel. ' +
+        'You have the Codex tools and the bound project workspace available. ' +
+        'When the user asks about local files, directories, code, commands, or project state, inspect the workspace with tools instead of claiming that local access is unavailable.'
   }
   let threadId: string
   if (requestedThreadId) {
@@ -642,6 +643,10 @@ async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: u
   const turnId = zero3ApiAgentId(turn, 'turn')
   const responseText = await zero3ApiAgentWaitForTurn(threadId, turnId)
   return { text: responseText, model: profile.model, profileId: profile.id, threadId }
+}
+
+async function zero3ApiRobotTurn(profile: Zero3ApiProfileStored, requestValue: unknown) {
+  return zero3ApiAgentTurn(profile, requestValue, true)
 }
 
 // A failed turn used to exist only as a string in the conversation, where the

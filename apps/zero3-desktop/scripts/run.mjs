@@ -222,6 +222,18 @@ function stageZero3WeixinForWindowsPackage(binary) {
   return target
 }
 
+function stageZero3RobotResourcesForWindowsPackage() {
+  if (process.platform !== 'win32') throw new Error('Robot Windows staging requires Windows.')
+  const targetDir = path.join(hermesDesktopDir, 'build', 'zero3-robots')
+  fs.rmSync(targetDir, { recursive: true, force: true })
+  fs.mkdirSync(targetDir, { recursive: true })
+  copyRequiredFile(
+    path.join(repoRoot, 'apps', 'zero3-desktop', 'robot-runtime', 'qqbot_bridge.py'),
+    path.join(targetDir, 'qqbot_bridge.py')
+  )
+  console.log(`[Zero3] Staged QQBot transport bridge for Windows package: ${targetDir}`)
+}
+
 function hermesVenvPython() {
   return path.join(
     hermesRoot,
@@ -331,6 +343,9 @@ const baseEnv = {
   HERMES_DESKTOP_HERMES_ROOT: hermesRoot,
   HERMES_DESKTOP_APP_NAME: 'Zero3 Pilot',
   ZERO3_CODEX_CWD: repoRoot,
+  ZERO3_QQBOT_BRIDGE: path.join(repoRoot, 'apps', 'zero3-desktop', 'robot-runtime', 'qqbot_bridge.py'),
+  ZERO3_QQBOT_HERMES_ROOT: hermesRoot,
+  ZERO3_QQBOT_PYTHON: hermesVenvPython(),
   ZERO3_DESKTOP_CORE: 'codex-app-server',
   ZERO3_DESKTOP_SHELL: 'hermes-ui-compat'
 }
@@ -345,6 +360,7 @@ if (mode === 'dev') {
   weixinBinary = ensureZero3WeixinBinary(baseEnv, 'release')
   stagePinnedCodexForWindowsPackage(codexBinary)
   stageZero3WeixinForWindowsPackage(weixinBinary)
+  stageZero3RobotResourcesForWindowsPackage()
   runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-windows-package.mjs')])
 } else {
   codexBinary = pinnedCodexBinary('debug')
