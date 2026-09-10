@@ -1,1 +1,1 @@
-export type RuntimeTarget = 'kernel' | 'weixin'
+export type RuntimeTarget = 'kernel' | 'weixin' | 'qq'

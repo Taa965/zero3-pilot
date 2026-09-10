@@ -33,6 +33,10 @@ export function RuntimeList({ activeTarget, onTargetChange }: RuntimeListProps) 
           <span className="flex items-center gap-2"><Codicon name="comment-discussion" /> 微信机器人</span>
           <span className="text-xs text-(--ui-text-tertiary)">管理</span>
         </button>
+        <button onClick={() => onTargetChange('qq')} className={`${itemClass(activeTarget === 'qq')} flex items-center justify-between`}>
+          <span className="flex items-center gap-2"><Codicon name="comment-discussion" /> QQ 机器人</span>
+          <span className="text-xs text-(--ui-text-tertiary)">管理</span>
+        </button>
 
         <div className="mb-2 mt-4 px-2 text-xs font-medium uppercase text-(--ui-text-tertiary)">执行引擎 (Execution)</div>
         <button className={itemClass(false)}>执行器池 (Executor Pool)</button>

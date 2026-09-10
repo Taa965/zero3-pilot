@@ -104,6 +104,7 @@ impl ApprovalSession {
 
 enum SubmitOutcome {
     Accepted(AcceptedJob),
+    Completed(Value),
     ApprovalRequired(String),
 }
 
@@ -133,15 +134,15 @@ fn node_url() -> String {
 }
 
 fn default_backend() -> String {
-    std::env::var("ZERO3_WEIXIN_AGENT").unwrap_or_else(|_| "codex".to_string())
+    std::env::var("ZERO3_WEIXIN_AGENT").unwrap_or_else(|_| "zero3".to_string())
 }
 
 fn print_usage() {
     println!(
         "Zero3 Pilot Weixin ClawBot\n\n\
-         Usage:\n  zero3-pilot-weixin status\n  zero3-pilot-weixin login\n  zero3-pilot-weixin run [codex|claude|hermes]\n  zero3-pilot-weixin disconnect\n\n\
+         Usage:\n  zero3-pilot-weixin status\n  zero3-pilot-weixin login\n  zero3-pilot-weixin run [zero3|codex|claude]\n  zero3-pilot-weixin disconnect\n\n\
          Only messages from the WeChat account that scanned the QR code are accepted.\n\
-         Remote commands must start with /pilot. Examples:\n  /pilot summarize my current task\n  /pilot hermes check today's automation status"
+         普通文本默认交给 Zero3；/pilot 可显式选择处理器。Examples:\n  /pilot summarize my current task\n  /pilot codex inspect the current project"
     );
 }
 
@@ -300,9 +301,9 @@ async fn run_bridge(
             "微信 ClawBot 尚未连接。先运行 zero3-pilot-weixin login"
         ));
     }
-    ensure_node_healthy().await?;
+    ensure_router_healthy().await?;
     println!(
-        "微信 ClawBot 已连接到 Zero3 Pilot。默认 Agent={backend}。仅处理 {COMMAND_PREFIX} 指令。"
+        "微信 ClawBot 已连接到 Zero3 Pilot。默认处理器={backend}。普通文本可直接发送，{COMMAND_PREFIX} 可显式选择处理器。"
     );
     let mut approval = ApprovalSession::default();
 
@@ -427,22 +428,15 @@ async fn handle_message(
         return Ok(());
     }
 
-    if !trimmed.starts_with(COMMAND_PREFIX) {
-        return Ok(());
-    }
-    let rest = trimmed[COMMAND_PREFIX.len()..].trim();
-    if rest.is_empty() {
-        weixin
-            .send_text(
-                &from,
-                "用法：/pilot <任务>，或 /pilot codex|claude|hermes <任务>",
-                message.context_token.as_deref(),
-            )
-            .await?;
-        return Ok(());
-    }
-
-    let (backend, goal) = parse_backend(rest, default_backend)?;
+    let (backend, goal) = match parse_user_message(trimmed, default_backend) {
+        Ok(value) => value,
+        Err(error) => {
+            weixin
+                .send_text(&from, &error.to_string(), message.context_token.as_deref())
+                .await?;
+            return Ok(());
+        }
+    };
     let command = RemoteCommand {
         backend,
         goal: goal.to_string(),
@@ -451,9 +445,34 @@ async fn handle_message(
         message_id: message.message_id,
         context_token: message.context_token.clone(),
     };
-    match submit_agent(&command, false).await? {
+    let outcome = match submit_agent(&command, false).await {
+        Ok(value) => value,
+        Err(error) => {
+            weixin
+                .send_text(
+                    &from,
+                    &truncate_utf8(&format!("Zero3 Pilot 执行失败：{error:#}"), 3500),
+                    message.context_token.as_deref(),
+                )
+                .await?;
+            return Ok(());
+        }
+    };
+    match outcome {
         SubmitOutcome::Accepted(accepted) => {
-            let value = wait_for_job(&accepted.job_id).await?;
+            let output = match wait_for_job(&accepted.job_id).await {
+                Ok(value) => render_reply(&value),
+                Err(error) => format!("Zero3 Pilot 执行失败：{error:#}"),
+            };
+            weixin
+                .send_text(
+                    &from,
+                    &truncate_utf8(&output, 3500),
+                    message.context_token.as_deref(),
+                )
+                .await?;
+        }
+        SubmitOutcome::Completed(value) => {
             let output = render_reply(&value);
             weixin
                 .send_text(
@@ -502,10 +521,31 @@ async fn execute_and_reply(
     Ok(())
 }
 
+fn parse_user_message<'a>(
+    text: &'a str,
+    default_backend: &str,
+) -> anyhow::Result<(String, &'a str)> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("消息不能为空"));
+    }
+    if !trimmed.starts_with(COMMAND_PREFIX) {
+        validate_backend(default_backend)?;
+        return Ok((default_backend.to_string(), trimmed));
+    }
+    let rest = trimmed[COMMAND_PREFIX.len()..].trim();
+    if rest.is_empty() {
+        return Err(anyhow!(
+            "用法：直接发送消息，或 /pilot zero3|codex|claude <任务>"
+        ));
+    }
+    parse_backend(rest, default_backend)
+}
+
 fn parse_backend<'a>(text: &'a str, default_backend: &str) -> anyhow::Result<(String, &'a str)> {
     let mut parts = text.splitn(2, char::is_whitespace);
     let first = parts.next().unwrap_or_default();
-    if matches!(first, "codex" | "claude" | "hermes") {
+    if matches!(first, "zero3" | "codex" | "claude") {
         let goal = parts.next().unwrap_or("").trim();
         if goal.is_empty() {
             return Err(anyhow!("指定 Agent 后必须提供任务内容"));
@@ -518,13 +558,31 @@ fn parse_backend<'a>(text: &'a str, default_backend: &str) -> anyhow::Result<(St
 }
 
 fn validate_backend(backend: &str) -> anyhow::Result<()> {
-    if matches!(backend, "codex" | "claude" | "hermes") {
+    if matches!(backend, "zero3" | "codex" | "claude") {
         Ok(())
     } else {
-        Err(anyhow!(
-            "未知 Agent {backend:?}; 仅支持 codex/claude/hermes"
-        ))
+        Err(anyhow!("未知处理器 {backend:?}; 仅支持 zero3/codex/claude"))
     }
+}
+
+fn robot_gateway() -> Option<(String, String)> {
+    let url = std::env::var("ZERO3_ROBOT_GATEWAY_URL")
+        .ok()?
+        .trim_end_matches('/')
+        .to_string();
+    let token = std::env::var("ZERO3_ROBOT_GATEWAY_TOKEN").ok()?;
+    if url.is_empty() || token.is_empty() {
+        None
+    } else {
+        Some((url, token))
+    }
+}
+
+async fn ensure_router_healthy() -> anyhow::Result<()> {
+    if robot_gateway().is_some() {
+        return Ok(());
+    }
+    ensure_node_healthy().await
 }
 
 async fn ensure_node_healthy() -> anyhow::Result<()> {
@@ -542,6 +600,40 @@ async fn ensure_node_healthy() -> anyhow::Result<()> {
 
 async fn submit_agent(command: &RemoteCommand, approved: bool) -> anyhow::Result<SubmitOutcome> {
     let client = reqwest::Client::new();
+    if let Some((gateway_url, gateway_token)) = robot_gateway() {
+        let response = client
+            .post(format!("{gateway_url}/v1/route"))
+            .bearer_auth(gateway_token)
+            .json(&json!({
+                "channel": "weixin",
+                "backend": command.backend,
+                "text": command.goal,
+                "approved": approved,
+                "sender_id": command.from_user_id,
+                "chat_id": command.session_id,
+                "message_id": command.message_id,
+            }))
+            .send()
+            .await
+            .context("提交微信消息到 Zero3 Robot Gateway")?;
+        let status = response.status();
+        if status == StatusCode::PRECONDITION_REQUIRED {
+            return Ok(SubmitOutcome::ApprovalRequired(
+                api_error_message(response).await,
+            ));
+        }
+        if !status.is_success() {
+            let message = api_error_message(response).await;
+            return Err(anyhow!(
+                "Zero3 Robot Gateway 拒绝微信消息 ({status}): {message}"
+            ));
+        }
+        let value = response
+            .json::<Value>()
+            .await
+            .context("解析 Zero3 Robot Gateway 回复")?;
+        return Ok(SubmitOutcome::Completed(value));
+    }
     let response = client
         .post(format!("{}/api/v1/jobs/agent", node_url()))
         .json(&json!({
@@ -581,15 +673,13 @@ async fn submit_agent(command: &RemoteCommand, approved: bool) -> anyhow::Result
 }
 
 async fn submit_and_wait(command: &RemoteCommand, approved: bool) -> anyhow::Result<Value> {
-    let accepted = match submit_agent(command, approved).await? {
-        SubmitOutcome::Accepted(accepted) => accepted,
-        SubmitOutcome::ApprovalRequired(reason) => {
-            return Err(anyhow!(
-                "授权后操作仍被权限层要求审批，已停止执行: {reason}"
-            ));
-        }
-    };
-    wait_for_job(&accepted.job_id).await
+    match submit_agent(command, approved).await? {
+        SubmitOutcome::Accepted(accepted) => wait_for_job(&accepted.job_id).await,
+        SubmitOutcome::Completed(value) => Ok(value),
+        SubmitOutcome::ApprovalRequired(reason) => Err(anyhow!(
+            "授权后操作仍被权限层要求审批，已停止执行: {reason}"
+        )),
+    }
 }
 
 async fn wait_for_job(job_id: &str) -> anyhow::Result<Value> {
@@ -632,6 +722,9 @@ async fn api_error_message(response: reqwest::Response) -> String {
 
 fn render_reply(value: &Value) -> String {
     if let Some(text) = value.as_str() {
+        return text.to_string();
+    }
+    if let Some(text) = value.get("text").and_then(Value::as_str) {
         return text.to_string();
     }
     if let Some(summary) = value.get("summary").and_then(Value::as_str) {
@@ -715,10 +808,20 @@ mod tests {
 
     #[test]
     fn explicit_backend_overrides_default() {
-        let (backend, goal) = parse_backend("hermes inspect this", "codex").unwrap();
-        assert_eq!(backend, "hermes");
+        let (backend, goal) = parse_backend("claude inspect this", "codex").unwrap();
+        assert_eq!(backend, "claude");
         assert_eq!(goal, "inspect this");
         let (backend, goal) = parse_backend("inspect this", "codex").unwrap();
+        assert_eq!(backend, "codex");
+        assert_eq!(goal, "inspect this");
+    }
+
+    #[test]
+    fn plain_text_routes_to_zero3_by_default() {
+        let (backend, goal) = parse_user_message("你好，介绍一下自己", "zero3").unwrap();
+        assert_eq!(backend, "zero3");
+        assert_eq!(goal, "你好，介绍一下自己");
+        let (backend, goal) = parse_user_message("/pilot codex inspect this", "zero3").unwrap();
         assert_eq!(backend, "codex");
         assert_eq!(goal, "inspect this");
     }
