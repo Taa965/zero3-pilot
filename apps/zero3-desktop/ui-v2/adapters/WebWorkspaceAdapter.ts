@@ -115,13 +115,18 @@ export const WebWorkspaceAdapter = {
     await window.zero3Workspace.remove({ id: session.id })
   },
 
-  subscribe(onChange: () => void): () => void {
+  subscribe(
+    onChange: () => void,
+    onExecutionChange?: (sessionId: string, executing: boolean) => void
+  ): () => void {
     if (!bridgeAvailable()) return () => {}
     const gpt = window.zero3GptWeb.onEvent(event => {
-      if (event.kind === 'navigation' || event.kind === 'execution') onChange()
+      if (event.kind === 'execution') onExecutionChange?.(event.entryId, event.executing)
+      else if (event.kind === 'navigation') onChange()
     })
     const gemini = window.zero3GeminiWeb.onEvent(event => {
-      if (event.kind === 'navigation' || event.kind === 'execution') onChange()
+      if (event.kind === 'execution') onExecutionChange?.(event.entryId, event.executing)
+      else if (event.kind === 'navigation') onChange()
     })
     return () => {
       gpt()

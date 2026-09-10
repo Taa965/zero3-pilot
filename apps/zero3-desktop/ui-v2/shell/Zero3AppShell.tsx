@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { LocalSessionAdapter } from '../adapters/LocalSessionAdapter'
 import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdapter'
@@ -22,6 +22,29 @@ import type { RuntimeTarget } from '../runtime/runtime-types'
 export type ActiveModule = 'conversations' | 'tasks' | 'groups' | 'projects' | 'runtime'
 
 const ACTIVE_PROJECT_STORAGE_KEY = 'zero3.active-project-id'
+const SESSION_COMPLETION_UNREAD_STORAGE_KEY = 'zero3.session-completion-unread.v1'
+const MAX_COMPLETION_UNREAD_SESSIONS = 500
+
+function readCompletionUnreadSessionIds(): Set<string> {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SESSION_COMPLETION_UNREAD_STORAGE_KEY) ?? '[]') as unknown
+    if (!Array.isArray(parsed)) return new Set()
+    const ids = parsed.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    return new Set(ids.slice(-MAX_COMPLETION_UNREAD_SESSIONS))
+  } catch {
+    return new Set()
+  }
+}
+
+function persistCompletionUnreadSessionIds(ids: Set<string>): void {
+  try {
+    window.localStorage.setItem(
+      SESSION_COMPLETION_UNREAD_STORAGE_KEY,
+      JSON.stringify([...ids].slice(-MAX_COMPLETION_UNREAD_SESSIONS))
+    )
+  } catch {}
+}
+
 
 export function Zero3AppShell() {
   const [activeModule, setActiveModule] = useState<ActiveModule>('conversations')
@@ -31,7 +54,11 @@ export function Zero3AppShell() {
   const [webSessions, setWebSessions] = useState<WorkspaceSession[]>([])
   const [localSessions, setLocalSessions] = useState<LocalSessionRecord[]>([])
   const [executingLocalSessionIds, setExecutingLocalSessionIds] = useState<Set<string>>(() => new Set())
+  const [completionUnreadSessionIds, setCompletionUnreadSessionIds] = useState<Set<string>>(readCompletionUnreadSessionIds)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const viewedSessionIdRef = useRef<string | null>(null)
+  const localExecutionIdsRef = useRef<Set<string>>(new Set())
+  const webExecutionStatesRef = useRef<Map<string, boolean>>(new Map())
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [projects, setProjects] = useState<Zero3ProjectRecord[]>([])
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
@@ -43,22 +70,61 @@ export function Zero3AppShell() {
   const [binding, setBinding] = useState<{ project: Zero3ProjectRecord; thenCreate: boolean } | null>(null)
 
   const sessions = useMemo<WorkspaceSession[]>(() => {
+    const web = webSessions.map(session => ({
+      ...session,
+      completionUnread: completionUnreadSessionIds.has(session.id)
+    }))
     const local = localSessions.map(record => ({
       ...LocalSessionAdapter.toWorkspaceSession(record),
-      executing: executingLocalSessionIds.has(record.id)
+      executing: executingLocalSessionIds.has(record.id),
+      completionUnread: completionUnreadSessionIds.has(record.id)
     }))
-    return [...webSessions, ...local]
-  }, [webSessions, localSessions, executingLocalSessionIds])
+    return [...web, ...local]
+  }, [webSessions, localSessions, executingLocalSessionIds, completionUnreadSessionIds])
   const activeSession = useMemo(
     () => sessions.find(session => session.id === activeSessionId) ?? null,
     [sessions, activeSessionId]
   )
+  const viewedSessionId = activeModule === 'conversations' && activeSession?.provider === provider ? activeSession.id : null
   const createTargetProjectId = resolveCreateProjectId(activeProjectId, focusedProjectId, activeSession)
   const createTargetProject = projects.find(project => project.id === createTargetProjectId) ?? null
 
+  const setSessionCompletionUnread = useCallback((sessionId: string, unread: boolean) => {
+    setCompletionUnreadSessionIds(current => {
+      if (current.has(sessionId) === unread) return current
+      const next = new Set(current)
+      if (unread) next.add(sessionId)
+      else next.delete(sessionId)
+      return next
+    })
+  }, [])
+
+  const setWebSessionExecution = useCallback((sessionId: string, executing: boolean) => {
+    const previous = webExecutionStatesRef.current.get(sessionId)
+    webExecutionStatesRef.current.set(sessionId, executing)
+    setWebSessions(current => current.map(session =>
+      session.id === sessionId && session.executing !== executing ? { ...session, executing } : session
+    ))
+    if (previous === true && !executing) {
+      setSessionCompletionUnread(sessionId, viewedSessionIdRef.current !== sessionId)
+    }
+  }, [setSessionCompletionUnread])
+
   const refreshWebSessions = useCallback(async () => {
     try {
-      setWebSessions(await WebWorkspaceAdapter.list())
+      const next = await WebWorkspaceAdapter.list()
+      const liveIds = new Set(next.map(session => session.id))
+      const reconciled = next.map(session => {
+        const probed = session.executing === true
+        const known = webExecutionStatesRef.current.get(session.id)
+        const executing = probed || known === true
+        if (probed || known === undefined) webExecutionStatesRef.current.set(session.id, executing)
+        return session.executing === executing ? session : { ...session, executing }
+      })
+      for (const sessionId of [...webExecutionStatesRef.current.keys()]) {
+        if (!liveIds.has(sessionId)) webExecutionStatesRef.current.delete(sessionId)
+      }
+      setWebSessions(reconciled)
       setSessionError(null)
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
@@ -97,8 +163,11 @@ export function Zero3AppShell() {
 
   useEffect(() => {
     void refreshWebSessions()
-    return WebWorkspaceAdapter.subscribe(() => void refreshWebSessions())
-  }, [refreshWebSessions])
+    return WebWorkspaceAdapter.subscribe(
+      () => void refreshWebSessions(),
+      (sessionId, executing) => setWebSessionExecution(sessionId, executing)
+    )
+  }, [refreshWebSessions, setWebSessionExecution])
 
   useEffect(() => {
     refreshLocalSessions()
@@ -116,22 +185,33 @@ export function Zero3AppShell() {
     } catch {}
   }, [activeProjectId])
 
+  useEffect(() => {
+    persistCompletionUnreadSessionIds(completionUnreadSessionIds)
+  }, [completionUnreadSessionIds])
+
+  useEffect(() => {
+    viewedSessionIdRef.current = viewedSessionId
+    if (viewedSessionId) setSessionCompletionUnread(viewedSessionId, false)
+  }, [viewedSessionId, setSessionCompletionUnread])
+
   const setLocalSessionExecution = useCallback((sessionId: string, executing: boolean) => {
-    setExecutingLocalSessionIds(current => {
-      const alreadyMatches = current.has(sessionId) === executing
-      if (alreadyMatches) return current
-      const next = new Set(current)
-      if (executing) next.add(sessionId)
-      else next.delete(sessionId)
-      return next
-    })
-  }, [])
+    const previous = localExecutionIdsRef.current.has(sessionId)
+    if (previous === executing) return
+    if (executing) localExecutionIdsRef.current.add(sessionId)
+    else localExecutionIdsRef.current.delete(sessionId)
+    setExecutingLocalSessionIds(new Set(localExecutionIdsRef.current))
+    if (previous && !executing) {
+      setSessionCompletionUnread(sessionId, viewedSessionIdRef.current !== sessionId)
+    }
+  }, [setSessionCompletionUnread])
 
   const selectSession = useCallback((session: WorkspaceSession) => {
+    viewedSessionIdRef.current = activeModule === 'conversations' ? session.id : null
+    setSessionCompletionUnread(session.id, false)
     setActiveSessionId(session.id)
     setFocusedProjectId(session.projectId)
     setProvider(session.provider)
-  }, [])
+  }, [activeModule, setSessionCompletionUnread])
 
   const deleteSession = useCallback(async (session: WorkspaceSession) => {
     try {
@@ -142,9 +222,12 @@ export function Zero3AppShell() {
         }
         LocalSessionAdapter.remove(session.id)
         setLocalSessionExecution(session.id, false)
+        setSessionCompletionUnread(session.id, false)
         refreshLocalSessions()
       } else {
         await WebWorkspaceAdapter.remove(session)
+        webExecutionStatesRef.current.delete(session.id)
+        setSessionCompletionUnread(session.id, false)
         await refreshWebSessions()
       }
       setActiveSessionId(current => (current === session.id ? null : current))
@@ -152,7 +235,7 @@ export function Zero3AppShell() {
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
-  }, [refreshLocalSessions, refreshWebSessions, setLocalSessionExecution])
+  }, [refreshLocalSessions, refreshWebSessions, setLocalSessionExecution, setSessionCompletionUnread])
 
   const archiveSession = useCallback(async (session: WorkspaceSession, archived: boolean) => {
     try {
@@ -160,12 +243,15 @@ export function Zero3AppShell() {
       await SessionArchiveAdapter.setArchived(session, archived)
       if (session.source === 'local') refreshLocalSessions()
       else await refreshWebSessions()
-      if (archived) setActiveSessionId(current => (current === session.id ? null : current))
+      if (archived) {
+        setSessionCompletionUnread(session.id, false)
+        setActiveSessionId(current => (current === session.id ? null : current))
+      }
       setSessionError(null)
     } catch (error) {
       setSessionError(error instanceof Error ? error.message : String(error))
     }
-  }, [refreshLocalSessions, refreshWebSessions])
+  }, [refreshLocalSessions, refreshWebSessions, setSessionCompletionUnread])
   const renameSession = async (session: WorkspaceSession, title: string) => {
     if (session.source === 'local') {
       LocalSessionAdapter.rename(session.id, title)

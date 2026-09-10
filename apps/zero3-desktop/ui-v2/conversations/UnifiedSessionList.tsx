@@ -150,6 +150,8 @@ export function UnifiedSessionList({
     const active = session.id === activeId
     const archived = session.archived === true
     const executing = session.executing === true
+    const completionUnread = session.completionUnread === true
+    const attentionRing = executing || completionUnread
     const mark = PROVIDER_MARKS[session.provider]
     return (
       <button
@@ -164,6 +166,7 @@ export function UnifiedSessionList({
         onBlur={() => cancelPrewarm(session.id)}
         onContextMenu={event => openMenu(session, event)}
         data-session-executing={executing ? '' : undefined}
+        data-session-completion-unread={completionUnread ? '' : undefined}
         className={cn(
           'mb-1 flex w-full flex-col items-start gap-1 rounded-lg border border-transparent p-3 text-left text-sm transition-colors',
           active ? 'border-(--ui-border) bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'
@@ -173,13 +176,16 @@ export function UnifiedSessionList({
           <div className="flex min-w-0 items-center gap-1.5 font-medium">
             <span
               className="relative grid size-4 shrink-0 place-items-center"
-              title={executing ? '正在执行' : undefined}
+              title={executing ? '正在执行' : completionUnread ? '执行完成，尚未查看' : undefined}
             >
+              {attentionRing && (
+                <span className="pointer-events-none absolute inset-[-2px] rounded-full border border-emerald-500" />
+              )}
               {executing && (
-                <>
-                  <span className="pointer-events-none absolute inset-[-2px] rounded-full border border-emerald-500" />
-                  <span className="pointer-events-none absolute inset-[-2px] rounded-full border border-emerald-400/80 motion-safe:animate-ping" />
-                </>
+                <span className="pointer-events-none absolute inset-[-2px] rounded-full border border-emerald-400/80 motion-safe:animate-ping" />
+              )}
+              {completionUnread && (
+                <span className="pointer-events-none absolute -right-1 -top-1 z-20 size-2 rounded-full bg-red-500" />
               )}
               <span className={cn('relative z-10 text-xs', mark.color)}>{mark.symbol}</span>
             </span>
