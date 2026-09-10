@@ -35,9 +35,11 @@ The v1 scheduler is deterministic. It validates unknown dependencies, duplicate 
 
 The contract supports dynamic DAG expansion by incrementing the workflow revision and adding Steps. This is required for workflows such as visual planning that discover the eventual number of image/video production batches at runtime.
 
-## Reporter boundary (next phase)
+## Web worker boundary
 
-Web agents will report through Remote Desktop Commander into a narrow Zero3 Reporter API/CLI. DC is transport, not the execution protocol. The Reporter will be allowed to emit bounded events such as progress, artifact-produced, blocked, waiting-human, and completion-requested for its own Assignment, but it will not be allowed to set `completed`, edit another task, or mutate the durable store directly.
+The first narrow reporter/worker boundary is now implemented as the Web-GPT Worker Protocol. Web GPT communicates through six bounded MCP tools for registration, claiming, progress, batch completion, failure reporting, and context recovery. Remote Desktop Commander may still be used as a development/operations transport, but it is not part of the Worker protocol.
+
+Batched WorkUnits and Claims live in a SQLite Worker Runtime under the macro `ExecutionTask -> ExecutionStep -> ExecutionAssignment` authority. A web worker can drive its WorkUnits to `STAGE_WORK_COMPLETE`, which emits a completion request; it still cannot set the macro Step to `completed`. Zero3's Completion Gate retains that authority. See [`WEB_GPT_WORKER_PROTOCOL_V1.md`](WEB_GPT_WORKER_PROTOCOL_V1.md).
 
 ## Phase 1 status
 

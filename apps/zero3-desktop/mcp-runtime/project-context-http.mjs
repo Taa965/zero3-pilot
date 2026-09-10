@@ -7,6 +7,8 @@ import { toNodeHandler } from '@modelcontextprotocol/node'
 import * as z from 'zod/v4'
 
 import { createProjectContextCore } from './project-context-core.mjs'
+import { registerWorkerTools } from './worker-tools.mjs'
+import { Zero3WorkerProtocol } from '../worker-runtime/worker-protocol.mjs'
 import { appendHttpAudit, filterWebEgressPayload, isProjectWebAllowed, mergeWebIngressPayload, readBearerToken } from './project-context-http-policy.mjs'
 
 const SERVER_NAME = 'zero3-project-context-http'
@@ -20,6 +22,9 @@ const PORT = (() => {
 })()
 const WRITE_VERIFIED = process.env.ZERO3_MCP_HTTP_WRITE_VERIFIED === '1'
 const STATE_DIR = process.env.ZERO3_MCP_HTTP_STATE_DIR
+const WORKER_DB = process.env.ZERO3_WORKER_DB?.trim() || null
+const WORKER_ENABLED = Boolean(WORKER_DB) && process.env.ZERO3_WORKER_MCP_ENABLED !== '0'
+const workerProtocol = WORKER_ENABLED ? new Zero3WorkerProtocol(WORKER_DB) : null
 const core = createProjectContextCore({ rootDir: process.env.ZERO3_PROJECT_CONTEXT_DIR })
 const sharedProjects = new Map()
 async function readProject(projectId) {
@@ -64,6 +69,9 @@ function serverFactory() {
       throw error
     }
   })
+  if (workerProtocol) {
+    registerWorkerTools(server, workerProtocol, entry => appendHttpAudit(entry, { stateDir: STATE_DIR }))
+  }
   if (WRITE_VERIFIED && !process.env.ZERO3_SHARED_MEMORY_CONFIG) {
     server.registerTool('project_put_context', {
       title: 'Update Zero3 Project Context',
@@ -138,12 +146,13 @@ const httpServer = http.createServer(async (request, response) => {
   }
 })
 await readBearerToken({ stateDir: STATE_DIR })
-httpServer.listen(PORT, HOST, () => console.error(`[${SERVER_NAME}] listening on http://${HOST}:${PORT}/mcp (${WRITE_VERIFIED ? 'read/write verified' : 'read-only'})`))
+httpServer.listen(PORT, HOST, () => console.error(`[${SERVER_NAME}] listening on http://${HOST}:${PORT}/mcp (${WRITE_VERIFIED ? 'memory read/write' : 'memory read-only'}, worker=${WORKER_ENABLED ? 'enabled' : 'disabled'})`))
 async function shutdown() {
   httpServer.close()
   await mcpHandler.close()
   await Promise.allSettled([...sharedProjects.values()].map(async opening => (await opening).close()))
   sharedProjects.clear()
+  workerProtocol?.close()
 }
 process.once('SIGTERM', () => void shutdown())
 process.once('SIGINT', () => void shutdown())

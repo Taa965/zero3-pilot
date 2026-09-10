@@ -5,6 +5,8 @@ import { hermesDesktopDir, repoRoot } from './config.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'mcp-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp')
+const workerSourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'worker-runtime')
+const workerTargetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'worker-runtime')
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
 function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
@@ -19,10 +21,15 @@ function patchFile(relativePath, replacements) {
   write(file, source)
 }
 function copySources() {
-  for (const file of ['project-context-core.mjs', 'project-context-http-policy.mjs', 'project-context-http.mjs']) {
+  for (const file of ['project-context-core.mjs', 'project-context-http-policy.mjs', 'project-context-http.mjs', 'worker-tools.mjs']) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 project-context HTTP source is missing: ${source}`)
     write(path.join(targetDir, file), read(source))
+  }
+  for (const file of ['worker-protocol.mjs', 'index.mjs']) {
+    const source = path.join(workerSourceDir, file)
+    if (!fs.statSync(source).isFile()) throw new Error(`Zero3 worker runtime source is missing: ${source}`)
+    write(path.join(workerTargetDir, file), read(source))
   }
 }
 function addDependencies() {
@@ -45,6 +52,7 @@ const ZERO3_MCP_HTTP_PORT = (() => {
 function zero3McpHttpStateDir() { return path.join(app.getPath('userData'), 'zero3') }
 function zero3McpHttpTokenFile() { return path.join(zero3McpHttpStateDir(), 'mcp-http-token') }
 function zero3McpHttpPolicyFile() { return path.join(zero3McpHttpStateDir(), 'mcp-http-access.json') }
+function zero3WorkerDbFile() { return path.join(zero3McpHttpStateDir(), 'worker-runtime.sqlite3') }
 function zero3McpHttpAtomicWrite(file: string, text: string) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const temporary = file + '.tmp-' + String(process.pid) + '-' + crypto.randomUUID()
@@ -94,8 +102,21 @@ function zero3McpHttpStatus() {
     endpoint: 'http://127.0.0.1:' + String(ZERO3_MCP_HTTP_PORT) + '/mcp',
     bearerToken: zero3McpHttpToken(),
     writeVerified: process.env.ZERO3_MCP_HTTP_WRITE_VERIFIED === '1',
+    workerProtocolEnabled: process.env.ZERO3_WORKER_MCP_ENABLED !== '0',
     enabledProjectIds: Object.keys(policy.projects)
   }
+}
+let zero3WorkerAdminRuntime: any = null
+async function zero3WorkerAdmin() {
+  if (zero3WorkerAdminRuntime) return zero3WorkerAdminRuntime
+  const modulePath = path.join(app.getAppPath(), 'electron', 'zero3', 'worker-runtime', 'worker-protocol.mjs')
+  const module = await import(pathToFileURL(modulePath).href) as { Zero3WorkerProtocol: new (filename: string) => any }
+  zero3WorkerAdminRuntime = new module.Zero3WorkerProtocol(zero3WorkerDbFile())
+  return zero3WorkerAdminRuntime
+}
+function zero3WorkerRequest(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('worker request must be an object')
+  return value as Record<string, unknown>
 }
 function zero3StartProjectContextHttp() {
   if (process.env.ZERO3_MCP_HTTP_ENABLED === '0') return
@@ -103,7 +124,7 @@ function zero3StartProjectContextHttp() {
   const serverPath = path.join(app.getAppPath(), 'electron', 'zero3', 'mcp', 'project-context-http.mjs')
   zero3McpHttpToken()
   zero3ProjectContextHttpChild = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: path.join(app.getPath('userData'), 'zero3', 'project-context'), ZERO3_MCP_HTTP_STATE_DIR: zero3McpHttpStateDir(), ZERO3_MCP_HTTP_HOST: '127.0.0.1', ZERO3_MCP_HTTP_PORT: String(ZERO3_MCP_HTTP_PORT) },
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ZERO3_PROJECT_CONTEXT_DIR: path.join(app.getPath('userData'), 'zero3', 'project-context'), ZERO3_MCP_HTTP_STATE_DIR: zero3McpHttpStateDir(), ZERO3_WORKER_DB: zero3WorkerDbFile(), ZERO3_WORKER_MCP_ENABLED: process.env.ZERO3_WORKER_MCP_ENABLED ?? '1', ZERO3_MCP_HTTP_HOST: '127.0.0.1', ZERO3_MCP_HTTP_PORT: String(ZERO3_MCP_HTTP_PORT) },
     stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true
   })
   zero3ProjectContextHttpChild.stderr?.on('data', chunk => console.error('[zero3-project-context-http]', String(chunk).trimEnd()))
@@ -121,12 +142,30 @@ ipcMain.handle('zero3:mcp-http:rotate-token', () => {
   zero3McpHttpAtomicWrite(zero3McpHttpTokenFile(), token + '\n')
   return { bearerToken: token }
 })
-app.on('before-quit', zero3StopProjectContextHttp)
+ipcMain.handle('zero3:worker:stage-ensure', async (_event, request: unknown) => (await zero3WorkerAdmin()).ensureStage(zero3WorkerRequest(request)))
+ipcMain.handle('zero3:worker:work-units-add', async (_event, request: unknown) => (await zero3WorkerAdmin()).addWorkUnits(zero3WorkerRequest(request)))
+ipcMain.handle('zero3:worker:stage-snapshot', async (_event, request: unknown) => {
+  const input = zero3WorkerRequest(request)
+  return (await zero3WorkerAdmin()).stageSnapshot(input.taskId, input.stepId)
+})
+ipcMain.handle('zero3:worker:expire-leases', async (_event, request: unknown) => (await zero3WorkerAdmin()).expireLeases(zero3WorkerRequest(request)))
+app.on('before-quit', () => {
+  zero3StopProjectContextHttp()
+  zero3WorkerAdminRuntime?.close()
+  zero3WorkerAdminRuntime = null
+})
 `
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3McpHttp', {
   status: () => ipcRenderer.invoke('zero3:mcp-http:status'),
   setProjectAccess: request => ipcRenderer.invoke('zero3:mcp-http:set-project-access', request),
   rotateToken: () => ipcRenderer.invoke('zero3:mcp-http:rotate-token')
+})
+
+contextBridge.exposeInMainWorld('zero3WorkerRuntime', {
+  ensureStage: request => ipcRenderer.invoke('zero3:worker:stage-ensure', request),
+  addWorkUnits: request => ipcRenderer.invoke('zero3:worker:work-units-add', request),
+  stageSnapshot: request => ipcRenderer.invoke('zero3:worker:stage-snapshot', request),
+  expireLeases: request => ipcRenderer.invoke('zero3:worker:expire-leases', request)
 })
 
 contextBridge.exposeInMainWorld('zero3Workspace', {`
@@ -138,13 +177,34 @@ type Zero3McpHttpStatus = {
   endpoint: string
   bearerToken: string
   writeVerified: boolean
+  workerProtocolEnabled: boolean
   enabledProjectIds: string[]
+}
+type Zero3WorkerStageRequest = {
+  taskId: string
+  stepId: string
+  assignmentId: string
+  requiredCapability: string
+  metadata?: Record<string, unknown>
+}
+type Zero3WorkUnitInput = {
+  unitId: string
+  ordinal?: number
+  title?: string
+  payload?: Record<string, unknown>
+  maxAttempts?: number
 }
 `
 const globalSurface = String.raw`    zero3McpHttp: {
       status: () => Promise<Zero3McpHttpStatus>
       setProjectAccess: (request: { projectId: string; enabled: boolean }) => Promise<{ projectId: string; enabled: boolean }>
       rotateToken: () => Promise<{ bearerToken: string }>
+    }
+    zero3WorkerRuntime: {
+      ensureStage: (request: Zero3WorkerStageRequest) => Promise<unknown>
+      addWorkUnits: (request: { taskId: string; stepId: string; units: Zero3WorkUnitInput[] }) => Promise<unknown>
+      stageSnapshot: (request: { taskId: string; stepId: string }) => Promise<unknown>
+      expireLeases: (request: { taskId?: string; stepId?: string; at?: string }) => Promise<unknown>
     }
     zero3Workspace: {`
 

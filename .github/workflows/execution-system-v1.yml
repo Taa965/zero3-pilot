@@ -5,14 +5,31 @@ on:
     branches: [main]
     paths:
       - 'apps/zero3-desktop/execution-runtime/**'
+      - 'apps/zero3-desktop/worker-runtime/**'
+      - 'apps/zero3-desktop/mcp-runtime/worker-tools.mjs'
+      - 'apps/zero3-desktop/mcp-runtime/project-context-http.mjs'
+      - 'apps/zero3-desktop/mcp-runtime/project-context-http-policy.mjs'
+      - 'apps/zero3-desktop/scripts/apply-project-context-http.mjs'
       - 'apps/zero3-desktop/group-runtime/store/atomic-file.ts'
       - 'docs/EXECUTION_SYSTEM_V1.md'
+      - 'docs/WEB_GPT_WORKER_PROTOCOL_V1.md'
+      - 'skills/zero3-web-worker/**'
+      - 'skills/README.md'
       - '.github/workflows/execution-system-v1.yml'
   push:
     branches: [main]
     paths:
       - 'apps/zero3-desktop/execution-runtime/**'
+      - 'apps/zero3-desktop/worker-runtime/**'
+      - 'apps/zero3-desktop/mcp-runtime/worker-tools.mjs'
+      - 'apps/zero3-desktop/mcp-runtime/project-context-http.mjs'
+      - 'apps/zero3-desktop/mcp-runtime/project-context-http-policy.mjs'
+      - 'apps/zero3-desktop/scripts/apply-project-context-http.mjs'
       - 'apps/zero3-desktop/group-runtime/store/atomic-file.ts'
+      - 'docs/EXECUTION_SYSTEM_V1.md'
+      - 'docs/WEB_GPT_WORKER_PROTOCOL_V1.md'
+      - 'skills/zero3-web-worker/**'
+      - 'skills/README.md'
       - '.github/workflows/execution-system-v1.yml'
   workflow_dispatch: {}
 
@@ -37,3 +54,7 @@ jobs:
         run: node scripts/check-architecture.mjs
       - name: Execution core behavior tests
         run: node --experimental-transform-types --test apps/zero3-desktop/execution-runtime/execution-runtime.test.ts
+      - name: Web GPT worker protocol tests
+        run: node --test apps/zero3-desktop/worker-runtime/worker-protocol.test.mjs
+      - name: Web MCP access policy tests
+        run: node --test apps/zero3-desktop/mcp-runtime/project-context-http-policy.test.mjs

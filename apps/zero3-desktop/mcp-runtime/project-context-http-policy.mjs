@@ -79,6 +79,8 @@ export async function appendHttpAudit(entry, options = {}) {
     at: new Date().toISOString(),
     tool: typeof entry?.tool === 'string' ? entry.tool.slice(0, 128) : 'unknown',
     projectId: typeof entry?.projectId === 'string' ? entry.projectId.slice(0, 256) : null,
+    taskId: typeof entry?.taskId === 'string' ? entry.taskId.slice(0, 256) : null,
+    workerId: typeof entry?.workerId === 'string' ? entry.workerId.slice(0, 256) : null,
     result: typeof entry?.result === 'string' ? entry.result.slice(0, 128) : 'unknown'
   }
   await fs.appendFile(auditFile(root), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 })
