@@ -61,3 +61,8 @@ The same model supports multiple workers. Five GPT sessions can each claim ten d
 ## Deployment boundary
 
 The MCP HTTP process remains loopback-only by default and requires the existing bearer-token policy. The protocol implementation is therefore safe to develop and test locally without publishing an OpenAI directory app. Making the endpoint reachable from ChatGPT cloud (for example through a separately reviewed secure tunnel / HTTPS deployment) is a deployment step, not part of Worker scheduling semantics.
+## Private Gateway transport
+
+Phase 2 adds the reviewed cloud transport in [`WEB_GPT_PRIVATE_GATEWAY_V1.md`](WEB_GPT_PRIVATE_GATEWAY_V1.md). The public ChatGPT-facing endpoint is the existing AWS `zero3-web` service at `/mcp`; it stores only durable, leased Worker RPC forwarding records. The local Zero3 application actively long-polls those records over authenticated HTTPS and maps them through an exact six-tool adapter into this Worker Runtime.
+
+This transport does not move WorkUnit/Claim authority to AWS and does not require Remote Codex execution to be enabled. `ZERO3_WORKER_TUNNEL_ENABLED` is independent from `ZERO3_REMOTE_HOST_ENABLED`.

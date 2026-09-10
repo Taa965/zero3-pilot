@@ -14,7 +14,7 @@ function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = read(file)
   for (const replacement of replacements) {
-    if (source.includes(replacement.to)) continue
+    if (source.includes(replacement.to) || (replacement.already && source.includes(replacement.already))) continue
     if (!source.includes(replacement.from)) {
       throw new Error(`Zero3 integrated agent overlay drift in ${relativePath}: missing ${replacement.label}`)
     }
@@ -88,6 +88,7 @@ const zero3LocalCodexRunner = {
     const stateRoot = path.join(app.getPath('userData'), 'zero3', 'agent-task-state', 'codex')
     const runner = new Zero3RemoteTaskRunner({
       enabled: false,
+      workerTunnelEnabled: false,
       baseUrl: null,
       tokenFile: null,
       nodeId: 'zero3-local-agent',
@@ -267,6 +268,7 @@ export function applyZero3AgentIntegrationRuntime() {
   patchFile('electron/main.ts', [
     {
       label: 'integrated agent-routing import',
+      already: "createZero3AgentDesktopHandlers, ZERO3_AGENT_DESKTOP_CHANNELS",
       from: "import { Zero3ReviewLoopStore } from './zero3/agent-routing/index'",
       to:
         "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, zero3GitEvidence } from './zero3/agent-routing/index'\n" +
@@ -274,25 +276,28 @@ export function applyZero3AgentIntegrationRuntime() {
     },
     {
       label: 'existing remote-host import',
+      already: "Zero3RemoteTaskRunner } from './zero3/remote-host/index'",
       from: "import { Zero3RemoteNode } from './zero3/remote-host/index'",
       to: "import { Zero3RemoteNode, Zero3RemoteTaskRunner } from './zero3/remote-host/index'"
     },
     {
       label: 'artifact verification reconciliation import',
+      already: 'reconcileOutcomeUnknown',
       from: "import { Zero3ArtifactStore, Zero3AntigravityMcpLease } from './zero3/artifacts/index'",
       to: "import { Zero3ArtifactStore, Zero3AntigravityMcpLease, reconcileOutcomeUnknown } from './zero3/artifacts/index'"
     },
     {
       label: 'Codex singleton composition boundary',
+      already: 'const zero3AgentTaskStore = new Zero3AgentTaskStore(',
       from: 'const zero3CodexAppServer = createZero3CodexAppServer()',
       to: 'const zero3CodexAppServer = createZero3CodexAppServer()\n' + integratedMain
     }
   ])
   patchFile('electron/preload.ts', [
-    { label: 'integrated task preload surface', from: "contextBridge.exposeInMainWorld('zero3Artifacts', {", to: preloadSurface }
+    { label: 'integrated task preload surface', already: "contextBridge.exposeInMainWorld('zero3AgentTask'", from: "contextBridge.exposeInMainWorld('zero3Artifacts', {", to: preloadSurface }
   ])
   patchFile('src/global.d.ts', [
-    { label: 'integrated task renderer types', from: 'type Zero3ReviewDecisionInput = {', to: globalTypes + '\ntype Zero3ReviewDecisionInput = {' },
-    { label: 'integrated task renderer surface', from: '    zero3Artifacts: {', to: globalSurface }
+    { label: 'integrated task renderer types', already: 'type Zero3AgentTaskTarget =', from: 'type Zero3ReviewDecisionInput = {', to: globalTypes + '\ntype Zero3ReviewDecisionInput = {' },
+    { label: 'integrated task renderer surface', already: '    zero3AgentTask: {', from: '    zero3Artifacts: {', to: globalSurface }
   ])
 }

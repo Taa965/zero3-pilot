@@ -5,6 +5,7 @@ import {
 } from './remote-client'
 import { drainZero3RemoteOutboxInOrder, type Zero3RemotePublishEnvelopeResult } from './remote-outbox-drain'
 import { Zero3RemoteOutbox } from './remote-outbox'
+import { executeZero3WorkerRpc, type Zero3WorkerRuntimePort } from './remote-worker-rpc'
 import {
   Zero3RemoteTaskBlockedError,
   Zero3RemoteTaskOutcomeUnknownError,
@@ -22,6 +23,8 @@ const HEARTBEAT_INTERVAL_MS = 15_000
 const LEASE_RENEW_INTERVAL_MS = 10_000
 const LEASE_RETRY_MIN_MS = 1_000
 const LEASE_RETRY_MAX_MS = 30_000
+const WORKER_RPC_RETRY_MIN_MS = 1_000
+const WORKER_RPC_RETRY_MAX_MS = 15_000
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -41,12 +44,13 @@ export class Zero3RemoteNode {
   private readonly runner: Zero3RemoteTaskRunner
   private stopped = false
   private running: Promise<void> | null = null
+  private workerRunning: Promise<void> | null = null
   private heartbeatTimer: NodeJS.Timeout | null = null
   private leaseRenewTimer: NodeJS.Timeout | null = null
   private activeLeaseInvalid = false
   private statusValue: Zero3RemoteHostStatus
 
-  constructor(codex: Zero3CodexRuntime) {
+  constructor(codex: Zero3CodexRuntime, private readonly workerRuntime?: () => Promise<Zero3WorkerRuntimePort>) {
     this.runner = new Zero3RemoteTaskRunner(this.config, codex)
     this.statusValue = {
       enabled: this.config.enabled,
@@ -64,12 +68,17 @@ export class Zero3RemoteNode {
   }
 
   start(): void {
-    if (!this.config.enabled || this.running) return
+    if (!this.config.enabled && !this.config.workerTunnelEnabled) return
     this.stopped = false
-    this.running = this.loop().finally(() => {
-      this.running = null
-      this.statusValue.connected = false
-    })
+    if (this.config.enabled && !this.running) {
+      this.running = this.loop().finally(() => {
+        this.running = null
+        this.statusValue.connected = false
+      })
+    }
+    if (this.config.workerTunnelEnabled && this.workerRuntime && !this.workerRunning) {
+      this.workerRunning = this.workerLoop().finally(() => { this.workerRunning = null })
+    }
   }
 
   stop(): void {
@@ -174,11 +183,44 @@ export class Zero3RemoteNode {
     }
   }
 
+  private hostCapabilities(): string[] {
+    return ['codex', 'thread', 'turn', 'shell', 'file', 'git', 'mcp', ...(this.workerRuntime ? ['worker-protocol-v1'] : [])]
+  }
+
+  private async workerLoop(): Promise<void> {
+    let retryMs = WORKER_RPC_RETRY_MIN_MS
+    while (!this.stopped && this.workerRuntime) {
+      try {
+        const lease = await this.client.leaseWorkerRpc(25)
+        retryMs = WORKER_RPC_RETRY_MIN_MS
+        if (!lease) continue
+        const runtime = await this.workerRuntime()
+        let result: unknown
+        try {
+          result = await executeZero3WorkerRpc(runtime, lease)
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          await this.client.failWorkerRpc(lease, reason)
+          continue
+        }
+        // Publishing the successful result is transport, not execution. If this
+        // request fails, let the lease expire and replay the same idempotent
+        // Worker Protocol call instead of falsely reporting local execution as failed.
+        await this.client.completeWorkerRpc(lease, result)
+      } catch (error) {
+        if (this.stopped) return
+        this.statusValue.lastError = `worker RPC tunnel failed: ${error instanceof Error ? error.message : String(error)}`
+        await delay(retryMs)
+        retryMs = Math.min(retryMs * 2, WORKER_RPC_RETRY_MAX_MS)
+      }
+    }
+  }
+
   private async loop(): Promise<void> {
     let retryMs = LEASE_RETRY_MIN_MS
     while (!this.stopped) {
       try {
-        await this.client.register(['codex', 'thread', 'turn', 'shell', 'file', 'git', 'mcp'])
+        await this.client.register(this.hostCapabilities())
         this.statusValue.connected = true
         this.statusValue.lastError = null
         await this.flushOutbox()

@@ -19,7 +19,7 @@ function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = read(file)
   for (const replacement of replacements) {
-    if (source.includes(replacement.to)) continue
+    if (source.includes(replacement.to) || (replacement.already && source.includes(replacement.already))) continue
     if (!source.includes(replacement.from)) {
       throw new Error(
         `Zero3 Remote Host overlay drift in ${relativePath}: could not find ${replacement.label}. ` +
@@ -42,6 +42,7 @@ function copyRuntimeSources() {
     'remote-mapping-store.ts',
     'remote-outbox.ts',
     'remote-outbox-drain.ts',
+    'remote-worker-rpc.ts',
     'remote-task-runner.ts',
     'remote-node.ts',
     'index.ts'
@@ -168,6 +169,7 @@ export function applyZero3RemoteHostRuntime() {
   patchFile('electron/main.ts', [
     {
       label: 'end of Electron import block',
+      already: "from './zero3/remote-host/index'",
       from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
       to:
         "import { Zero3RemoteNode } from './zero3/remote-host/index'\n\n" +
@@ -175,6 +177,7 @@ export function applyZero3RemoteHostRuntime() {
     },
     {
       label: 'Electron ready boundary after Codex transport registration',
+      already: 'const zero3RemoteNode = new Zero3RemoteNode(',
       from: "app.whenReady().then(() => {",
       to:
         "const zero3RemoteNode = new Zero3RemoteNode({\n" +
@@ -182,7 +185,7 @@ export function applyZero3RemoteHostRuntime() {
         "  startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs),\n" +
         "  readThread: params => zero3CodexAppServer.request('thread/read', params),\n" +
         "  execCommand: (params, timeoutMs) => zero3CodexAppServer.request('command/exec', params, timeoutMs)\n" +
-        "})\n" +
+        "}, () => zero3WorkerAdmin())\n" +
         "app.on('before-quit', () => zero3RemoteNode.stop())\n\n" +
         "app.whenReady().then(() => {\n" +
         "  zero3RemoteNode.start()"

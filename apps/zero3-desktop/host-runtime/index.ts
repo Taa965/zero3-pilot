@@ -7,3 +7,5 @@ export type {
   Zero3RemoteLease,
   Zero3RemoteTask
 } from './remote-types'
+
+export * from './remote-worker-rpc'

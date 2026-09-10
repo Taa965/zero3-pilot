@@ -51,6 +51,23 @@ export type Zero3RemoteLease = {
   task: Zero3RemoteTask
 }
 
+export type Zero3WorkerRpcTool =
+  | 'register_worker'
+  | 'claim_work'
+  | 'report_progress'
+  | 'complete_and_claim_next'
+  | 'report_failure'
+  | 'get_task_context'
+
+export type Zero3RemoteWorkerRpcLease = {
+  request_id: string
+  lease_id: string
+  fencing_token: number
+  lease_expires_at: string
+  tool: Zero3WorkerRpcTool
+  arguments: Record<string, unknown>
+}
+
 export type Zero3RemoteCodexMapping = {
   taskId: string
   executionId: string
@@ -133,6 +150,7 @@ export type Zero3RemoteOutboxEnvelope = Zero3RemoteOutboxEventEnvelope | Zero3Re
 
 export type Zero3RemoteHostConfig = {
   enabled: boolean
+  workerTunnelEnabled: boolean
   baseUrl: string | null
   tokenFile: string | null
   nodeId: string

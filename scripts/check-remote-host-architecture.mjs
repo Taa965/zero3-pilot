@@ -26,6 +26,7 @@ const mappingStore = read('apps/zero3-desktop/host-runtime/remote-mapping-store.
 const remoteNode = read('apps/zero3-desktop/host-runtime/remote-node.ts')
 const remoteClient = read('apps/zero3-desktop/host-runtime/remote-client.ts')
 const remoteConfig = read('apps/zero3-desktop/host-runtime/remote-config.ts')
+const atomicFile = read('apps/zero3-desktop/workspace-runtime/atomic-file.ts')
 
 requireText(
   constitution,
@@ -67,7 +68,9 @@ requireText(taskRunner, "['status', '--porcelain=v1', '--untracked-files=normal'
 requireText(taskRunner, 'Git clean-worktree preflight failed:', 'Dirty preflight must block the remote task.')
 requireText(taskRunner, "['rev-parse', '--verify', '@{upstream}']", 'Remote sync completion must compare HEAD to the Git upstream when requested.')
 requireText(taskRunner, 'Git completion gate failed:', 'Postflight clean-worktree and remote-sync failures must block success.')
-requireText(mappingStore, 'fs.rename(temporary, this.file)', 'Task mapping updates must replace durable state atomically after writing a temporary file.')
+requireText(mappingStore, 'zero3AtomicWriteFile(this.file', 'Task mapping updates must use the shared durable atomic-file primitive.')
+requireText(atomicFile, 'await handle.sync()', 'Shared atomic-file primitive must flush content before replacement.')
+requireText(atomicFile, 'await renameWithRetry(temporary, file)', 'Shared atomic-file primitive must atomically replace the committed file.')
 requireText(remoteNode, 'error instanceof Zero3RemoteTaskBlockedError', 'Fail-closed preflight rejections must report blocked, not execution failure.')
 requireText(remoteNode, 'error instanceof Zero3RemoteTaskOutcomeUnknownError', 'Uncertain Codex side effects must report outcome_unknown, never failed or succeeded.')
 requireText(remoteNode, "? 'outcome_unknown'", 'Remote Host must publish the explicit outcome_unknown terminal state.')

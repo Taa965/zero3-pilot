@@ -44,19 +44,21 @@ function defaultOutboxDir(): string {
 
 export function loadZero3RemoteHostConfig(): Zero3RemoteHostConfig {
   const enabled = parseBoolean(process.env.ZERO3_REMOTE_HOST_ENABLED, false)
-  const baseUrl = process.env.ZERO3_REMOTE_HOST_BASE_URL?.trim() || null
-  const tokenFile = process.env.ZERO3_REMOTE_HOST_TOKEN_FILE?.trim() || null
-  const nodeId = process.env.ZERO3_REMOTE_HOST_NODE_ID?.trim() || defaultNodeId()
+  const workerTunnelEnabled = parseBoolean(process.env.ZERO3_WORKER_TUNNEL_ENABLED, false)
+  const baseUrl = process.env.ZERO3_WORKER_TUNNEL_BASE_URL?.trim() || process.env.ZERO3_REMOTE_HOST_BASE_URL?.trim() || null
+  const tokenFile = process.env.ZERO3_WORKER_TUNNEL_TOKEN_FILE?.trim() || process.env.ZERO3_REMOTE_HOST_TOKEN_FILE?.trim() || null
+  const nodeId = process.env.ZERO3_WORKER_TUNNEL_NODE_ID?.trim() || process.env.ZERO3_REMOTE_HOST_NODE_ID?.trim() || defaultNodeId()
   const allowedWorkspaces = parseWorkspaceList(process.env.ZERO3_REMOTE_HOST_WORKSPACES)
-  const developmentAllowHttp = parseBoolean(process.env.ZERO3_REMOTE_HOST_ALLOW_HTTP, false)
+  const developmentAllowHttp = parseBoolean(process.env.ZERO3_WORKER_TUNNEL_ALLOW_HTTP ?? process.env.ZERO3_REMOTE_HOST_ALLOW_HTTP, false)
   const mappingStateFile = path.resolve(
     process.env.ZERO3_REMOTE_HOST_MAPPING_STATE_FILE?.trim() || defaultMappingStateFile()
   )
   const outboxDir = path.resolve(process.env.ZERO3_REMOTE_HOST_OUTBOX_DIR?.trim() || defaultOutboxDir())
 
-  if (!enabled) {
+  if (!enabled && !workerTunnelEnabled) {
     return {
       enabled,
+      workerTunnelEnabled,
       baseUrl,
       tokenFile,
       nodeId,
@@ -66,21 +68,22 @@ export function loadZero3RemoteHostConfig(): Zero3RemoteHostConfig {
       outboxDir
     }
   }
-  if (!baseUrl) throw new Error('ZERO3_REMOTE_HOST_BASE_URL is required when remote host is enabled')
+  if (!baseUrl) throw new Error('Zero3 Remote Host / Worker Tunnel base URL is required when either channel is enabled')
   const parsed = new URL(baseUrl)
   if (parsed.protocol !== 'https:' && !(developmentAllowHttp && parsed.protocol === 'http:')) {
-    throw new Error('Zero3 Remote Host control plane must use HTTPS')
+    throw new Error('Zero3 Remote Host / Worker Tunnel control plane must use HTTPS')
   }
-  if (parsed.username || parsed.password) throw new Error('Zero3 Remote Host URL must not contain inline credentials')
-  if (!tokenFile) throw new Error('ZERO3_REMOTE_HOST_TOKEN_FILE is required when remote host is enabled')
+  if (parsed.username || parsed.password) throw new Error('Zero3 Remote Host / Worker Tunnel URL must not contain inline credentials')
+  if (!tokenFile) throw new Error('Zero3 Remote Host / Worker Tunnel token file is required when either channel is enabled')
   const tokenPath = path.resolve(tokenFile)
-  if (!fs.statSync(tokenPath).isFile()) throw new Error('Zero3 Remote Host token file does not exist')
-  if (allowedWorkspaces.length === 0) {
-    throw new Error('ZERO3_REMOTE_HOST_WORKSPACES must contain at least one local allow-listed workspace')
+  if (!fs.statSync(tokenPath).isFile()) throw new Error('Zero3 Remote Host / Worker Tunnel token file does not exist')
+  if (enabled && allowedWorkspaces.length === 0) {
+    throw new Error('ZERO3_REMOTE_HOST_WORKSPACES must contain at least one local allow-listed workspace when remote Codex tasks are enabled')
   }
 
   return {
     enabled,
+    workerTunnelEnabled,
     baseUrl: parsed.toString().replace(/\/$/, ''),
     tokenFile: tokenPath,
     nodeId,

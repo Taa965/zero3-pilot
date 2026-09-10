@@ -1,0 +1,50 @@
+name: Web GPT Worker Gateway V1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/web/src/worker_gateway.rs'
+      - 'apps/web/src/main.rs'
+      - 'apps/zero3-desktop/host-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs'
+      - 'scripts/check-web-gpt-worker-gateway-v1.mjs'
+      - 'docs/WEB_GPT_*'
+      - 'deployment/productization/self-host.env.example'
+      - '.github/workflows/web-gpt-worker-gateway-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/src/worker_gateway.rs'
+      - 'apps/web/src/main.rs'
+      - 'apps/zero3-desktop/host-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs'
+      - 'scripts/check-web-gpt-worker-gateway-v1.mjs'
+      - 'docs/WEB_GPT_*'
+      - 'deployment/productization/self-host.env.example'
+      - '.github/workflows/web-gpt-worker-gateway-v1.yml'
+
+jobs:
+  gateway-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.11.0'
+      - name: Diff hygiene
+        shell: bash
+        run: git diff --check HEAD^...HEAD
+      - name: Gateway architecture guard
+        run: node scripts/check-web-gpt-worker-gateway-v1.mjs
+      - name: Existing remote architecture guards
+        run: |
+          node scripts/check-remote-host-architecture.mjs
+          node scripts/check-remote-control-plane-h5-architecture.mjs
+      - name: Rust format
+        run: cargo fmt --all -- --check
+      - name: Zero3 web tests
+        run: cargo test -p zero3-web
+      - name: Worker tunnel tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/host-runtime/remote-worker-rpc.test.ts apps/zero3-desktop/host-runtime/remote-config.test.ts

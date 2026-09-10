@@ -14,12 +14,14 @@ async function fixture() {
   await fs.mkdir(workspace)
   const config: Zero3RemoteHostConfig = {
     enabled: true,
+    workerTunnelEnabled: false,
     baseUrl: 'https://control.invalid',
     tokenFile: path.join(root, 'token'),
     nodeId: 'test-node',
     allowedWorkspaces: [workspace],
     developmentAllowHttp: false,
-    mappingStateFile: path.join(root, 'state', 'task-mappings.json')
+    mappingStateFile: path.join(root, 'state', 'task-mappings.json'),
+    outboxDir: path.join(root, 'outbox')
   }
   return { root, workspace, config }
 }

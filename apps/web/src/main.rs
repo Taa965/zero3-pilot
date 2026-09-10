@@ -8,6 +8,7 @@
 mod control_admission;
 mod control_extensions;
 mod control_plane;
+mod worker_gateway;
 
 use axum::extract::DefaultBodyLimit;
 use axum::{middleware, routing::get, Json, Router};
@@ -27,6 +28,7 @@ async fn health() -> Json<Value> {
 fn app(
     remote_control: control_plane::RemoteControlRuntime,
     task_extensions: control_extensions::TaskExtensionRuntime,
+    worker_gateway: worker_gateway::WorkerGatewayRuntime,
 ) -> Router {
     let remote = control_plane::router(remote_control)
         .merge(control_extensions::router(task_extensions))
@@ -37,14 +39,18 @@ fn app(
             control_admission::validate_control_task_admission,
         ));
 
-    Router::new().route("/health", get(health)).merge(remote)
+    Router::new()
+        .route("/health", get(health))
+        .merge(remote)
+        .merge(worker_gateway::router(worker_gateway))
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let remote_control = control_plane::RemoteControlRuntime::from_env()?;
     let task_extensions = control_extensions::TaskExtensionRuntime::from_env()?;
-    let app = app(remote_control, task_extensions);
+    let worker_gateway = worker_gateway::WorkerGatewayRuntime::from_env()?;
+    let app = app(remote_control, task_extensions, worker_gateway);
 
     let port: u16 = std::env::var("ZERO3_WEB_PORT")
         .ok()
@@ -69,7 +75,8 @@ mod tests {
     async fn health_returns_ok_even_when_remote_control_is_disabled() {
         let remote_control = control_plane::RemoteControlRuntime::from_env().unwrap();
         let task_extensions = control_extensions::TaskExtensionRuntime::from_env().unwrap();
-        let response = app(remote_control, task_extensions)
+        let worker_gateway = worker_gateway::WorkerGatewayRuntime::from_env().unwrap();
+        let response = app(remote_control, task_extensions, worker_gateway)
             .oneshot(
                 Request::builder()
                     .uri("/health")

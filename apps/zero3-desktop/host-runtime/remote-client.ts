@@ -6,6 +6,7 @@ import type {
   Zero3RemoteLease,
   Zero3RemoteOutboxEnvelope,
   Zero3RemoteTask,
+  Zero3RemoteWorkerRpcLease,
   Zero3RemoteTaskState
 } from './remote-types'
 
@@ -193,6 +194,35 @@ export class Zero3RemoteClient {
         ...extension
       }
     }
+  }
+
+  async leaseWorkerRpc(waitSeconds = 25): Promise<Zero3RemoteWorkerRpcLease | null> {
+    const boundedWait = Math.max(1, Math.min(waitSeconds, 30))
+    const payload = await this.request('/api/host/v1/worker-rpc/lease', {
+      method: 'POST',
+      body: JSON.stringify({
+        node_id: this.config.nodeId,
+        wait_seconds: boundedWait,
+        capabilities: ['worker-protocol-v1']
+      })
+    }, (boundedWait + 10) * 1000)
+    if (payload == null) return null
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('worker RPC lease response must be an object or null')
+    return payload as Zero3RemoteWorkerRpcLease
+  }
+
+  async completeWorkerRpc(lease: Zero3RemoteWorkerRpcLease, result: unknown): Promise<void> {
+    await this.request(`/api/host/v1/worker-rpc/${encodeURIComponent(lease.request_id)}/complete`, {
+      method: 'POST',
+      body: JSON.stringify({ node_id: this.config.nodeId, lease_id: lease.lease_id, fencing_token: lease.fencing_token, result })
+    })
+  }
+
+  async failWorkerRpc(lease: Zero3RemoteWorkerRpcLease, error: string): Promise<void> {
+    await this.request(`/api/host/v1/worker-rpc/${encodeURIComponent(lease.request_id)}/fail`, {
+      method: 'POST',
+      body: JSON.stringify({ node_id: this.config.nodeId, lease_id: lease.lease_id, fencing_token: lease.fencing_token, error: error.slice(0, 4096) })
+    })
   }
 
   async renew(taskId: string, lease: Zero3RemoteLease): Promise<void> {
