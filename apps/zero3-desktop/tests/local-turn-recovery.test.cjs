@@ -23,6 +23,34 @@ function load(relative, globals, overrides) {
 }
 const recovery = load('ui-v2/conversations/local-turn-failure.ts')
 
+const quotaFailure = "执行失败：Claude CLI 执行失败：You've hit your session limit · resets 8:50am (Asia/Shanghai)（完整输出见 C:\\logs\\turn-failures.log）"
+
+test('Claude allowance exhaustion has specific copy and preserves reset time without confusing rate limits or auth', () => {
+  const notice = recovery.localTurnQuotaMessage('claude', quotaFailure)
+  assert.match(notice, /Claude 当前会话额度已用完/)
+  assert.match(notice, /8:50am \(Asia\/Shanghai\)/)
+  assert.doesNotMatch(notice, /执行失败|完整输出见|turn-failures/)
+  const wrapped = JSON.stringify({ is_error: true, result: "You've hit your weekly limit · resets Sep 12, 10am (UTC)" })
+  assert.match(recovery.localTurnQuotaMessage('claude', wrapped), /本周额度已用完.*Sep 12, 10am \(UTC\)/)
+  assert.match(recovery.localTurnQuotaMessage('claude', 'Usage limit exceeded'), /请在 Claude 中查看额度恢复时间/)
+  assert.match(recovery.localTurnQuotaMessage('claude', "You’ve hit your limit"), /使用额度已用完/)
+  for (const message of ['API Error: 429 Too many requests', 'rate_limit_error', 'maximum output token limit exceeded', '403 Request not allowed']) {
+    assert.equal(recovery.localTurnQuotaMessage('claude', message), null)
+  }
+  assert.equal(recovery.localTurnRecovery('claude', '403 Request not allowed'), 'auth')
+  assert.equal(recovery.localTurnQuotaMessage('codex', quotaFailure), null)
+  assert.equal(recovery.localTurnMessageText('claude', { role: 'user', content: quotaFailure }), quotaFailure)
+  assert.equal(recovery.localTurnMessageText('claude', { role: 'assistant', content: 'Usage limit exceeded' }), 'Usage limit exceeded')
+})
+
+test('historical quota failures show a useful sidebar preview without rewriting stored diagnostics', () => {
+  const store = sessionStore()
+  const session = store.create('claude', 'p1')
+  const failed = store.appendMessage(session.id, 'assistant', quotaFailure)
+  assert.match(store.toWorkspaceSession(failed).subtitle, /^Claude 当前会话额度已用完/)
+  assert.equal(store.get(session.id).messages.at(-1).content, quotaFailure)
+})
+
 test('recover historical Claude JSON and Codex progress-only errors', () => {
   const message = recovery.localTurnFailureMessage(new Error("Error invoking remote method 'zero3:session-providers:claude-turn': Error: " + JSON.stringify({ is_error: true, result: 'Failed to authenticate. API Error: 403 Request not allowed', usage: {} })))
   assert.equal(message, 'Failed to authenticate. API Error: 403 Request not allowed')
@@ -43,7 +71,7 @@ function sessionStore() {
   return load('ui-v2/adapters/LocalSessionAdapter.ts', {
     window: { localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) }, dispatchEvent() {} },
     CustomEvent: class {}, crypto: require('node:crypto').webcrypto
-  }).LocalSessionAdapter
+  }, { '../conversations/local-turn-failure': recovery }).LocalSessionAdapter
 }
 
 test('reset rejected model without losing messages, runtime id or project binding', () => {
@@ -175,4 +203,56 @@ test('the actual conversation restores a failed prompt, resets its model, and se
     dom.window.close()
     Object.assign(globalThis, before)
   }
+})
+
+test('Claude quota failure renders as allowance notice on saved and new turns, without offering login or clearing readiness', async () => {
+  const { JSDOM } = desktopRequire('jsdom')
+  const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost' })
+  const before = Object.fromEntries(['window', 'document', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, globalThis[key]]))
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true })
+  const React = desktopRequire('react')
+  const { render, fireEvent, cleanup, act } = desktopRequire('@testing-library/react')
+  const store = sessionStore()
+  const session = store.create('claude', 'p1')
+  store.setRuntimeId(session.id, 'existing-claude-session')
+  store.appendMessage(session.id, 'assistant', quotaFailure)
+  const { providerReadiness } = load('ui-v2/conversations/provider-readiness.ts', { window: dom.window })
+  providerReadiness.markReady('claude')
+  const requests = []
+  let fail = true
+  dom.window.zero3SessionProviders = { claudeTurn: async request => {
+    requests.push(request)
+    if (fail) throw new Error(quotaFailure)
+    return { text: '已恢复', sessionId: 'existing-claude-session' }
+  } }
+  const { LocalConversationSurface } = load('ui-v2/conversations/LocalConversationSurface.tsx', { window: dom.window }, {
+    react: React, 'react/jsx-runtime': desktopRequire('react/jsx-runtime'),
+    '@/components/ui/codicon': { Codicon: () => null },
+    '../adapters/LocalSessionAdapter': { LocalSessionAdapter: store },
+    '../adapters/ProjectLinkAdapter': { ProjectLinkAdapter: {} },
+    './provider-readiness': { providerReadiness }, './local-turn-failure': recovery
+  })
+  function Harness() {
+    const [current, setCurrent] = React.useState(store.get(session.id))
+    return React.createElement(LocalConversationSurface, { provider: 'claude', session: current, project: { id: 'p1', rootPath: 'C:/work' }, onChanged: () => setCurrent(store.get(session.id)) })
+  }
+  try {
+    const view = render(React.createElement(Harness))
+    const checkQuota = () => {
+      assert.match(view.getByRole('alert').textContent, /Claude 当前会话额度已用完.*8:50am \(Asia\/Shanghai\)/)
+      assert.equal(view.queryByRole('button', { name: '重新登录' }), null)
+      assert.doesNotMatch(view.container.textContent, /执行失败|完整输出见/)
+      assert.equal(providerReadiness.getSnapshot().statuses.claude.authenticated, true)
+    }
+    checkQuota()
+    fireEvent.change(view.getByRole('textbox'), { target: { value: '继续' } })
+    await act(async () => fireEvent.click(view.getByRole('button', { name: '发送' })))
+    checkQuota()
+    fail = false
+    fireEvent.change(view.getByRole('textbox'), { target: { value: '额度恢复后继续' } })
+    await act(async () => fireEvent.click(view.getByRole('button', { name: '发送' })))
+    assert.equal(view.queryByRole('alert'), null)
+    assert.equal(store.get(session.id).messages.at(-1).content, '已恢复')
+    assert.equal(requests[1].sessionId, 'existing-claude-session')
+  } finally { cleanup(); dom.window.close(); Object.assign(globalThis, before) }
 })
