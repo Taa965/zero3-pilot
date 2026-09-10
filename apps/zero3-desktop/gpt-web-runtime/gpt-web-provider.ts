@@ -91,7 +91,10 @@ const CHATGPT_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
 // height (rather than display:none) so Zero3 can invoke its native buttons and
 // ChatGPT can still position portaled menus/dialogs relative to those triggers.
 const CHATGPT_CHROME_CSS = '#stage-slideover-sidebar{display:none !important}'
-const CHATGPT_HEADER_CSS = `#page-header{
+// Only collapse ChatGPT's normal conversation header. Attachment/library
+// previews reuse #page-header for their own breadcrumb + download/close toolbar;
+// blanketing #page-header would make that toolbar invisible and trap the preview.
+const CHATGPT_HEADER_CSS = `#page-header:has([data-testid="share-chat-button"], [data-testid="conversation-options-button"]){
   height:0 !important;
   min-height:0 !important;
   padding:0 !important;
