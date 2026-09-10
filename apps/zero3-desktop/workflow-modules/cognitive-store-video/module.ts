@@ -49,7 +49,7 @@ export const cognitiveStoreVideoModule: WorkflowModule = {
     description: 'GPT 脚本重构 → GPT 视觉规划 → GPT 图片生产 → Zero3 接包 → 云端视频 → 本地回传',
     uiKind: 'cognitive-store-video',
     requiredExecutors: ['GPT_WEB', 'ZERO3', 'REMOTE_COMPUTE'],
-    requiredSkills: ['认知便利店脚本skill', '认知便利店视觉skill'],
+    requiredSkills: ['cognitive-store-script', 'cognitive-store-visual'],
     requiredPlugins: ['zero3-web-worker', 'google-drive'],
     requiredArtifactProviders: ['GOOGLE_DRIVE', 'LOCAL', 'REMOTE_COMPUTE']
   },
@@ -77,23 +77,23 @@ export const cognitiveStoreVideoModule: WorkflowModule = {
     const driveRootFolderId = input.drive?.rootFolderId?.trim() || null
     const stages = [
       { stageId: 'input-ingest', title: '输入上传', executor: 'ZERO3' as const, workerDefinitionId: null, dependsOn: [], expectedOutputs: [{ logicalName: '原始脚本', kind: 'script', required: true }], completionGate: ['input_artifact_available'], maxAttempts: 3, metadata: { targetStorage: 'GOOGLE_DRIVE' } },
-      { stageId: 'script-rewrite', title: '脚本重构', executor: 'GPT_WEB' as const, workerDefinitionId: 'script-worker', dependsOn: ['input-ingest'], expectedOutputs: [{ logicalName: '重构脚本.md', kind: 'markdown', mimeType: 'text/markdown', required: true }], completionGate: ['drive_file_id', 'non_empty'], maxAttempts: 3, metadata: {} },
+      { stageId: 'script-rewrite', title: '脚本重构', executor: 'GPT_WEB' as const, workerDefinitionId: 'script-worker', dependsOn: ['input-ingest'], expectedOutputs: [{ logicalName: '重构脚本.md', kind: 'markdown', mimeType: 'text/markdown', required: true }], completionGate: ['drive_file_id', 'non_empty'], maxAttempts: 3, metadata: { instruction: '读取当前 WorkItem 的原始脚本 Artifact，调用 cognitive-store-script Skill 完成认知便利店风格重构，并交付重构脚本.md。' } },
       { stageId: 'visual-plan', title: '视觉规划', executor: 'GPT_WEB' as const, workerDefinitionId: 'visual-worker', dependsOn: ['script-rewrite'], expectedOutputs: [
         { logicalName: '视觉内容.md', kind: 'markdown', mimeType: 'text/markdown', required: true },
         { logicalName: '导演审片单.md', kind: 'markdown', mimeType: 'text/markdown', required: true },
         { logicalName: '逐条完整提示词.md', kind: 'markdown', mimeType: 'text/markdown', required: true }
-      ], completionGate: ['all_visual_documents', 'drive_file_ids'], maxAttempts: 3, metadata: {} },
+      ], completionGate: ['all_visual_documents', 'drive_file_ids'], maxAttempts: 3, metadata: { instruction: '读取重构脚本.md，调用 cognitive-store-visual Skill 完成视觉规划，交付视觉内容.md、导演审片单.md、逐条完整提示词.md。' } },
       { stageId: 'image-production', title: '图片生产', executor: 'GPT_WEB' as const, workerDefinitionId: 'image-worker', dependsOn: ['visual-plan'], expectedOutputs: [
         { logicalName: 'overview.png', kind: 'image', mimeType: 'image/png', required: true },
         { logicalName: '交接包.zip', kind: 'handoff-package', mimeType: 'application/zip', required: true }
-      ], completionGate: ['overview_exists', 'image_count_matches', 'handoff_manifest_valid'], maxAttempts: 5, metadata: { maxImagesPerBatch: 10, batching: 'chapter' } },
+      ], completionGate: ['overview_exists', 'image_count_matches', 'handoff_manifest_valid'], maxAttempts: 5, metadata: { instruction: '先生成总览图，再按章节生成独立图片；每批最多 10 张，全部图片校验后生成交接包.zip。', maxImagesPerBatch: 10, batching: 'chapter' } },
       { stageId: 'local-ingest', title: '本地接包', executor: 'ZERO3' as const, workerDefinitionId: null, dependsOn: ['image-production'], expectedOutputs: [{ logicalName: 'local-handoff', kind: 'local-package', required: true }], completionGate: ['zip_valid', 'manifest_valid'], maxAttempts: 3, metadata: {} },
       { stageId: 'cloud-render', title: '云端视频生产', executor: 'REMOTE_COMPUTE' as const, workerDefinitionId: null, dependsOn: ['local-ingest'], expectedOutputs: [{ logicalName: '云端视频', kind: 'video', required: true }], completionGate: ['remote_terminal_success'], maxAttempts: 3, metadata: { executorId: input.cloud?.executorId ?? null, forbidBlindResubmit: true } },
       { stageId: 'pullback', title: '视频回传', executor: 'ZERO3' as const, workerDefinitionId: null, dependsOn: ['cloud-render'], expectedOutputs: [{ logicalName: 'final.mp4', kind: 'video', mimeType: 'video/mp4', required: true }], completionGate: ['downloaded', 'non_empty', 'technical_qc'], maxAttempts: 3, metadata: {} }
     ]
     const workers = [
-      { workerDefinitionId: 'script-worker', name: '脚本重构工位', executor: 'GPT_WEB' as const, concurrency: concurrency(input.workers?.script), capability: 'cognitive-store-script', promptRevision: COGNITIVE_STORE_SCRIPT_PROMPT_REVISION, skillId: '认知便利店脚本skill', maxItemsPerPhysicalSession: 10, rotateOnContextRisk: true, rotateOnStall: true, metadata: { prompt: COGNITIVE_STORE_SCRIPT_PROMPT } },
-      { workerDefinitionId: 'visual-worker', name: '视觉规划工位', executor: 'GPT_WEB' as const, concurrency: concurrency(input.workers?.visual), capability: 'cognitive-store-visual', promptRevision: COGNITIVE_STORE_VISUAL_PROMPT_REVISION, skillId: '认知便利店视觉skill', maxItemsPerPhysicalSession: 10, rotateOnContextRisk: true, rotateOnStall: true, metadata: { prompt: COGNITIVE_STORE_VISUAL_PROMPT } },
+      { workerDefinitionId: 'script-worker', name: '脚本重构工位', executor: 'GPT_WEB' as const, concurrency: concurrency(input.workers?.script), capability: 'cognitive-store-script', promptRevision: COGNITIVE_STORE_SCRIPT_PROMPT_REVISION, skillId: 'cognitive-store-script', maxItemsPerPhysicalSession: 10, rotateOnContextRisk: true, rotateOnStall: true, metadata: { prompt: COGNITIVE_STORE_SCRIPT_PROMPT } },
+      { workerDefinitionId: 'visual-worker', name: '视觉规划工位', executor: 'GPT_WEB' as const, concurrency: concurrency(input.workers?.visual), capability: 'cognitive-store-visual', promptRevision: COGNITIVE_STORE_VISUAL_PROMPT_REVISION, skillId: 'cognitive-store-visual', maxItemsPerPhysicalSession: 10, rotateOnContextRisk: true, rotateOnStall: true, metadata: { prompt: COGNITIVE_STORE_VISUAL_PROMPT } },
       { workerDefinitionId: 'image-worker', name: '图片生产工位', executor: 'GPT_WEB' as const, concurrency: concurrency(input.workers?.image), capability: 'cognitive-store-image', promptRevision: COGNITIVE_STORE_IMAGE_PROMPT_REVISION, maxItemsPerPhysicalSession: 5, rotateOnContextRisk: true, rotateOnStall: true, metadata: { prompt: COGNITIVE_STORE_IMAGE_PROMPT, maxImagesPerBatch: 10 } }
     ]
     const items = input.scripts.map((script, index) => {

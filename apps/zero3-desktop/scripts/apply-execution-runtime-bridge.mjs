@@ -7,6 +7,7 @@ import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 const executionSource = path.join(repoRoot, 'apps', 'zero3-desktop', 'execution-runtime')
 const workflowSource = path.join(repoRoot, 'apps', 'zero3-desktop', 'workflow-runtime')
 const workflowModulesSource = path.join(repoRoot, 'apps', 'zero3-desktop', 'workflow-modules')
+const workerV2Source = path.join(repoRoot, 'apps', 'zero3-desktop', 'worker-runtime', 'v2')
 const electronZero3 = path.join(hermesDesktopDir, 'electron', 'zero3')
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
@@ -137,6 +138,7 @@ export function applyExecutionRuntimeBridge() {
   copyProductionTree(executionSource, path.join(electronZero3, 'execution-runtime'))
   copyProductionTree(workflowSource, path.join(electronZero3, 'workflow-runtime'))
   copyProductionTree(workflowModulesSource, path.join(electronZero3, 'workflow-modules'))
+  copyProductionTree(workerV2Source, path.join(electronZero3, 'worker-runtime', 'v2'))
   patchFile('electron/main.ts', [
     {
       label: 'Execution runtime import boundary',

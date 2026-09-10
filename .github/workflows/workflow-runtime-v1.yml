@@ -48,6 +48,7 @@ jobs:
           node --experimental-transform-types --test
           apps/zero3-desktop/workflow-runtime/workflow-runtime.test.ts
           apps/zero3-desktop/workflow-runtime/artifact-router.test.ts
+          apps/zero3-desktop/workflow-runtime/worker-v2-adapter.test.ts
           apps/zero3-desktop/workflow-modules/cognitive-store-video/cognitive-store-video.test.ts
       - name: Task Center static UI contract
         run: node --test apps/zero3-desktop/tests/workflow-task-ui.test.cjs

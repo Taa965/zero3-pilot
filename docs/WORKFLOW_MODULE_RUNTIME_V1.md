@@ -41,7 +41,7 @@ The image rule (overview first, then per chapter with at most 10 images per batc
 
 ## Web workers
 
-The module declares logical WorkerDefinitions (`script-worker`, `visual-worker`, `image-worker`). The parallel GPT Worker Protocol v2 effort owns physical ChatGPT session binding, Claim/Lease, wakeup, and session rotation. The Workflow Runtime exposes item-level READY StageRuns so that worker infrastructure can claim work without learning module-specific business logic.
+The module declares logical WorkerDefinitions (`script-worker`, `visual-worker`, `image-worker`). `worker-v2-adapter.ts` projects those definitions and item-level READY/FIX_REQUIRED StageRuns into the shared Worker Protocol v2 `WorkflowWorkerBinding` and `WorkflowWorkUnit` contracts. The parallel GPT Worker Protocol v2 effort owns physical ChatGPT session binding, Claim/Lease, wakeup, and session rotation; the Task runtime remains authoritative for WorkflowRun/WorkItem/StageRun dependencies.
 
 ## Artifact transport
 
