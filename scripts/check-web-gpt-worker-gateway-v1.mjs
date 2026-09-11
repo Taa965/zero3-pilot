@@ -35,6 +35,7 @@ requireText(gateway, 'fencing_token', 'Cloud Worker RPC forwarding must preserve
 requireText(gateway, 'idempotencyKey', 'Cloud Worker RPC forwarding must preserve Worker Protocol idempotency keys.')
 requireText(gateway, 'DEFAULT_REQUEST_TTL_SECONDS', 'Cloud Worker RPC forwarding must have a bounded request lifetime.')
 requireText(gateway, 'ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE', 'Worker OAuth must use a dedicated owner secret file.')
+requireText(gateway, 'option_env!("ZERO3_WORKER_OAUTH_ISSUER_BUILD")', 'Immutable Worker OAuth releases must support a build-time public issuer without hard-coding a hostname.')
 requireText(gateway, 'oauth.validate_access_token', 'Worker MCP must accept scoped OAuth access tokens.')
 requireText(gateway, 'resource_metadata=', 'OAuth MCP challenges must advertise protected-resource metadata.')
 requireText(oauth, '/.well-known/oauth-protected-resource/mcp', 'OAuth must expose MCP protected-resource metadata.')

@@ -29,6 +29,7 @@ const MAX_ACTIVE_REQUESTS: usize = 1024;
 const MAX_WORKER_GATEWAY_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] = ["2025-03-26", "2025-06-18", "2025-11-25"];
+const BUILT_WORKER_OAUTH_ISSUER: Option<&str> = option_env!("ZERO3_WORKER_OAUTH_ISSUER_BUILD");
 const WORKER_CAPABILITY: &str = "worker-protocol-v1";
 const SKILL_CAPABILITY: &str = "codex-native-skills-v1";
 const SKILL_TOOLS: [&str; 4] = ["list_skills", "search_skills", "get_skill", "invoke_skill"];
@@ -203,15 +204,18 @@ impl WorkerGatewayRuntime {
         let host_file = required_env("ZERO3_HOST_TOKEN_FILE")?;
         let mcp_token = optional_secret_file("ZERO3_WORKER_MCP_TOKEN_FILE")?.map(Arc::new);
         let skill_mcp_token = optional_secret_file("ZERO3_SKILL_MCP_TOKEN_FILE")?.map(Arc::new);
-        let oauth_enabled = parse_bool(std::env::var("ZERO3_WORKER_OAUTH_ENABLED").ok().as_deref());
+        let oauth_issuer = resolve_oauth_issuer(
+            parse_bool(std::env::var("ZERO3_WORKER_OAUTH_ENABLED").ok().as_deref()),
+            std::env::var("ZERO3_WORKER_OAUTH_ISSUER").ok().as_deref(),
+            BUILT_WORKER_OAUTH_ISSUER,
+        )?;
         let target_node_id = required_env("ZERO3_WORKER_GATEWAY_NODE_ID")?;
         validate_id("ZERO3_WORKER_GATEWAY_NODE_ID", &target_node_id)
             .map_err(|error| anyhow::anyhow!(error.message))?;
         let root = std::env::var("ZERO3_WORKER_GATEWAY_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/var/lib/zero3-pilot/worker-gateway"));
-        let oauth = if oauth_enabled {
-            let issuer = required_env("ZERO3_WORKER_OAUTH_ISSUER")?;
+        let oauth = if let Some(issuer) = oauth_issuer {
             let owner_file = std::env::var("ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
@@ -1402,6 +1406,28 @@ fn mcp_error(id: Value, code: i64, message: &str) -> Response {
     )
         .into_response()
 }
+fn resolve_oauth_issuer(
+    runtime_enabled: bool,
+    runtime_issuer: Option<&str>,
+    built_issuer: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    let runtime = runtime_issuer
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let built = built_issuer
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(issuer) = runtime.or(built) {
+        return Ok(Some(issuer.to_string()));
+    }
+    if runtime_enabled {
+        anyhow::bail!(
+            "ZERO3_WORKER_OAUTH_ISSUER is required when Worker OAuth is enabled unless the release has ZERO3_WORKER_OAUTH_ISSUER_BUILD"
+        );
+    }
+    Ok(None)
+}
+
 fn parse_bool(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
         matches!(
@@ -1704,6 +1730,28 @@ mod tests {
             .unwrap();
         assert!(challenge.contains("/.well-known/oauth-protected-resource/mcp"));
         assert!(challenge.contains("zero3.worker"));
+    }
+
+    #[test]
+    fn oauth_issuer_resolution_supports_immutable_host_specific_releases() {
+        assert_eq!(resolve_oauth_issuer(false, None, None).unwrap(), None);
+        assert_eq!(
+            resolve_oauth_issuer(false, None, Some("https://built.example"))
+                .unwrap()
+                .as_deref(),
+            Some("https://built.example")
+        );
+        assert_eq!(
+            resolve_oauth_issuer(
+                true,
+                Some("https://runtime.example"),
+                Some("https://built.example")
+            )
+            .unwrap()
+            .as_deref(),
+            Some("https://runtime.example")
+        );
+        assert!(resolve_oauth_issuer(true, None, None).is_err());
     }
 
     #[test]

@@ -38,3 +38,10 @@ ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE=/etc/zero3-pilot/secrets/worker-oauth-owner
 ```
 
 `ZERO3_WORKER_MCP_TOKEN_FILE` may remain configured for server-side compatibility and smoke tests. ChatGPT should use OAuth after OAuth V1 is enabled.
+For immutable host-specific releases, the issuer can instead be baked into the binary at build time:
+
+```text
+ZERO3_WORKER_OAUTH_ISSUER_BUILD=https://pilot.example.com cargo build --release -p zero3-web
+```
+
+A baked issuer enables OAuth even when the runtime enable/issuer variables are absent. A runtime `ZERO3_WORKER_OAUTH_ISSUER` still takes precedence. This is intended for deployment artifacts whose public hostname is already fixed; generic builds remain OAuth-disabled by default.
