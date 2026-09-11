@@ -16,6 +16,7 @@ import {
 } from './config.mjs'
 import { applyZero3DataDirectory } from './apply-data-directory.mjs'
 import { applyDevelopmentGroupBridge } from './apply-development-group-bridge.mjs'
+import { ensureZero3WeixinBinary, runCargo, zero3WeixinBinary } from './rust-build.mjs'
 import { applyExecutionRuntimeBridge } from './apply-execution-runtime-bridge.mjs'
 import { applyZero3AgentLifecycleRuntime } from './apply-agent-lifecycle-runtime.mjs'
 
@@ -158,25 +159,11 @@ function ensurePinnedCodexBinary(env, profile = 'debug') {
   // directory, not from --manifest-path. The pinned Codex toolchain file lives
   // in codex-rs/, so running from codexRoot silently falls back to whatever the
   // machine's default toolchain is instead of the pinned compiler.
-  runSync('cargo', args, { cwd: path.join(codexRoot, 'codex-rs'), env })
+  runCargo(args, { cwd: path.join(codexRoot, 'codex-rs'), env })
 
   if (!isFile(binary)) {
     throw new Error(`Pinned Codex binary was not produced at ${binary}`)
   }
-  return binary
-}
-
-function zero3WeixinBinary(profile = 'debug') {
-  const executable = process.platform === 'win32' ? 'zero3-pilot-weixin.exe' : 'zero3-pilot-weixin'
-  return path.join(repoRoot, 'target', profile === 'release' ? 'release' : 'debug', executable)
-}
-
-function ensureZero3WeixinBinary(env, profile = 'debug') {
-  const binary = zero3WeixinBinary(profile)
-  const args = ['build', '-p', 'zero3-weixin']
-  if (profile === 'release') args.push('--release')
-  runSync('cargo', args, { cwd: repoRoot, env })
-  if (!isFile(binary)) throw new Error(`Zero3 Weixin binary was not produced at ${binary}`)
   return binary
 }
 
@@ -370,10 +357,10 @@ let codexBinary
 let weixinBinary
 if (mode === 'dev') {
   codexBinary = ensurePinnedCodexBinary(baseEnv, 'debug')
-  weixinBinary = ensureZero3WeixinBinary(baseEnv, 'debug')
+  weixinBinary = ensureZero3WeixinBinary({ repoRoot, env: baseEnv, desktopReload: process.argv.includes('--desktop-reload') })
 } else if (mode === 'dist:win') {
   codexBinary = ensurePinnedCodexBinary(baseEnv, 'release')
-  weixinBinary = ensureZero3WeixinBinary(baseEnv, 'release')
+  weixinBinary = ensureZero3WeixinBinary({ repoRoot, env: baseEnv, profile: 'release' })
   stagePinnedCodexForWindowsPackage(codexBinary)
   stageZero3WeixinForWindowsPackage(weixinBinary)
   stageZero3RobotResourcesForWindowsPackage()
@@ -381,7 +368,7 @@ if (mode === 'dev') {
   runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-windows-package.mjs')])
 } else {
   codexBinary = pinnedCodexBinary('debug')
-  weixinBinary = zero3WeixinBinary('debug')
+  weixinBinary = zero3WeixinBinary(repoRoot, 'debug')
 }
 
 const env = {
