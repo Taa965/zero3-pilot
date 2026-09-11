@@ -22,10 +22,16 @@ export function matchesTask(task: ExecutionTaskSnapshot, filter: TaskFilter, que
   if (filter === 'completed') return task.runtime.task.status === 'completed'
   return true
 }
-export function makeStep(title: string, executor: StepDraft['executor'], dependsOn: string[] = []): StepDraft {
+export function makeStep(
+  title: string,
+  executor: StepDraft['executor'],
+  dependsOn: string[] = [],
+  requiredSkills: string[] = [],
+  optionalSkills: string[] = []
+): StepDraft {
   if (!title.trim()) throw new Error('请填写步骤目标')
   return { stepId: `step-${crypto.randomUUID()}`, title: title.trim(), objective: title.trim(), executor,
-    dependsOn, inputArtifacts: [], expectedOutputs: [], completionGate: ['human_review'], maxAttempts: 3, metadata: {} }
+    dependsOn, requiredSkills, optionalSkills, inputArtifacts: [], expectedOutputs: [], completionGate: ['human_review'], maxAttempts: 3, metadata: {} }
 }
 export function makeTask(title: string, goal: string, projectId: string | null, steps: StepDraft[]): TaskInput {
   if (!title.trim() || !goal.trim() || steps.length === 0) throw new Error('请填写任务名称、目标和至少一个步骤')

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
-import type { ExecutionExecutorTarget, ExecutionSessionBindingState, ExecutionStepStatus } from '../contracts.ts'
+import type { ExecutionExecutorTarget, ExecutionSessionBindingState, ExecutionSkillPreflight, ExecutionStepDefinition, ExecutionStepStatus, ExecutionTaskDefinition } from '../contracts.ts'
 import { Zero3ExecutionReporterHttpServer } from '../reporter-http.ts'
 import { Zero3ExecutionReporter } from '../reporter.ts'
 import { Zero3ExecutionRuntime, type BindExecutionSessionInput, type CreateExecutionTaskInput } from '../runtime.ts'
@@ -13,11 +13,17 @@ import type {
   ExecutionReporterTicketRequest
 } from './desktop-port.ts'
 
+export interface ExecutionSkillCapabilityProvider {
+  preflight(task: ExecutionTaskDefinition, step: ExecutionStepDefinition): Promise<ExecutionSkillPreflight>
+  matrix(): Promise<unknown>
+}
+
 export interface ExecutionDesktopRuntimeOptions {
   reporterClientPath: string
   reporterClientKind: 'node' | 'powershell'
   nodeExecutable?: string
   powershellExecutable?: string
+  skillCapabilityProvider?: ExecutionSkillCapabilityProvider
 }
 
 function loadOrCreateSecret(file: string): Buffer {
@@ -76,6 +82,29 @@ export class Zero3ExecutionDesktopRuntime implements ExecutionDesktopPort {
     }
   }
 
+  async skillCapabilities(): Promise<unknown> {
+    return this.#options.skillCapabilityProvider?.matrix() ?? { agents: [], unavailable: true }
+  }
+
+  async refreshSkillPreflight(taskId: string): Promise<unknown> {
+    const provider = this.#options.skillCapabilityProvider
+    if (!provider) return this.runtime.snapshot(taskId)
+    const snapshot = await this.runtime.snapshot(taskId)
+    const terminal = new Set(['completed', 'cancelled', 'failed', 'outcome_unknown'])
+    for (const step of snapshot.definition.steps) {
+      const current = snapshot.runtime.steps.find(item => item.stepId === step.stepId)
+      if (!current || terminal.has(current.status)) continue
+      const preflight = await provider.preflight(snapshot.definition.task, step)
+      await this.runtime.recordSkillPreflight(taskId, step.stepId, preflight)
+    }
+    return this.runtime.snapshot(taskId)
+  }
+
+  async reconcileReadiness(taskId: string): Promise<unknown> {
+    await this.refreshSkillPreflight(taskId)
+    return this.runtime.reconcileReadiness(taskId)
+  }
+
   async listTasks(): Promise<unknown> {
     const ids = await this.store.listTaskIds()
     return Promise.all(ids.map(taskId => this.runtime.snapshot(taskId)))
@@ -92,6 +121,17 @@ export class Zero3ExecutionDesktopRuntime implements ExecutionDesktopPort {
     executor: Exclude<ExecutionExecutorTarget, 'AUTO'>,
     executorId: string | null = null
   ): Promise<unknown> { return this.runtime.createAssignment(taskId, stepId, executor, executorId) }
+  async createRoutedAssignment(taskId: string, stepId: string, executorId: string | null = null): Promise<unknown> {
+    await this.refreshSkillPreflight(taskId)
+    const snapshot = await this.runtime.snapshot(taskId)
+    const definition = snapshot.definition.steps.find(step => step.stepId === stepId)
+    const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
+    if (!definition || !current) throw new Error(`execution step not found: ${stepId}`)
+    const target = definition.executor === 'AUTO' ? current.skillPreflight?.executor : definition.executor
+    if (!target) throw new Error(`step ${stepId} has no Skill-capable routed executor`)
+    return this.runtime.createAssignment(taskId, stepId, target, executorId)
+  }
+
   bindSession(assignmentId: string, input: BindExecutionSessionInput): Promise<unknown> {
     return this.runtime.bindSession(assignmentId, input)
   }

@@ -8,12 +8,13 @@ import { makeStep, makeTask, percent, requiredOutputGaps, statusLabel, taskArtif
 
 const inputClass = 'w-full rounded border border-(--ui-border) bg-background p-2 text-sm'
 const buttonClass = 'rounded border border-(--ui-border) px-3 py-1.5 text-sm hover:bg-(--ui-control-hover-background) disabled:cursor-not-allowed disabled:opacity-40'
-const executors: ExecutionExecutorTarget[] = ['CODEX', 'GPT_WEB', 'GEMINI_WEB', 'CLAUDE', 'ANTIGRAVITY', 'ZERO3', 'REMOTE_COMPUTE', 'HUMAN']
+const executors: ExecutionExecutorTarget[] = ['AUTO', 'CODEX', 'GPT_WEB', 'GEMINI_WEB', 'CLAUDE', 'ANTIGRAVITY', 'ZERO3', 'REMOTE_COMPUTE', 'HUMAN']
+const skillList = (value: string) => [...new Set(value.split(/[，,\n]/u).map(item => item.trim()).filter(Boolean))]
 const tabs = [['overview', '总览'], ['execution', '执行过程'], ['changes', '代码变更'], ['artifacts', '产物'], ['verification', '验证'], ['review', '审核'], ['timeline', '时间轴']]
 const gateLabels: Record<string, string> = { human_review: '人工审核', required_outputs: '必需产物齐全' }
 const eventLabels: Record<string, string> = {
   'task.created': '创建任务', 'task.state_changed': '任务状态更新', 'step.added': '添加步骤',
-  'step.state_changed': '步骤状态更新', 'assignment.created': '创建执行分配', 'session.bound': '绑定会话',
+  'step.state_changed': '步骤状态更新', 'assignment.created': '创建执行分配', 'skill.preflight': 'Skill 能力预检', 'session.bound': '绑定会话',
   'session.state_changed': '会话状态更新', 'progress.updated': '进度回报', 'artifact.produced': '产物回报',
   'completion.requested': '提交审核', 'gate.passed': '审核通过', 'gate.failed': '要求修改',
   blocked: '标记阻塞', waiting_human: '转人工', outcome_unknown: '结果未知', 'task.completed': '任务完成'
@@ -41,12 +42,16 @@ function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
   const [title, setTitle] = useState('')
   const [goal, setGoal] = useState('')
   const [stepText, setStepText] = useState('')
-  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('CODEX')
+  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('AUTO')
+  const [requiredSkills, setRequiredSkills] = useState('')
+  const [optionalSkills, setOptionalSkills] = useState('')
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     let id = ''
     const success = await mutate(async () => {
-      const steps = stepText.split('\n').map(line => line.trim()).filter(Boolean).map(line => makeStep(line, executor))
+      const required = skillList(requiredSkills)
+      const optional = skillList(optionalSkills)
+      const steps = stepText.split('\n').map(line => line.trim()).filter(Boolean).map(line => makeStep(line, executor, [], required, optional))
       for (let i = 1; i < steps.length; i++) steps[i].dependsOn = [steps[i - 1].stepId]
       const input = makeTask(title, goal, project?.id ?? null, steps)
       id = input.task.taskId
@@ -60,6 +65,8 @@ function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
     <label className="block space-y-1 text-sm"><span>任务名称</span><input required value={title} onChange={event => setTitle(event.target.value)} className={inputClass} /></label>
     <label className="block space-y-1 text-sm"><span>目标与验收要求</span><textarea required rows={4} value={goal} onChange={event => setGoal(event.target.value)} className={inputClass} /></label>
     <label className="block space-y-1 text-sm"><span>执行方</span><select value={executor} onChange={event => setExecutor(event.target.value as ExecutionExecutorTarget)} className={inputClass}>{executors.map(item => <option key={item}>{item}</option>)}</select></label>
+    <label className="block space-y-1 text-sm"><span>Required Skills（逗号分隔）</span><input value={requiredSkills} onChange={event => setRequiredSkills(event.target.value)} placeholder="cognitive-store-script" className={inputClass} /></label>
+    <label className="block space-y-1 text-sm"><span>Optional Skills（逗号分隔）</span><input value={optionalSkills} onChange={event => setOptionalSkills(event.target.value)} placeholder="可留空" className={inputClass} /></label>
     <label className="block space-y-1 text-sm"><span>步骤（每行一个，按顺序执行）</span><textarea required rows={5} value={stepText} onChange={event => setStepText(event.target.value)} className={inputClass} /></label>
     <div className="flex gap-2"><button disabled={busy} className={buttonClass}>{busy ? '正在保存…' : '创建任务'}</button><button type="button" disabled={busy} onClick={() => setCreating(false)} className={buttonClass}>取消</button></div>
   </form>
@@ -68,13 +75,17 @@ function AddStep({ snapshot }: { snapshot: ExecutionTaskSnapshot }) {
   const { busy, mutate } = useTasks()
   const [title, setTitle] = useState('')
   const [dependency, setDependency] = useState('')
-  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('CODEX')
+  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('AUTO')
+  const [requiredSkills, setRequiredSkills] = useState('')
+  const [optionalSkills, setOptionalSkills] = useState('')
   return <form className="space-y-2 rounded border border-(--ui-border) p-3" onSubmit={event => {
     event.preventDefault()
-    void mutate(() => taskBridge().addSteps(snapshot.definition.task.taskId, [makeStep(title, executor, dependency ? [dependency] : [])])).then(ok => { if (ok) setTitle('') })
+    void mutate(() => taskBridge().addSteps(snapshot.definition.task.taskId, [makeStep(title, executor, dependency ? [dependency] : [], skillList(requiredSkills), skillList(optionalSkills))])).then(ok => { if (ok) { setTitle(''); setRequiredSkills(''); setOptionalSkills('') } })
   }}>
     <h3 className="text-sm font-medium">添加步骤</h3>
     <input aria-label="新增步骤目标" required value={title} onChange={event => setTitle(event.target.value)} placeholder="步骤目标" className={inputClass} />
+    <input aria-label="新增步骤 Required Skills" value={requiredSkills} onChange={event => setRequiredSkills(event.target.value)} placeholder="Required Skills，逗号分隔" className={inputClass} />
+    <input aria-label="新增步骤 Optional Skills" value={optionalSkills} onChange={event => setOptionalSkills(event.target.value)} placeholder="Optional Skills，逗号分隔" className={inputClass} />
     <div className="flex flex-wrap gap-2">
       <select aria-label="新增步骤执行方" value={executor} onChange={event => setExecutor(event.target.value as ExecutionExecutorTarget)} className={inputClass}>{executors.map(item => <option key={item}>{item}</option>)}</select>
       <select aria-label="前置步骤" value={dependency} onChange={event => setDependency(event.target.value)} className={inputClass}><option value="">无前置步骤</option>{snapshot.definition.steps.map(step => <option key={step.stepId} value={step.stepId}>{step.title}</option>)}</select>
@@ -88,7 +99,7 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
   const state = snapshot.runtime.steps.find(item => item.stepId === stepId)!
   const [reason, setReason] = useState('')
   const [sessionId, setSessionId] = useState('')
-  const [executor, setExecutor] = useState<ExecutionExecutorTarget>(step.executor === 'AUTO' ? 'CODEX' : step.executor)
+  const routedExecutor = state.skillPreflight?.executor ?? null
   const transitions = allowedStepTransitions(state.status)
   const terminal = ['completed', 'cancelled'].includes(snapshot.runtime.task.status)
   const gaps = requiredOutputGaps(snapshot, stepId)
@@ -96,10 +107,21 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
   const bindings = snapshot.runtime.sessionBindings.filter(item => item.assignmentId === state.assignmentId)
   const dependencyCancelled = state.status === 'waiting_dependency' && step.dependsOn.some(id => snapshot.runtime.steps.find(item => item.stepId === id)?.status === 'cancelled')
   const run =(operation: () => Promise<unknown>) => { void mutate(operation).then(ok => { if (ok) setReason('') }) }
+  const assign = async () => {
+    const bridge = taskBridge()
+    await bridge.refreshSkillPreflight(snapshot.definition.task.taskId)
+    if (step.executor === 'AUTO') return bridge.createRoutedAssignment(snapshot.definition.task.taskId, stepId)
+    return bridge.createAssignment(snapshot.definition.task.taskId, stepId, step.executor)
+  }
   return <article className="space-y-3 rounded-lg border border-(--ui-border) p-4">
     <div className="flex flex-wrap justify-between gap-2"><h3 className="text-sm font-medium">{step.title}</h3><span className="text-xs text-blue-500">{statusLabel(state.status)} · {percent(state.progress)}</span></div>
     <p className="whitespace-pre-wrap text-sm text-(--ui-text-secondary)">{step.objective}</p>
     <p className="text-xs text-(--ui-text-secondary)">{step.executor} · 尝试 {state.attempt}/{step.maxAttempts} · 前置：{step.dependsOn.map(id => snapshot.definition.steps.find(item => item.stepId === id)?.title ?? id).join('、') || '无'}</p>
+    {!!(step.requiredSkills?.length || step.optionalSkills?.length) && <div className="flex flex-wrap gap-1 text-[10px]">
+      {(step.requiredSkills ?? []).map(skill => <span key={`r:${skill}`} className="rounded bg-blue-500/10 px-1.5 py-0.5 text-blue-500">必需 · {skill}</span>)}
+      {(step.optionalSkills ?? []).map(skill => <span key={`o:${skill}`} className="rounded bg-(--ui-control-active-background) px-1.5 py-0.5 text-(--ui-text-secondary)">可选 · {skill}</span>)}
+    </div>}
+    {state.skillPreflight && <p className={`text-xs ${state.skillPreflight.state === 'blocked' ? 'text-amber-500' : 'text-(--ui-text-secondary)'}`}>Skill 预检：{state.skillPreflight.state} · {state.skillPreflight.adapterMode} · 推荐 {state.skillPreflight.executor ?? '未路由'}{state.skillPreflight.missingRequiredSkills.length ? ` · 缺少 ${state.skillPreflight.missingRequiredSkills.join('、')}` : ''}</p>}
     {state.currentActivity && <p className="text-sm">{state.currentActivity}</p>}
     {state.blocker && <p className="whitespace-pre-wrap text-sm text-amber-500">{state.blocker}</p>}
     {dependencyCancelled && <p className="text-sm text-amber-500">前置步骤已取消，此步骤无法开始；如不再需要，请填写说明后取消此步骤。</p>}
@@ -111,9 +133,11 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
     </> : <>
       {bindings.map(binding => <p key={binding.bindingId} className="break-all text-xs">会话：{binding.logicalSessionId} · {binding.state}</p>)}
       {!terminal && ['ready', 'fix_required'].includes(state.status) && <div className="space-y-2">
-        <select aria-label={`${step.title}执行方`} value={executor} disabled={step.executor !== 'AUTO'} onChange={event => setExecutor(event.target.value as ExecutionExecutorTarget)} className={inputClass}>{executors.map(item => <option key={item}>{item}</option>)}</select>
-        <button type="button" disabled={busy || state.attempt >= step.maxAttempts} className={buttonClass} onClick={() => run(() => taskBridge().createAssignment(snapshot.definition.task.taskId, stepId, executor))}>分配执行</button>
-        <p className="text-xs text-(--ui-text-secondary)">分配会记录一次执行尝试；执行方启动后由回报更新进度。</p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={busy} className={buttonClass} onClick={() => run(() => taskBridge().refreshSkillPreflight(snapshot.definition.task.taskId))}>重新预检 Skill</button>
+          <button type="button" disabled={busy || state.attempt >= step.maxAttempts} className={buttonClass} onClick={() => run(assign)}>{step.executor === 'AUTO' ? `自动路由并分配${routedExecutor ? ` · ${routedExecutor}` : ''}` : `预检并分配 · ${step.executor}`}</button>
+        </div>
+        <p className="text-xs text-(--ui-text-secondary)">Required Skills 未通过预检时禁止分配；AUTO 只使用能力预检推荐的 Agent。</p>
       </div>}
       {!terminal && assignment && !['completed', 'cancelled', 'failed'].includes(state.status) && !bindings.some(binding => binding.state !== 'closed') && <form className="flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); run(() => taskBridge().bindSession(assignment.assignmentId, { logicalSessionId: sessionId.trim() })) }}>
         <input required aria-label={`${step.title}会话编号`} value={sessionId} onChange={event => setSessionId(event.target.value)} placeholder="执行方的真实会话编号" className={inputClass} />
@@ -154,7 +178,7 @@ export function TaskWorkspace({ project = null }: { project?: Zero3ProjectRecord
         <h3 className="font-medium">目标与验收要求</h3><p className="whitespace-pre-wrap text-sm">{task.goal}</p>
         <div className="grid gap-3 text-sm sm:grid-cols-2"><p>项目：{task.projectId ?? '无项目'}</p><p>工作流：{task.workflowId ?? '自定义任务'}</p><p>步骤：{snapshot.runtime.steps.filter(step => step.status === 'completed').length}/{snapshot.runtime.steps.length} 已完成</p><p>最大并行步骤：{task.maxParallelSteps}</p><p>创建：{new Date(task.createdAt).toLocaleString()}</p><p>更新：{new Date(snapshot.runtime.task.updatedAt).toLocaleString()}</p></div>
         {[...snapshot.runtime.task.blockers, ...snapshot.runtime.steps.flatMap(step => step.blocker ? [step.blocker] : [])].map((blocker, index) => <p key={index} className="text-sm text-amber-500">{blocker}</p>)}
-        <h3 className="font-medium">步骤状态</h3>{snapshot.definition.steps.map(step => <div key={step.stepId} className="flex justify-between gap-3 border-b border-(--ui-border) py-2 text-sm"><span>{step.title}</span><span>{statusLabel(snapshot.runtime.steps.find(item => item.stepId === step.stepId)!.status)}</span></div>)}
+        <h3 className="font-medium">步骤状态</h3>{snapshot.definition.steps.map(step => { const state = snapshot.runtime.steps.find(item => item.stepId === step.stepId)!; return <div key={step.stepId} className="space-y-1 border-b border-(--ui-border) py-2 text-sm"><div className="flex justify-between gap-3"><span>{step.title}</span><span>{statusLabel(state.status)}</span></div>{!!step.requiredSkills?.length && <div className="text-xs text-blue-500">Required Skills：{step.requiredSkills.join('、')}</div>}{state.skillPreflight?.executor && <div className="text-xs text-(--ui-text-tertiary)">推荐 Agent：{state.skillPreflight.executor} · {state.skillPreflight.adapterMode}</div>}</div>})}
       </>}
       {(activeTab === 'execution' || activeTab === 'review') && <>
         {snapshot.definition.steps.length === 0 && <p className="text-sm text-(--ui-text-secondary)">尚未添加步骤。</p>}

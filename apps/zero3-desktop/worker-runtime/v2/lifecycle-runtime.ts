@@ -20,6 +20,7 @@ type Snapshot = any
 export type LifecycleExecutionPort = {
   listTasks(): Promise<Snapshot[]>
   getTask(taskId: string): Promise<Snapshot>
+  refreshSkillPreflight?(taskId: string): Promise<Snapshot>
   createTask(input: Record<string, unknown>): Promise<Snapshot>
   createAssignment(taskId: string, stepId: string, executor: 'GPT_WEB', executorId?: string | null): Promise<any>
   bindSession(assignmentId: string, input: Record<string, unknown>): Promise<any>
@@ -206,6 +207,7 @@ export class Zero3AgentLifecycleRuntime {
     if (taskId !== session.taskId) throw new Error('session is bound to a different task')
     const key = input.idempotencyKey ?? input.idempotency_key
     return this.mutate(`task:${taskId}`, async () => this.idempotent(`task:${taskId}:session:${session.sessionId}`, key, 'task.claim', { taskId, sessionId: session.sessionId }, async () => {
+      if (this.execution.refreshSkillPreflight) await this.execution.refreshSkillPreflight(taskId)
       const snapshot = await this.execution.getTask(taskId)
       if (TERMINAL_TASKS.has(snapshot.runtime.task.status)) throw new Error(`task is terminal: ${snapshot.runtime.task.status}`)
       const current = this.store.activeClaimForSession(session.sessionId)
@@ -221,7 +223,12 @@ export class Zero3AgentLifecycleRuntime {
       const runtimeById = new Map(snapshot.runtime.steps.map((step: any) => [step.stepId, step]))
       const definition = capacity > 0 ? snapshot.definition.steps.find((step: any) => {
         const runtime = runtimeById.get(step.stepId) as any
-        return runtime && ['ready', 'fix_required'].includes(runtime.status) && ['GPT_WEB', 'AUTO'].includes(step.executor)
+        if (!runtime || !['ready', 'fix_required'].includes(runtime.status)) return false
+        if (step.executor === 'GPT_WEB') return true
+        if (step.executor !== 'AUTO') return false
+        const requiredSkills = Array.isArray(step.requiredSkills) ? step.requiredSkills : []
+        if (requiredSkills.length === 0) return true
+        return runtime.skillPreflight?.state === 'ready' && runtime.skillPreflight?.executor === 'GPT_WEB' && !(runtime.skillPreflight?.missingRequiredSkills?.length ?? 0)
       }) : null
       const at = nowIso(this.clock)
       let stepId: string | null = null

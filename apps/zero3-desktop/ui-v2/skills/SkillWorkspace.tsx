@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { SkillAdapter, type SkillBinding, type SkillRecord } from './SkillAdapter'
+import { SkillAdapter, type AgentSkillCapabilityMatrix, type SkillBinding, type SkillRecord } from './SkillAdapter'
 import { SkillInstallPanel } from './SkillInstallPanel'
 
 export function SkillWorkspace({ cwd }: { cwd: string | null }) {
@@ -13,16 +13,19 @@ export function SkillWorkspace({ cwd }: { cwd: string | null }) {
   const [detail, setDetail] = useState('')
   const [targetType, setTargetType] = useState<'agent' | 'workflow' | 'task-template'>('agent')
   const [targetId, setTargetId] = useState('CODEX')
+  const [capabilities, setCapabilities] = useState<AgentSkillCapabilityMatrix>({ agents: [] })
 
   const refresh = useCallback(async (forceReload = false) => {
     setLoading(true)
     try {
-      const [snapshot, nextBindings] = await Promise.all([
+      const [snapshot, nextBindings, nextCapabilities] = await Promise.all([
         SkillAdapter.list(cwd, forceReload),
-        SkillAdapter.listBindings()
+        SkillAdapter.listBindings(),
+        SkillAdapter.capabilityMatrix()
       ])
       setItems(snapshot.items)
       setBindings(nextBindings)
+      setCapabilities(nextCapabilities)
       setSelectedPath(current => current && snapshot.items.some(item => item.path === current) ? current : null)
       setError(snapshot.errors.length ? snapshot.errors.join('\n') : null)
     } catch (cause) {
@@ -83,6 +86,20 @@ export function SkillWorkspace({ cwd }: { cwd: string | null }) {
         </div>
 
         <SkillInstallPanel cwd={cwd} onFinished={installationFinished} />
+
+        <section className="rounded-lg border border-(--ui-border) bg-background p-4">
+          <div className="font-medium">Agent Capability Matrix</div>
+          <div className="mt-1 text-xs text-(--ui-text-secondary)">显示每个 Agent 当前是否可用、使用哪种 Skill Adapter、可见 Skill 数量与显式绑定。</div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {(capabilities.agents ?? []).map(agent => (
+              <div key={agent.executor} className="rounded border border-(--ui-border) bg-(--ui-pane-background) p-3">
+                <div className="flex items-center gap-2 text-sm"><span className="font-medium">{agent.executor}</span><span className={`rounded px-1.5 py-0.5 text-[10px] ${agent.available ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-400'}`}>{agent.available ? '可用' : '不可用'}</span><span className="ml-auto text-[10px] text-(--ui-text-tertiary)">{agent.adapterMode}</span></div>
+                <div className="mt-2 text-xs text-(--ui-text-secondary)">可见 Skill：{agent.skillCount}</div>
+                <div className="mt-2 flex flex-wrap gap-1">{agent.boundSkills.map(skill => <span key={skill} className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-500">{skill}</span>)}{!agent.boundSkills.length && <span className="text-[10px] text-(--ui-text-tertiary)">无显式 Agent Binding</span>}</div>
+              </div>
+            ))}
+          </div>
+        </section>
 
         <input className="w-full rounded-md border border-(--ui-border) bg-background px-3 py-2 text-sm outline-none focus:border-blue-500" placeholder="搜索 Skill 名称、说明或路径" value={query} onChange={event => setQuery(event.target.value)} />
         {error && <pre className="whitespace-pre-wrap rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">{error}</pre>}

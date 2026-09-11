@@ -175,3 +175,73 @@ test('dynamic DAG expansion is revisioned and event ledger exposes crash-replay 
     assert.equal(reconcile.eventCount, reconcile.stateEventSequence + 1)
   })
 })
+
+test('required Skills gate scheduler dispatch and assignment creation', async () => {
+  await withRuntime(async runtime => {
+    const gated = { ...step('skill-gated', [], 'AUTO'), requiredSkills: ['cognitive-store-script'] }
+    const created = await runtime.createTask(taskInput([gated]))
+    const before = planExecutionSchedule({ steps: created.definition.steps, runtimes: created.runtime.steps, maxParallelSteps: 1 })
+    assert.deepEqual(before.dispatchableStepIds, [])
+    assert.deepEqual(before.capabilityBlockedStepIds, ['skill-gated'])
+    await assert.rejects(runtime.createAssignment('video-001', 'skill-gated', 'CODEX'), /required Skills have not passed preflight/)
+
+    await runtime.recordSkillPreflight('video-001', 'skill-gated', {
+      state: 'blocked', executor: 'CODEX', adapterMode: 'native',
+      requiredSkills: ['cognitive-store-script'], optionalSkills: [],
+      availableRequiredSkills: [], availableOptionalSkills: [],
+      missingRequiredSkills: ['cognitive-store-script'], missingOptionalSkills: [],
+      checkedAt: new Date().toISOString()
+    })
+    await assert.rejects(runtime.createAssignment('video-001', 'skill-gated', 'CODEX'), /required Skills have not passed preflight/)
+
+    await runtime.recordSkillPreflight('video-001', 'skill-gated', {
+      state: 'ready', executor: 'CODEX', adapterMode: 'native',
+      requiredSkills: ['cognitive-store-script'], optionalSkills: [],
+      availableRequiredSkills: ['cognitive-store-script'], availableOptionalSkills: [],
+      missingRequiredSkills: [], missingOptionalSkills: [], checkedAt: new Date().toISOString()
+    })
+    const snapshot = await runtime.snapshot('video-001')
+    const after = planExecutionSchedule({ steps: snapshot.definition.steps, runtimes: snapshot.runtime.steps, maxParallelSteps: 1 })
+    assert.deepEqual(after.dispatchableStepIds, ['skill-gated'])
+    assert.equal(after.recommendedExecutorByStep['skill-gated'], 'CODEX')
+    await assert.rejects(runtime.createAssignment('video-001', 'skill-gated', 'CLAUDE'), /recommends CODEX/)
+    const assignment = await runtime.createAssignment('video-001', 'skill-gated', 'CODEX')
+    assert.equal(assignment.executor, 'CODEX')
+  })
+})
+
+test('cognitive-store workflow releases visual planning only after its own Skill preflight', async () => {
+  await withRuntime(async runtime => {
+    const created = await runtime.createTask(taskInput([
+      { ...step('script-rewrite', [], 'AUTO'), requiredSkills: ['cognitive-store-script'] },
+      { ...step('visual-plan', ['script-rewrite'], 'AUTO'), requiredSkills: ['cognitive-store-visual'] }
+    ], 1))
+    assert.equal(created.runtime.steps.find(item => item.stepId === 'visual-plan')?.status, 'waiting_dependency')
+    await runtime.recordSkillPreflight('video-001', 'script-rewrite', {
+      state: 'ready', executor: 'CODEX', adapterMode: 'native',
+      requiredSkills: ['cognitive-store-script'], optionalSkills: [],
+      availableRequiredSkills: ['cognitive-store-script'], availableOptionalSkills: [],
+      missingRequiredSkills: [], missingOptionalSkills: [], checkedAt: new Date().toISOString()
+    })
+    await runtime.createAssignment('video-001', 'script-rewrite', 'CODEX')
+    await runtime.transitionStep('video-001', 'script-rewrite', 'running')
+    await runtime.requestCompletion('video-001', 'script-rewrite')
+    const released = await runtime.gatePassed('video-001', 'script-rewrite')
+    assert.equal(released.runtime.steps.find(item => item.stepId === 'visual-plan')?.status, 'ready')
+    const blockedPlan = planExecutionSchedule({ steps: released.definition.steps, runtimes: released.runtime.steps, maxParallelSteps: 1 })
+    assert.deepEqual(blockedPlan.capabilityBlockedStepIds, ['visual-plan'])
+
+    await runtime.recordSkillPreflight('video-001', 'visual-plan', {
+      state: 'ready', executor: 'CLAUDE', adapterMode: 'instruction-adapter',
+      requiredSkills: ['cognitive-store-visual'], optionalSkills: [],
+      availableRequiredSkills: ['cognitive-store-visual'], availableOptionalSkills: [],
+      missingRequiredSkills: [], missingOptionalSkills: [], checkedAt: new Date().toISOString()
+    })
+    const ready = await runtime.snapshot('video-001')
+    const readyPlan = planExecutionSchedule({ steps: ready.definition.steps, runtimes: ready.runtime.steps, maxParallelSteps: 1 })
+    assert.deepEqual(readyPlan.dispatchableStepIds, ['visual-plan'])
+    assert.equal(readyPlan.recommendedExecutorByStep['visual-plan'], 'CLAUDE')
+    const assignment = await runtime.createAssignment('video-001', 'visual-plan', 'CLAUDE')
+    assert.equal(assignment.executor, 'CLAUDE')
+  })
+})

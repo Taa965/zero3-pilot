@@ -14,6 +14,14 @@ function text(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0
 }
 
+function skillSelectors(value: readonly string[] | undefined, label: string, errors: string[]): void {
+  if (value == null) return
+  if (!Array.isArray(value) || value.length > 32) { errors.push(`${label} must contain at most 32 items`); return }
+  const normalized = value.map(item => typeof item === 'string' ? item.trim() : '')
+  if (normalized.some(item => !item || item.length > 256 || item.includes('\0'))) errors.push(`${label} contains an invalid selector`)
+  if (new Set(normalized).size !== normalized.length) errors.push(`${label} contains duplicates`)
+}
+
 export function validateExecutionWorkflowDefinition(definition: ExecutionWorkflowDefinition): readonly string[] {
   const errors: string[] = []
   const task = definition.task
@@ -21,6 +29,7 @@ export function validateExecutionWorkflowDefinition(definition: ExecutionWorkflo
   if (!text(task.taskId)) errors.push('taskId is required')
   if (!text(task.title)) errors.push('task title is required')
   if (!text(task.goal)) errors.push('task goal is required')
+  if (task.workspace != null && !text(task.workspace)) errors.push('task workspace must be null or non-empty')
   if (!Number.isSafeInteger(definition.revision) || definition.revision < 1) errors.push('workflow revision must be a positive integer')
   if (!Number.isSafeInteger(task.maxParallelSteps) || task.maxParallelSteps < 1 || task.maxParallelSteps > 256) {
     errors.push('maxParallelSteps must be an integer between 1 and 256')
@@ -32,6 +41,10 @@ export function validateExecutionWorkflowDefinition(definition: ExecutionWorkflo
     if (!text(step.title)) errors.push(`${step.stepId} title is required`)
     if (!text(step.objective)) errors.push(`${step.stepId} objective is required`)
     if (!EXECUTORS.has(step.executor)) errors.push(`${step.stepId} executor is invalid`)
+    skillSelectors(step.requiredSkills, `${step.stepId} requiredSkills`, errors)
+    skillSelectors(step.optionalSkills, `${step.stepId} optionalSkills`, errors)
+    const required = new Set((step.requiredSkills ?? []).map(item => item.trim()))
+    for (const optional of step.optionalSkills ?? []) if (required.has(optional.trim())) errors.push(`${step.stepId} Skill cannot be both required and optional: ${optional}`)
     if (!Number.isSafeInteger(step.maxAttempts) || step.maxAttempts < 1 || step.maxAttempts > 100) errors.push(`${step.stepId} maxAttempts must be between 1 and 100`)
     if (new Set(step.dependsOn).size !== step.dependsOn.length) errors.push(`${step.stepId} has duplicate dependencies`)
     for (const input of step.inputArtifacts) if (!text(input.logicalName)) errors.push(`${step.stepId} has an input artifact without logicalName`)

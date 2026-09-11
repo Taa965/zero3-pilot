@@ -2,9 +2,13 @@ import type { ExecutionTaskSnapshot } from '../../execution-runtime/contracts.ts
 import type { TaskInput } from './task-model.ts'
 export interface TaskBridge {
   listTasks(): Promise<unknown>
+  skillCapabilities(): Promise<unknown>
+  refreshSkillPreflight(taskId: string): Promise<unknown>
+  reconcileReadiness(taskId: string): Promise<unknown>
   createTask(input: TaskInput): Promise<unknown>
   addSteps(taskId: string, steps: Record<string, unknown>[]): Promise<unknown>
   createAssignment(taskId: string, stepId: string, executor: string): Promise<unknown>
+  createRoutedAssignment(taskId: string, stepId: string, executorId?: string | null): Promise<unknown>
   bindSession(assignmentId: string, input: Record<string, unknown>): Promise<unknown>
   transitionStep(taskId: string, stepId: string, status: string, reason?: string): Promise<unknown>
   gatePassed(taskId: string, stepId: string, evidence?: Record<string, unknown>): Promise<unknown>

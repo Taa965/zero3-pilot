@@ -11,6 +11,8 @@ export interface ExecutionSchedulePlan {
   dispatchableStepIds: readonly string[]
   dependencyReadyStepIds: readonly string[]
   waitingStepIds: readonly string[]
+  capabilityBlockedStepIds: readonly string[]
+  recommendedExecutorByStep: Readonly<Record<string, string>>
 }
 
 export function validateExecutionDag(steps: readonly ExecutionStepDefinition[]): readonly string[] {
@@ -68,23 +70,33 @@ export function planExecutionSchedule(input: {
   for (const runtime of input.runtimes) if (!input.steps.some(step => step.stepId === runtime.stepId)) errors.push(`orphan runtime ${runtime.stepId}`)
   if (!Number.isInteger(input.maxParallelSteps) || input.maxParallelSteps < 1) errors.push('maxParallelSteps must be a positive integer')
   if (errors.length > 0) {
-    return { valid: false, errors: [...new Set(errors)].sort(), activeCount: 0, capacity: 0, dispatchableStepIds: [], dependencyReadyStepIds: [], waitingStepIds: [] }
+    return { valid: false, errors: [...new Set(errors)].sort(), activeCount: 0, capacity: 0, dispatchableStepIds: [], dependencyReadyStepIds: [], waitingStepIds: [], capabilityBlockedStepIds: [], recommendedExecutorByStep: {} }
   }
 
   const activeCount = input.runtimes.filter(runtime => ACTIVE_STATUSES.has(runtime.status)).length
   const capacity = Math.max(0, input.maxParallelSteps - activeCount)
   const dependencyReadyStepIds: string[] = []
   const waitingStepIds: string[] = []
+  const capabilityBlockedStepIds: string[] = []
+  const recommendedExecutorByStep: Record<string, string> = {}
   for (const step of input.steps) {
     const runtime = runtimeById.get(step.stepId)!
     if (!READINESS_STATUSES.has(runtime.status)) continue
-    if (dependencyReady(step, runtimeById)) dependencyReadyStepIds.push(step.stepId)
-    else waitingStepIds.push(step.stepId)
+    if (dependencyReady(step, runtimeById)) {
+      dependencyReadyStepIds.push(step.stepId)
+      const requiredSkills = step.requiredSkills ?? []
+      const preflight = runtime.skillPreflight
+      if (requiredSkills.length > 0 && (!preflight || preflight.state !== 'ready' || preflight.missingRequiredSkills.length > 0)) {
+        capabilityBlockedStepIds.push(step.stepId)
+      }
+      if (preflight?.executor) recommendedExecutorByStep[step.stepId] = preflight.executor
+    } else waitingStepIds.push(step.stepId)
   }
+  const blocked = new Set(capabilityBlockedStepIds)
   const dispatchableStepIds = dependencyReadyStepIds
-    .filter(stepId => runtimeById.get(stepId)?.status === 'ready')
+    .filter(stepId => runtimeById.get(stepId)?.status === 'ready' && !blocked.has(stepId))
     .slice(0, capacity)
-  return { valid: true, errors: [], activeCount, capacity, dispatchableStepIds, dependencyReadyStepIds, waitingStepIds }
+  return { valid: true, errors: [], activeCount, capacity, dispatchableStepIds, dependencyReadyStepIds, waitingStepIds, capabilityBlockedStepIds, recommendedExecutorByStep }
 }
 
 export function computeTaskProgress(runtimes: readonly ExecutionStepRuntime[]): number {

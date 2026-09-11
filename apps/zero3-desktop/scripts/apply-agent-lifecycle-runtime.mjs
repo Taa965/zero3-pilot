@@ -75,6 +75,7 @@ const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(
   {
     listTasks: async () => await zero3ExecutionRuntime.listTasks() as any[],
     getTask: taskId => zero3ExecutionRuntime.getTask(taskId),
+    refreshSkillPreflight: taskId => zero3ExecutionRuntime.refreshSkillPreflight(taskId) as any,
     createTask: input => zero3ExecutionRuntime.createTask(input as any),
     createAssignment: (taskId, stepId, executor, executorId) => zero3ExecutionRuntime.createAssignment(taskId, stepId, executor, executorId),
     bindSession: (assignmentId, input) => zero3ExecutionRuntime.bindSession(assignmentId, input as any),

@@ -12,6 +12,7 @@ import {
   type ExecutionExecutorTarget,
   type ExecutionRuntimeState,
   type ExecutionSessionBinding,
+  type ExecutionSkillPreflight,
   type ExecutionSessionBindingState,
   type ExecutionStepDefinition,
   type ExecutionStepRuntime,
@@ -62,11 +63,19 @@ function boundedProgress(value: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
+function initialSkillPreflight(step: ExecutionStepDefinition): ExecutionSkillPreflight | null {
+  const requiredSkills = [...(step.requiredSkills ?? [])]
+  const optionalSkills = [...(step.optionalSkills ?? [])]
+  if (requiredSkills.length || optionalSkills.length) return null
+  return { state: 'not_required', executor: step.executor === 'AUTO' ? null : step.executor, adapterMode: 'unsupported', requiredSkills, optionalSkills, availableRequiredSkills: [], availableOptionalSkills: [], missingRequiredSkills: [], missingOptionalSkills: [], checkedAt: step.createdAt }
+}
+
 function initialStepRuntime(step: ExecutionStepDefinition, completed: ReadonlySet<string> = new Set()): ExecutionStepRuntime {
   return {
     taskId: step.taskId,
     stepId: step.stepId,
     status: step.dependsOn.every(id => completed.has(id)) ? 'ready' : 'waiting_dependency',
+    skillPreflight: initialSkillPreflight(step),
     attempt: 0,
     assignmentId: null,
     progress: 0,
@@ -277,6 +286,28 @@ export class Zero3ExecutionRuntime {
     })
   }
 
+  async recordSkillPreflight(taskId: string, stepId: string, preflight: ExecutionSkillPreflight): Promise<ExecutionTaskSnapshot> {
+    return this.mutate(taskId, async () => {
+      const snapshot = await this.store.loadSnapshot(taskId)
+      const definition = snapshot.definition.steps.find(step => step.stepId === stepId)
+      const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
+      if (!definition || !current) throw new Error(`execution step not found: ${stepId}`)
+      const required = [...(definition.requiredSkills ?? [])]
+      const optional = [...(definition.optionalSkills ?? [])]
+      if (JSON.stringify(required) !== JSON.stringify([...preflight.requiredSkills]) || JSON.stringify(optional) !== JSON.stringify([...preflight.optionalSkills])) {
+        throw new Error(`Skill preflight contract mismatch for step ${stepId}`)
+      }
+      if (!Number.isFinite(new Date(preflight.checkedAt).getTime())) throw new Error('Skill preflight checkedAt is invalid')
+      if (preflight.state === 'ready' && preflight.missingRequiredSkills.length > 0) throw new Error('ready Skill preflight cannot contain missing required Skills')
+      const blocker = preflight.missingRequiredSkills.length > 0 ? `Missing required Skills: ${preflight.missingRequiredSkills.join(', ')}` : null
+      let runtime: ExecutionRuntimeState = { ...snapshot.runtime, steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? { ...step, skillPreflight: structuredClone(preflight), blocker } : step) }
+      const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'skill.preflight', payload: { state: preflight.state, executor: preflight.executor, adapterMode: preflight.adapterMode, requiredSkills: preflight.requiredSkills, optionalSkills: preflight.optionalSkills, availableRequiredSkills: preflight.availableRequiredSkills, missingRequiredSkills: preflight.missingRequiredSkills, missingOptionalSkills: preflight.missingOptionalSkills } })
+      runtime = refreshDerived(recorded.runtime)
+      await this.store.writeSnapshot(snapshot.definition, runtime)
+      return this.snapshot(taskId)
+    })
+  }
+
   async createAssignment(taskId: string, stepId: string, executor: Exclude<ExecutionExecutorTarget, 'AUTO'>, executorId: string | null = null): Promise<ExecutionAssignment> {
     return this.mutate(taskId, async () => {
       const snapshot = await this.store.loadSnapshot(taskId)
@@ -284,6 +315,12 @@ export class Zero3ExecutionRuntime {
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!definition || !current) throw new Error(`execution step not found: ${stepId}`)
       if (['completed', 'cancelled', 'failed'].includes(snapshot.runtime.task.status)) throw new Error('cannot assign a terminal task')
+      const requiredSkills = definition.requiredSkills ?? []
+      if (requiredSkills.length > 0) {
+        const preflight = current.skillPreflight
+        if (!preflight || preflight.state !== 'ready' || preflight.missingRequiredSkills.length > 0) throw new Error(`step ${stepId} required Skills have not passed preflight`)
+        if (preflight.executor !== executor) throw new Error(`step ${stepId} Skill preflight recommends ${preflight.executor ?? 'no executor'}, not ${executor}`)
+      }
       if (current.status !== 'ready' && current.status !== 'fix_required') throw new Error(`step ${stepId} is not assignable while ${current.status}`)
       if (current.attempt >= definition.maxAttempts) throw new Error(`step ${stepId} attempt budget exhausted`)
       if (!dependencyReady(definition, stepMap(snapshot.runtime))) throw new Error('step dependencies are not completed')

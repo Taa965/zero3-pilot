@@ -71,6 +71,9 @@ function ticketRequest(value: unknown): ExecutionReporterTicketRequest {
 export function registerExecutionDesktopIpc(port: ExecutionDesktopPort): () => void {
   const channels = Object.values(EXECUTION_DESKTOP_CHANNELS)
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.runtimeCapabilities, () => port.runtimeCapabilities())
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.skillCapabilities, () => port.skillCapabilities())
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.refreshSkillPreflight, (_event, taskId: unknown) => port.refreshSkillPreflight(id(taskId, 'taskId')))
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.reconcileReadiness, (_event, taskId: unknown) => port.reconcileReadiness(id(taskId, 'taskId')))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.listTasks, () => port.listTasks())
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.getTask, (_event, taskId: unknown) => port.getTask(id(taskId, 'taskId')))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.createTask, (_event, input: unknown) =>
@@ -79,6 +82,8 @@ export function registerExecutionDesktopIpc(port: ExecutionDesktopPort): () => v
     port.addSteps(id(taskId, 'taskId'), array(steps, 'steps').map(item => record(item, 'step'))))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.createAssignment, (_event, taskId: unknown, stepId: unknown, target: unknown, executorId: unknown) =>
     port.createAssignment(id(taskId, 'taskId'), id(stepId, 'stepId'), executor(target), executorId == null ? null : text(executorId, 'executorId', 512)))
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.createRoutedAssignment, (_event, taskId: unknown, stepId: unknown, executorId: unknown) =>
+    port.createRoutedAssignment(id(taskId, 'taskId'), id(stepId, 'stepId'), executorId == null ? null : text(executorId, 'executorId', 512)))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.bindSession, (_event, assignmentId: unknown, input: unknown) =>
     port.bindSession(id(assignmentId, 'assignmentId'), record(input, 'session binding') as unknown as BindExecutionSessionInput))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.updateSessionState, (_event, taskId: unknown, bindingId: unknown, state: unknown) =>

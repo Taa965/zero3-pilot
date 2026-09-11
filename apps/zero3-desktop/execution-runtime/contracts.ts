@@ -63,6 +63,7 @@ export interface ExecutionTaskDefinition {
   contract: typeof ZERO3_EXECUTION_TASK
   taskId: string
   projectId: string | null
+  workspace?: string | null
   title: string
   goal: string
   workflowId: string | null
@@ -90,6 +91,8 @@ export interface ExecutionStepDefinition {
   objective: string
   executor: ExecutionExecutorTarget
   dependsOn: readonly string[]
+  requiredSkills?: readonly string[]
+  optionalSkills?: readonly string[]
   inputArtifacts: readonly ExecutionArtifactInput[]
   expectedOutputs: readonly ExecutionExpectedOutput[]
   completionGate: readonly string[]
@@ -98,10 +101,27 @@ export interface ExecutionStepDefinition {
   createdAt: string
 }
 
+export type ExecutionSkillAdapterMode = 'native' | 'instruction-adapter' | 'web-mcp' | 'unsupported'
+export type ExecutionSkillPreflightState = 'not_required' | 'ready' | 'blocked'
+
+export interface ExecutionSkillPreflight {
+  state: ExecutionSkillPreflightState
+  executor: Exclude<ExecutionExecutorTarget, 'AUTO'> | null
+  adapterMode: ExecutionSkillAdapterMode
+  requiredSkills: readonly string[]
+  optionalSkills: readonly string[]
+  availableRequiredSkills: readonly string[]
+  availableOptionalSkills: readonly string[]
+  missingRequiredSkills: readonly string[]
+  missingOptionalSkills: readonly string[]
+  checkedAt: string
+}
+
 export interface ExecutionStepRuntime {
   taskId: string
   stepId: string
   status: ExecutionStepStatus
+  skillPreflight?: ExecutionSkillPreflight | null
   attempt: number
   assignmentId: string | null
   progress: number
@@ -146,6 +166,7 @@ export type ExecutionEventType =
   | 'step.added'
   | 'step.state_changed'
   | 'assignment.created'
+  | 'skill.preflight'
   | 'session.bound'
   | 'session.state_changed'
   | 'progress.updated'

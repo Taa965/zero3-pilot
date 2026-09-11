@@ -62,9 +62,21 @@ export const SkillAdapter = {
     return window.zero3Codex.skills.bindings.upsert(input)
   },
   removeBinding(bindingId: string) { return window.zero3Codex.skills.bindings.remove({ bindingId }) },
+  async capabilityMatrix(): Promise<AgentSkillCapabilityMatrix> {
+    return await window.zero3Execution.skillCapabilities() as AgentSkillCapabilityMatrix
+  },
   subscribe(onChanged: () => void): () => void {
     return window.zero3Codex.onEvent(event => {
       if (event.kind === 'notification' && event.method === 'skills/changed') onChanged()
     })
   }
 }
+
+export type AgentSkillCapability = {
+  executor: string
+  adapterMode: string
+  available: boolean
+  skillCount: number
+  boundSkills: string[]
+}
+export type AgentSkillCapabilityMatrix = { generatedAt?: string; agents?: AgentSkillCapability[] }

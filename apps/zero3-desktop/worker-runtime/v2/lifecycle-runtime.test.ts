@@ -59,6 +59,7 @@ async function fixture() {
   const port = {
     listTasks: async () => Promise.all((await execution.store.listTaskIds()).map(taskId => execution.snapshot(taskId))),
     getTask: (taskId: string) => execution.snapshot(taskId),
+    refreshSkillPreflight: (taskId: string) => execution.snapshot(taskId),
     createTask: (input: any) => execution.createTask(input),
     createAssignment: (taskId: string, stepId: string, executor: 'GPT_WEB', executorId?: string | null) => execution.createAssignment(taskId, stepId, executor, executorId),
     bindSession: (assignmentId: string, input: any) => execution.bindSession(assignmentId, input),
@@ -236,4 +237,40 @@ test('task.complete can atomically register supplied artifacts before completion
     assert.equal(artifacts[0].artifactId, 'art-bundled')
     assert.equal(artifacts[0].logicalName, 'script_01.md')
   } finally { await cleanup(value) }
+})
+
+test('AUTO step routed by Skill preflight to Codex cannot be claimed by a Web GPT session', async () => {
+  const value = await fixture()
+  try {
+    await value.execution.createTask({
+      task: {
+        taskId: 'skill-routed', projectId: 'project-1', title: 'Skill routed task', goal: 'Route by Skill', workflowId: 'workflow-1',
+        maxParallelSteps: 1, createdBySessionId: null, metadata: { agentClaimMode: 'exclusive' }
+      },
+      steps: [{
+        stepId: 'script', title: 'Script', objective: 'Rewrite with Skill', executor: 'AUTO', dependsOn: [],
+        requiredSkills: ['cognitive-store-script'], inputArtifacts: [], expectedOutputs: [],
+        completionGate: [], maxAttempts: 2, metadata: {}
+      }]
+    })
+    await value.execution.recordSkillPreflight('skill-routed', 'script', {
+      state: 'ready', executor: 'CODEX', adapterMode: 'native',
+      requiredSkills: ['cognitive-store-script'], optionalSkills: [],
+      availableRequiredSkills: ['cognitive-store-script'], availableOptionalSkills: [],
+      missingRequiredSkills: [], missingOptionalSkills: [], checkedAt: new Date().toISOString()
+    })
+    await value.runtime.sessionStart({
+      agent_type: 'web_gpt', session_id: 'gpt-skill-route', project_id: 'project-1', task_id: 'skill-routed',
+      idempotency_key: 'start-skill-route'
+    })
+    const claimed = await value.runtime.taskClaim({
+      session_id: 'gpt-skill-route', task_id: 'skill-routed', idempotency_key: 'claim-skill-route'
+    })
+    assert.equal(claimed.state, 'WAITING')
+    assert.equal(claimed.claim.stepId, null)
+    const snapshot = await value.execution.snapshot('skill-routed')
+    assert.equal(snapshot.runtime.assignments.length, 0)
+  } finally {
+    await cleanup(value)
+  }
 })
