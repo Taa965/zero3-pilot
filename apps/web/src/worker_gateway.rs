@@ -18,6 +18,8 @@ use uuid::Uuid;
 
 const DEFAULT_LEASE_TTL_SECONDS: i64 = 30;
 const DEFAULT_REQUEST_TTL_SECONDS: i64 = 120;
+const SKILL_LEASE_TTL_SECONDS: i64 = 15 * 60;
+const SKILL_REQUEST_TTL_SECONDS: i64 = 20 * 60;
 const DEFAULT_MCP_WAIT_SECONDS: u64 = 28;
 const MAX_LONG_POLL_SECONDS: u64 = 30;
 const LONG_POLL_INTERVAL_MS: u64 = 200;
@@ -26,6 +28,8 @@ const MAX_WORKER_GATEWAY_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] = ["2025-03-26", "2025-06-18", "2025-11-25"];
 const WORKER_CAPABILITY: &str = "worker-protocol-v1";
+const SKILL_CAPABILITY: &str = "codex-native-skills-v1";
+const SKILL_TOOLS: [&str; 4] = ["list_skills", "search_skills", "get_skill", "invoke_skill"];
 const WORKER_TOOLS: [&str; 18] = [
     "register_worker",
     "claim_work",
@@ -51,6 +55,7 @@ pub struct WorkerGatewayRuntime {
     gateway: Option<Arc<WorkerGateway>>,
     host_token: Option<Arc<String>>,
     mcp_token: Option<Arc<String>>,
+    skill_mcp_token: Option<Arc<String>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,9 +74,15 @@ impl WorkerRequestState {
     }
 }
 
+fn default_worker_capability() -> String {
+    WORKER_CAPABILITY.to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkerRpcRecord {
     request_id: String,
+    #[serde(default = "default_worker_capability")]
+    capability: String,
     target_node_id: String,
     tool: String,
     arguments: Value,
@@ -90,6 +101,7 @@ struct WorkerRpcRecord {
 #[derive(Debug, Clone, Serialize)]
 struct WorkerRpcLease {
     request_id: String,
+    capability: String,
     lease_id: String,
     fencing_token: u64,
     lease_expires_at: String,
@@ -174,10 +186,15 @@ impl WorkerGatewayRuntime {
                 gateway: None,
                 host_token: None,
                 mcp_token: None,
+                skill_mcp_token: None,
             });
         }
         let host_file = required_env("ZERO3_HOST_TOKEN_FILE")?;
-        let mcp_file = required_env("ZERO3_WORKER_MCP_TOKEN_FILE")?;
+        let mcp_token = optional_secret_file("ZERO3_WORKER_MCP_TOKEN_FILE")?.map(Arc::new);
+        let skill_mcp_token = optional_secret_file("ZERO3_SKILL_MCP_TOKEN_FILE")?.map(Arc::new);
+        if mcp_token.is_none() && skill_mcp_token.is_none() {
+            anyhow::bail!("ZERO3_WORKER_MCP_TOKEN_FILE or ZERO3_SKILL_MCP_TOKEN_FILE is required when Zero3 RPC Gateway is enabled");
+        }
         let target_node_id = required_env("ZERO3_WORKER_GATEWAY_NODE_ID")?;
         validate_id("ZERO3_WORKER_GATEWAY_NODE_ID", &target_node_id)
             .map_err(|error| anyhow::anyhow!(error.message))?;
@@ -187,7 +204,8 @@ impl WorkerGatewayRuntime {
         Ok(Self {
             gateway: Some(Arc::new(WorkerGateway::open(root, target_node_id)?)),
             host_token: Some(Arc::new(read_secret_file(&host_file)?)),
-            mcp_token: Some(Arc::new(read_secret_file(&mcp_file)?)),
+            mcp_token,
+            skill_mcp_token,
         })
     }
 
@@ -204,6 +222,7 @@ impl WorkerGatewayRuntime {
 pub fn router(runtime: WorkerGatewayRuntime) -> Router {
     Router::new()
         .route("/mcp", post(mcp_handler))
+        .route("/mcp/skills", post(skill_mcp_handler))
         .route("/api/host/v1/worker-rpc/lease", post(worker_lease))
         .route(
             "/api/host/v1/worker-rpc/:request_id/complete",
@@ -237,7 +256,16 @@ impl WorkerGateway {
         })
     }
     fn submit(&self, tool: &str, arguments: Value) -> Result<WorkerRpcRecord, ApiError> {
-        validate_tool(tool)?;
+        self.submit_for(WORKER_CAPABILITY, tool, arguments)
+    }
+
+    fn submit_for(
+        &self,
+        capability: &str,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<WorkerRpcRecord, ApiError> {
+        validate_tool_for(capability, tool)?;
         if !arguments.is_object() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -245,7 +273,7 @@ impl WorkerGateway {
             ));
         }
         let fingerprint = serde_json::to_string(&arguments).map_err(ApiError::internal)?;
-        let dedupe_key = request_dedupe_key(tool, &arguments);
+        let dedupe_key = request_dedupe_key(capability, tool, &arguments);
         let mut state = self.state.lock().unwrap();
         self.refresh_locked(&mut state)?;
         if let Some(key) = &dedupe_key {
@@ -276,7 +304,16 @@ impl WorkerGateway {
         }
         let now = Utc::now();
         let record = WorkerRpcRecord {
-            request_id: format!("wrpc-{}", Uuid::new_v4()),
+            request_id: format!(
+                "{}-{}",
+                if capability == SKILL_CAPABILITY {
+                    "srpc"
+                } else {
+                    "wrpc"
+                },
+                Uuid::new_v4()
+            ),
+            capability: capability.to_string(),
             target_node_id: self.target_node_id.clone(),
             tool: tool.to_string(),
             arguments,
@@ -290,7 +327,12 @@ impl WorkerGateway {
             error: None,
             created_at: now,
             updated_at: now,
-            expires_at: now + self.request_ttl,
+            expires_at: now
+                + if capability == SKILL_CAPABILITY {
+                    Duration::seconds(SKILL_REQUEST_TTL_SECONDS)
+                } else {
+                    self.request_ttl
+                },
         };
         self.persist(&record).map_err(ApiError::internal)?;
         state
@@ -299,6 +341,14 @@ impl WorkerGateway {
         Ok(record)
     }
     fn try_lease(&self, node_id: &str) -> Result<Option<WorkerRpcLease>, ApiError> {
+        self.try_lease_for(node_id, &[WORKER_CAPABILITY.to_string()])
+    }
+
+    fn try_lease_for(
+        &self,
+        node_id: &str,
+        capabilities: &[String],
+    ) -> Result<Option<WorkerRpcLease>, ApiError> {
         if node_id != self.target_node_id {
             return Err(ApiError::new(
                 StatusCode::FORBIDDEN,
@@ -311,7 +361,11 @@ impl WorkerGateway {
             .requests
             .values()
             .filter(|record| {
-                record.state == WorkerRequestState::Queued && record.target_node_id == node_id
+                record.state == WorkerRequestState::Queued
+                    && record.target_node_id == node_id
+                    && capabilities
+                        .iter()
+                        .any(|capability| capability == &record.capability)
             })
             .min_by_key(|record| (record.created_at, record.request_id.clone()))
             .map(|record| record.request_id.clone());
@@ -331,12 +385,20 @@ impl WorkerGateway {
                 "worker RPC fencing token overflow",
             )
         })?;
-        record.lease_expires_at = Some(Utc::now() + self.lease_ttl);
+        record.lease_expires_at = Some(
+            Utc::now()
+                + if record.capability == SKILL_CAPABILITY {
+                    Duration::seconds(SKILL_LEASE_TTL_SECONDS)
+                } else {
+                    self.lease_ttl
+                },
+        );
         record.updated_at = Utc::now();
         self.persist(&record).map_err(ApiError::internal)?;
         state.requests.insert(request_id, record.clone());
         Ok(Some(WorkerRpcLease {
             request_id: record.request_id,
+            capability: record.capability,
             lease_id: record.lease_id.expect("lease set"),
             fencing_token: record.fencing_token,
             lease_expires_at: record
@@ -445,6 +507,19 @@ impl WorkerGateway {
         let ids: Vec<String> = state.requests.keys().cloned().collect();
         for id in ids {
             let mut record = state.requests.get(&id).cloned().expect("request exists");
+            if record.state.is_terminal() && record.expires_at <= now {
+                let path = self
+                    .root
+                    .join("requests")
+                    .join(format!("{}.json", record.request_id));
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(ApiError::internal(error)),
+                }
+                state.requests.remove(&id);
+                continue;
+            }
             let before = record.state;
             if !record.state.is_terminal() && record.expires_at <= now {
                 record.state = WorkerRequestState::Expired;
@@ -487,11 +562,11 @@ async fn worker_lease(
     if !body
         .capabilities
         .iter()
-        .any(|capability| capability == WORKER_CAPABILITY)
+        .any(|capability| capability == WORKER_CAPABILITY || capability == SKILL_CAPABILITY)
     {
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "worker-protocol-v1 capability is required",
+            "a supported worker RPC capability is required",
         ));
     }
     let gateway = runtime.gateway()?;
@@ -501,7 +576,7 @@ async fn worker_lease(
         .clamp(1, MAX_LONG_POLL_SECONDS);
     let deadline = Instant::now() + StdDuration::from_secs(wait_seconds);
     loop {
-        if let Some(lease) = gateway.try_lease(&body.node_id)? {
+        if let Some(lease) = gateway.try_lease_for(&body.node_id, &body.capabilities)? {
             return Ok(Json(Some(lease)));
         }
         if Instant::now() >= deadline {
@@ -657,6 +732,109 @@ async fn mcp_call_tool(
         sleep(StdDuration::from_millis(LONG_POLL_INTERVAL_MS)).await;
     }
 }
+async fn skill_mcp_handler(
+    State(runtime): State<WorkerGatewayRuntime>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    require_skill_mcp(&runtime, &headers)?;
+    validate_mcp_origin(&headers)?;
+    validate_mcp_protocol_header(&headers)?;
+    let request = body.as_object().ok_or_else(|| {
+        ApiError::new(StatusCode::BAD_REQUEST, "MCP request must be a JSON object")
+    })?;
+    if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return Ok(mcp_error(
+            request.get("id").cloned().unwrap_or(Value::Null),
+            -32600,
+            "Invalid Request",
+        ));
+    }
+    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    match method {
+        "initialize" => {
+            let requested = request
+                .get("params")
+                .and_then(Value::as_object)
+                .and_then(|params| params.get("protocolVersion"))
+                .and_then(Value::as_str);
+            let protocol = requested
+                .filter(|version| SUPPORTED_MCP_PROTOCOL_VERSIONS.contains(version))
+                .unwrap_or(MCP_PROTOCOL_VERSION);
+            Ok(mcp_result(
+                id,
+                json!({
+                    "protocolVersion": protocol,
+                    "capabilities": {"tools": {"listChanged": false}},
+                    "serverInfo": {"name": "zero3-codex-skills", "version": env!("CARGO_PKG_VERSION")}
+                }),
+            ))
+        }
+        "notifications/initialized" | "notifications/cancelled" => {
+            Ok(StatusCode::ACCEPTED.into_response())
+        }
+        "ping" => Ok(mcp_result(id, json!({}))),
+        "tools/list" => Ok(mcp_result(id, json!({"tools": skill_tool_catalog()}))),
+        "tools/call" => skill_mcp_call_tool(runtime, id, request.get("params")).await,
+        _ => Ok(mcp_error(id, -32601, "Method not found")),
+    }
+}
+
+async fn skill_mcp_call_tool(
+    runtime: WorkerGatewayRuntime,
+    id: Value,
+    params: Option<&Value>,
+) -> Result<Response, ApiError> {
+    let params = params.and_then(Value::as_object).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "tools/call params must be an object",
+        )
+    })?;
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "tools/call name is required"))?;
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    let gateway = runtime.gateway()?;
+    let submitted = gateway.submit_for(SKILL_CAPABILITY, name, arguments)?;
+    let deadline = Instant::now() + StdDuration::from_secs(DEFAULT_MCP_WAIT_SECONDS);
+    loop {
+        let current = gateway.get(&submitted.request_id)?;
+        match current.state {
+            WorkerRequestState::Completed => {
+                let result = current.result.unwrap_or_else(|| json!({}));
+                let text = serde_json::to_string(&result).map_err(ApiError::internal)?;
+                return Ok(mcp_result(
+                    id,
+                    json!({"content":[{"type":"text","text":text}],"structuredContent":result}),
+                ));
+            }
+            WorkerRequestState::Failed | WorkerRequestState::Expired => {
+                let error = current
+                    .error
+                    .unwrap_or_else(|| "Zero3 Skill RPC failed".into());
+                return Ok(mcp_result(
+                    id,
+                    json!({"content":[{"type":"text","text":error}],"isError":true}),
+                ));
+            }
+            WorkerRequestState::Queued | WorkerRequestState::Leased => {}
+        }
+        if Instant::now() >= deadline {
+            return Ok(mcp_result(
+                id,
+                json!({"content":[{"type":"text","text":"Zero3 local Skill runtime did not answer before the gateway timeout. Retry with the same idempotencyKey."}],"isError":true}),
+            ));
+        }
+        sleep(StdDuration::from_millis(LONG_POLL_INTERVAL_MS)).await;
+    }
+}
+
 fn require_host(
     runtime: &WorkerGatewayRuntime,
     headers: &HeaderMap,
@@ -685,6 +863,17 @@ fn require_mcp(runtime: &WorkerGatewayRuntime, headers: &HeaderMap) -> Result<()
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "worker MCP authentication is not configured",
+        )
+    })?;
+    require_bearer(headers, expected)
+}
+
+fn require_skill_mcp(runtime: &WorkerGatewayRuntime, headers: &HeaderMap) -> Result<(), ApiError> {
+    runtime.gateway()?;
+    let expected = runtime.skill_mcp_token.as_ref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Skill MCP authentication is not configured",
         )
     })?;
     require_bearer(headers, expected)
@@ -767,13 +956,18 @@ fn validate_mcp_protocol_header(headers: &HeaderMap) -> Result<(), ApiError> {
     }
 }
 
-fn validate_tool(tool: &str) -> Result<(), ApiError> {
-    if WORKER_TOOLS.contains(&tool) {
+fn validate_tool_for(capability: &str, tool: &str) -> Result<(), ApiError> {
+    let known = match capability {
+        WORKER_CAPABILITY => WORKER_TOOLS.contains(&tool),
+        SKILL_CAPABILITY => SKILL_TOOLS.contains(&tool),
+        _ => false,
+    };
+    if known {
         Ok(())
     } else {
         Err(ApiError::new(
             StatusCode::NOT_FOUND,
-            "unknown Zero3 worker tool",
+            "unknown Zero3 capability tool",
         ))
     }
 }
@@ -811,7 +1005,7 @@ fn validate_active_lease(
     Ok(())
 }
 
-fn request_dedupe_key(tool: &str, arguments: &Value) -> Option<String> {
+fn request_dedupe_key(capability: &str, tool: &str, arguments: &Value) -> Option<String> {
     let object = arguments.as_object()?;
     let key = object.get("idempotencyKey")?.as_str()?.trim();
     if key.is_empty() {
@@ -830,7 +1024,7 @@ fn request_dedupe_key(tool: &str, arguments: &Value) -> Option<String> {
         .unwrap_or("");
     let claim = object.get("claimId").and_then(Value::as_str).unwrap_or("");
     Some(format!(
-        "{tool}:{task}:{step}:{assignment}:{worker}:{session}:{claim}:{key}"
+        "{capability}:{tool}:{task}:{step}:{assignment}:{worker}:{session}:{claim}:{key}"
     ))
 }
 fn worker_tool_catalog() -> Vec<Value> {
@@ -1027,6 +1221,51 @@ fn worker_tool_catalog() -> Vec<Value> {
     ]
 }
 
+fn skill_tool_catalog() -> Vec<Value> {
+    vec![
+        tool_definition(
+            "list_skills", "List Codex Native Skills",
+            "List Skills discovered by the local Zero3 Codex app-server. This reads the same Codex Skill source of truth used by local Codex sessions.",
+            json!({
+                "cwd":{"type":"string","maxLength":4096},
+                "forceReload":{"type":"boolean"},
+                "idempotencyKey":id_schema()
+            }), &[], true,
+        ),
+        tool_definition(
+            "search_skills", "Search Codex Native Skills",
+            "Search local Codex Skill metadata by name, description or path without copying SKILL.md into the web session.",
+            json!({
+                "query":{"type":"string","minLength":1,"maxLength":1024},
+                "cwd":{"type":"string","maxLength":4096},
+                "limit":{"type":"integer","minimum":1,"maximum":100},
+                "forceReload":{"type":"boolean"},
+                "idempotencyKey":id_schema()
+            }), &["query"], true,
+        ),
+        tool_definition(
+            "get_skill", "Read Codex Native Skill",
+            "Read one bounded SKILL.md from the local Codex Skill catalog for this web GPT task. The local absolute path is never returned.",
+            json!({
+                "selector":{"type":"string","minLength":1,"maxLength":4096},
+                "cwd":{"type":"string","maxLength":4096},
+                "forceReload":{"type":"boolean"},
+                "idempotencyKey":id_schema()
+            }), &["selector"], true,
+        ),
+        tool_definition(
+            "invoke_skill", "Invoke Codex Native Skill",
+            "Invoke one installed Codex Skill through the local Codex Agent Kernel. The Skill stays on the Zero3 host; only the structured result returns to this web GPT session.",
+            json!({
+                "selector":{"type":"string","minLength":1,"maxLength":4096},
+                "prompt":{"type":"string","minLength":1,"maxLength":100000},
+                "cwd":{"type":"string","maxLength":4096},
+                "idempotencyKey":id_schema()
+            }), &["selector","prompt","cwd","idempotencyKey"], false,
+        ),
+    ]
+}
+
 fn id_schema() -> Value {
     json!({"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9._:-]+$"})
 }
@@ -1117,6 +1356,16 @@ fn required_env(name: &str) -> anyhow::Result<String> {
         anyhow::bail!("{name} is required when Zero3 Worker Gateway is enabled");
     }
     Ok(value)
+}
+
+fn optional_secret_file(name: &str) -> anyhow::Result<Option<String>> {
+    let Some(path) = std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(read_secret_file(path.trim())?))
 }
 
 fn read_secret_file(path: &str) -> anyhow::Result<String> {
@@ -1250,6 +1499,40 @@ mod tests {
         assert!(!serialized.contains("dispatch_codex"));
         assert!(!serialized.contains("run_gpu"));
         assert!(!serialized.contains("workflow_admin"));
+    }
+
+    #[test]
+    fn skill_catalog_is_separate_from_worker_protocol() {
+        let catalog = skill_tool_catalog();
+        let names: Vec<&str> = catalog
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, SKILL_TOOLS);
+        let worker = serde_json::to_string(&worker_tool_catalog()).unwrap();
+        assert!(!worker.contains("invoke_skill"));
+    }
+
+    #[test]
+    fn skill_rpc_gets_a_long_execution_lease_without_changing_worker_leases() {
+        let dir = tempfile::tempdir().unwrap();
+        let gateway = WorkerGateway::open(dir.path().to_path_buf(), "node-1".into()).unwrap();
+        let worker = gateway.submit("get_task_context", json!({"taskId":"t","stepId":"s","assignmentId":"a","workerId":"w","sessionId":"x"})).unwrap();
+        let skill = gateway.submit_for(SKILL_CAPABILITY, "invoke_skill", json!({"selector":"demo","prompt":"run","cwd":"/workspace","idempotencyKey":"skill-1"})).unwrap();
+        assert!(
+            skill.expires_at - skill.created_at >= Duration::seconds(SKILL_REQUEST_TTL_SECONDS)
+        );
+        assert!(
+            worker.expires_at - worker.created_at <= Duration::seconds(DEFAULT_REQUEST_TTL_SECONDS)
+        );
+        let lease = gateway
+            .try_lease_for("node-1", &[SKILL_CAPABILITY.to_string()])
+            .unwrap()
+            .unwrap();
+        let expiry = DateTime::parse_from_rfc3339(&lease.lease_expires_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(expiry - Utc::now() > Duration::minutes(10));
     }
 
     #[test]

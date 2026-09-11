@@ -196,14 +196,14 @@ export class Zero3RemoteClient {
     }
   }
 
-  async leaseWorkerRpc(waitSeconds = 25): Promise<Zero3RemoteWorkerRpcLease | null> {
+  async leaseWorkerRpc(waitSeconds = 25, capabilities: string[] = ['worker-protocol-v1']): Promise<Zero3RemoteWorkerRpcLease | null> {
     const boundedWait = Math.max(1, Math.min(waitSeconds, 30))
     const payload = await this.request('/api/host/v1/worker-rpc/lease', {
       method: 'POST',
       body: JSON.stringify({
         node_id: this.config.nodeId,
         wait_seconds: boundedWait,
-        capabilities: ['worker-protocol-v1']
+        capabilities
       })
     }, (boundedWait + 10) * 1000)
     if (payload == null) return null

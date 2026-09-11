@@ -10,7 +10,7 @@ const ENV_KEYS = [
   'ZERO3_REMOTE_HOST_ENABLED', 'ZERO3_REMOTE_HOST_BASE_URL', 'ZERO3_REMOTE_HOST_TOKEN_FILE',
   'ZERO3_REMOTE_HOST_NODE_ID', 'ZERO3_REMOTE_HOST_WORKSPACES', 'ZERO3_REMOTE_HOST_ALLOW_HTTP',
   'ZERO3_WORKER_TUNNEL_ENABLED', 'ZERO3_WORKER_TUNNEL_BASE_URL', 'ZERO3_WORKER_TUNNEL_TOKEN_FILE',
-  'ZERO3_WORKER_TUNNEL_NODE_ID', 'ZERO3_WORKER_TUNNEL_ALLOW_HTTP'
+  'ZERO3_WORKER_TUNNEL_NODE_ID', 'ZERO3_WORKER_TUNNEL_ALLOW_HTTP', 'ZERO3_SKILL_TUNNEL_ENABLED'
 ] as const
 
 function withCleanEnv(run: () => void) {
@@ -35,8 +35,28 @@ test('Worker Tunnel can run without enabling remote Codex task execution', () =>
     const config = loadZero3RemoteHostConfig()
     assert.equal(config.enabled, false)
     assert.equal(config.workerTunnelEnabled, true)
+    assert.equal(config.skillTunnelEnabled, false)
     assert.equal(config.nodeId, 'worker-node')
     assert.deepEqual(config.allowedWorkspaces, [])
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+})
+test('Skill Tunnel requires an allow-listed workspace while remote tasks stay disabled', () => {
+  withCleanEnv(() => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zero3-skill-tunnel-config-'))
+    const token = path.join(root, 'host.token')
+    const workspace = path.join(root, 'workspace')
+    fs.writeFileSync(token, 'local-test-token')
+    fs.mkdirSync(workspace)
+    process.env.ZERO3_SKILL_TUNNEL_ENABLED = '1'
+    process.env.ZERO3_WORKER_TUNNEL_BASE_URL = 'https://pilot.example.test'
+    process.env.ZERO3_WORKER_TUNNEL_TOKEN_FILE = token
+    process.env.ZERO3_REMOTE_HOST_WORKSPACES = workspace
+    const config = loadZero3RemoteHostConfig()
+    assert.equal(config.enabled, false)
+    assert.equal(config.workerTunnelEnabled, false)
+    assert.equal(config.skillTunnelEnabled, true)
+    assert.deepEqual(config.allowedWorkspaces, [path.resolve(workspace)])
     fs.rmSync(root, { recursive: true, force: true })
   })
 })

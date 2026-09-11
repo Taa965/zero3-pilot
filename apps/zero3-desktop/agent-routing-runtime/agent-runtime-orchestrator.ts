@@ -8,16 +8,23 @@ import {
   type Zero3TaskSpecV2,
   type Zero3VerificationResult
 } from './agent-contracts'
+import type { Zero3ResolvedTaskSkill, Zero3SkillUsageRecord } from '../skill-runtime/skill-types'
 import { Zero3AgentRouter, type Zero3ProviderAvailability } from './agent-router'
 import { Zero3AgentTaskStore, type Zero3AgentTaskRecord, type Zero3AgentTaskState } from './agent-task-store'
 import { Zero3ReviewLoopStore } from './review-loop-store'
 
 export type Zero3CodexTaskDispatcher = {
-  dispatchTask(task: Zero3TaskSpecV2): Promise<Zero3ExecutionResultV2>
+  dispatchTask(task: Zero3TaskSpecV2, skills?: readonly Zero3ResolvedTaskSkill[]): Promise<Zero3ExecutionResultV2>
 }
 
 export type Zero3ClaudeTaskDispatcher = {
-  dispatchTask(task: Zero3TaskSpecV2): Promise<Zero3ExecutionResultV2>
+  dispatchTask(task: Zero3TaskSpecV2, skills?: readonly Zero3ResolvedTaskSkill[], skillContext?: string): Promise<Zero3ExecutionResultV2>
+}
+
+export type Zero3TaskSkillRuntime = {
+  resolve(task: Zero3TaskSpecV2, target: Zero3ResolvedAgentTarget): Promise<Zero3ResolvedTaskSkill[]>
+  renderContext(skills: readonly Zero3ResolvedTaskSkill[]): Promise<string>
+  recordUsage(input: Omit<Zero3SkillUsageRecord, 'usageId' | 'at'>): Promise<unknown>
 }
 
 export type Zero3AntigravityTurnResultLike = {
@@ -56,6 +63,7 @@ export type Zero3AgentRuntimeDependencies = {
   antigravity: Zero3AntigravityTaskRuntime
   codex: Zero3CodexTaskDispatcher
   claude?: Zero3ClaudeTaskDispatcher
+  skills?: Zero3TaskSkillRuntime
   availability: () => Promise<Zero3ProviderAvailability> | Zero3ProviderAvailability
   finalizeResult: (task: Zero3TaskSpecV2, candidate: Zero3ExecutionResultV2) => Promise<Zero3ExecutionResultV2>
 }
@@ -229,10 +237,23 @@ function bindingFor(task: Zero3TaskSpecV2, context: Zero3AgentDispatchContext): 
 export class Zero3AgentRuntimeOrchestrator {
   constructor(private readonly deps: Zero3AgentRuntimeDependencies) {}
 
+  private async recordSkillUsage(task: Zero3TaskSpecV2, target: Zero3ResolvedAgentTarget, skills: readonly Zero3ResolvedTaskSkill[], outcome: 'selected' | 'completed' | 'failed', latencyMs: number | null) {
+    if (!this.deps.skills) return
+    await Promise.all(skills.map(skill => this.deps.skills!.recordUsage({
+      taskId: task.taskId, executionId: task.executionId, projectId: task.projectId,
+      workflowId: task.workflowId ?? null, target, skillName: skill.name, skillPath: skill.path,
+      source: skill.source, outcome, latencyMs
+    })))
+  }
+
   async dispatch(task: Zero3TaskSpecV2, context: Zero3AgentDispatchContext): Promise<Zero3AgentTaskRecord> {
     const availability = await this.deps.availability()
     const route = this.deps.router.resolve(task, availability)
+    const startedAt = Date.now()
+    const resolvedSkills = this.deps.skills ? await this.deps.skills.resolve(task, route.target) : []
     await this.deps.taskStore.create(task, route.target)
+    await this.deps.taskStore.setSkills(task.taskId, resolvedSkills)
+    await this.recordSkillUsage(task, route.target, resolvedSkills, 'selected', null)
     let binding = bindingFor(task, context)
     await this.deps.taskStore.setBinding(task.taskId, binding)
     await this.deps.taskStore.setState(task.taskId, 'DISPATCHED')
@@ -242,11 +263,12 @@ export class Zero3AgentRuntimeOrchestrator {
     try {
       if (route.target === 'GEMINI') {
         if (!task.worktreePath?.trim()) throw new Error('Gemini writable tasks require an explicit isolated worktreePath')
+        const skillContext = this.deps.skills ? await this.deps.skills.renderContext(resolvedSkills) : ''
         const started = await this.deps.antigravity.startTurn({
           logicalSessionId: context.targetLogicalSessionId,
           projectId: task.projectId,
           cwd: task.worktreePath,
-          prompt: task.goal,
+          prompt: skillContext ? `${skillContext}\n\n${task.goal}` : task.goal,
           taskId: task.taskId,
           contextVersion: task.contextVersion
         })
@@ -258,15 +280,18 @@ export class Zero3AgentRuntimeOrchestrator {
         candidate = mapGeminiTurn(task, turn)
       } else if (route.target === 'CLAUDE') {
         if (!this.deps.claude) throw new Error('Claude task dispatcher is not configured')
-        candidate = await this.deps.claude.dispatchTask(task)
+        const skillContext = this.deps.skills ? await this.deps.skills.renderContext(resolvedSkills) : ''
+        candidate = await this.deps.claude.dispatchTask(task, resolvedSkills, skillContext)
       } else {
-        candidate = await this.deps.codex.dispatchTask(task)
+        candidate = await this.deps.codex.dispatchTask(task, resolvedSkills)
       }
 
       assertResultIdentity(task, route.target, candidate)
       candidate = await this.deps.finalizeResult(task, candidate)
       assertResultIdentity(task, route.target, candidate)
+      await this.recordSkillUsage(task, route.target, resolvedSkills, candidate.status === 'FAILED' ? 'failed' : 'completed', Date.now() - startedAt)
     } catch (error) {
+      await this.recordSkillUsage(task, route.target, resolvedSkills, 'failed', Date.now() - startedAt)
       await this.deps.taskStore.setState(task.taskId, 'FAILED')
       throw error
     }

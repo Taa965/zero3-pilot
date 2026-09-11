@@ -15,6 +15,7 @@ async function fixture() {
   const config: Zero3RemoteHostConfig = {
     enabled: true,
     workerTunnelEnabled: false,
+    skillTunnelEnabled: false,
     baseUrl: 'https://control.invalid',
     tokenFile: path.join(root, 'token'),
     nodeId: 'test-node',

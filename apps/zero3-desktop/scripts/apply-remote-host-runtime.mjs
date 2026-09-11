@@ -43,6 +43,7 @@ function copyRuntimeSources() {
     'remote-outbox.ts',
     'remote-outbox-drain.ts',
     'remote-worker-rpc.ts',
+    'remote-skill-rpc.ts',
     'remote-task-runner.ts',
     'remote-node.ts',
     'index.ts'
@@ -181,6 +182,7 @@ export function applyZero3RemoteHostRuntime() {
       from: "app.whenReady().then(() => {",
       to:
         "const zero3RemoteNode = new Zero3RemoteNode({\n" +
+        "  listSkills: params => zero3CodexAppServer.request('skills/list', params),\n" +
         "  startThread: params => zero3CodexAppServer.request('thread/start', params),\n" +
         "  startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs),\n" +
         "  readThread: params => zero3CodexAppServer.request('thread/read', params),\n" +

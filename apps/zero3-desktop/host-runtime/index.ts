@@ -9,3 +9,5 @@ export type {
 } from './remote-types'
 
 export * from './remote-worker-rpc'
+
+export * from './remote-skill-rpc'

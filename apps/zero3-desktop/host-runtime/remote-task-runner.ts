@@ -135,6 +135,15 @@ function validateTask(task: Zero3RemoteTask): Zero3RemoteTask {
 
   const contextRef = projectContext?.context_ref
   const sourceEntryId = projectContext?.source_entry_id
+  const nativeSkills = Array.isArray(raw.native_skills)
+    ? raw.native_skills.slice(0, 10).map((value, index) => {
+        const skill = record(value)
+        return {
+          name: requiredString(skill.name, `native_skills[${index}].name`, 256),
+          path: requiredString(skill.path, `native_skills[${index}].path`, 4096)
+        }
+      })
+    : []
 
   return {
     protocol: ZERO3_REMOTE_TASK_PROTOCOL,
@@ -147,6 +156,7 @@ function validateTask(task: Zero3RemoteTask): Zero3RemoteTask {
     },
     constraints: stringArray(raw.constraints, 'constraints', 64, 4096),
     acceptance_criteria: stringArray(raw.acceptance_criteria, 'acceptance_criteria', 64, 4096),
+    ...(nativeSkills.length ? { native_skills: nativeSkills } : {}),
     permission_profile: permission as Zero3RemoteTask['permission_profile'],
     execution: {
       max_turns: maxTurns,
@@ -550,7 +560,10 @@ export class Zero3RemoteTaskRunner {
           {
             threadId: mapping.threadId,
             clientUserMessageId,
-            input: [{ type: 'text', text: taskPrompt(task, gitPreflight), text_elements: [] }]
+            input: [
+              ...(task.native_skills ?? []).map(skill => ({ type: 'skill', name: skill.name, path: skill.path })),
+              { type: 'text', text: taskPrompt(task, gitPreflight), text_elements: [] }
+            ]
           },
           30_000
         )

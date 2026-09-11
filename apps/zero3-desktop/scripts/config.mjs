@@ -54,7 +54,11 @@ export function commandName(base) {
 // its specifier has to be rewritten, or a shared helper like the atomic file
 // writer cannot be imported from anywhere else without duplicating the file.
 // Rewriting here keeps the source tree honest: it says where the file really is.
-const OVERLAY_DIRECTORY_RENAMES = [['workspace-runtime', 'workspace']]
+const OVERLAY_DIRECTORY_RENAMES = [
+  ['workspace-runtime', 'workspace'],
+  ['skill-runtime', 'skills'],
+  ['agent-routing-runtime', 'agent-routing']
+]
 
 export function overlayRuntimeSource(text) {
   let source = text

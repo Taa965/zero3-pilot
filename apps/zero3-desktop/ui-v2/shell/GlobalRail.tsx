@@ -1,7 +1,7 @@
 import { Codicon } from '@/components/ui/codicon'
 import { cn } from '@/lib/utils'
 
-type ModuleType = 'conversations' | 'tasks' | 'groups' | 'projects' | 'runtime'
+type ModuleType = 'conversations' | 'tasks' | 'groups' | 'projects' | 'skills' | 'runtime'
 
 interface GlobalRailProps {
   activeModule: ModuleType
@@ -14,6 +14,7 @@ export function GlobalRail({ activeModule, onModuleChange }: GlobalRailProps) {
     { id: 'tasks', icon: 'check', label: '任务' },
     { id: 'groups', icon: 'organization', label: '开发组' },
     { id: 'projects', icon: 'repo', label: '项目' },
+    { id: 'skills', icon: 'extensions', label: 'Skills' },
     { id: 'runtime', icon: 'server-environment', label: '运行中心' },
   ] as const
 

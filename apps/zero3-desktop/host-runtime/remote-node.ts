@@ -1,4 +1,4 @@
-import { loadZero3RemoteHostConfig } from './remote-config'
+import { loadZero3RemoteHostConfig, zero3RemoteWorkspaceAllowed } from './remote-config'
 import {
   Zero3RemoteClient,
   zero3RemoteControlPlaneRejectedStaleEnvelope
@@ -6,6 +6,7 @@ import {
 import { drainZero3RemoteOutboxInOrder, type Zero3RemotePublishEnvelopeResult } from './remote-outbox-drain'
 import { Zero3RemoteOutbox } from './remote-outbox'
 import { executeZero3WorkerRpc, type Zero3WorkerRuntimePort } from './remote-worker-rpc'
+import { executeZero3SkillRpc, isZero3SkillRpcTool, type Zero3SkillRuntimePort } from './remote-skill-rpc'
 import {
   Zero3RemoteTaskBlockedError,
   Zero3RemoteTaskOutcomeUnknownError,
@@ -42,6 +43,7 @@ export class Zero3RemoteNode {
   private readonly client = new Zero3RemoteClient(this.config)
   private readonly outbox = new Zero3RemoteOutbox(this.config.outboxDir)
   private readonly runner: Zero3RemoteTaskRunner
+  private readonly skillRuntime: Zero3SkillRuntimePort
   private stopped = false
   private running: Promise<void> | null = null
   private workerRunning: Promise<void> | null = null
@@ -50,7 +52,11 @@ export class Zero3RemoteNode {
   private activeLeaseInvalid = false
   private statusValue: Zero3RemoteHostStatus
 
-  constructor(codex: Zero3CodexRuntime, private readonly workerRuntime?: () => Promise<Zero3WorkerRuntimePort>) {
+  constructor(
+    codex: Zero3CodexRuntime & Zero3SkillRuntimePort,
+    private readonly workerRuntime?: () => Promise<Zero3WorkerRuntimePort>
+  ) {
+    this.skillRuntime = codex
     this.runner = new Zero3RemoteTaskRunner(this.config, codex)
     this.statusValue = {
       enabled: this.config.enabled,
@@ -68,7 +74,7 @@ export class Zero3RemoteNode {
   }
 
   start(): void {
-    if (!this.config.enabled && !this.config.workerTunnelEnabled) return
+    if (!this.config.enabled && !this.config.workerTunnelEnabled && !this.config.skillTunnelEnabled) return
     this.stopped = false
     if (this.config.enabled && !this.running) {
       this.running = this.loop().finally(() => {
@@ -76,7 +82,7 @@ export class Zero3RemoteNode {
         this.statusValue.connected = false
       })
     }
-    if (this.config.workerTunnelEnabled && this.workerRuntime && !this.workerRunning) {
+    if ((this.config.workerTunnelEnabled || this.config.skillTunnelEnabled) && !this.workerRunning) {
       this.workerRunning = this.workerLoop().finally(() => { this.workerRunning = null })
     }
   }
@@ -184,20 +190,36 @@ export class Zero3RemoteNode {
   }
 
   private hostCapabilities(): string[] {
-    return ['codex', 'thread', 'turn', 'shell', 'file', 'git', 'mcp', ...(this.workerRuntime ? ['worker-protocol-v1'] : [])]
+    return ['codex', 'thread', 'turn', 'shell', 'file', 'git', 'mcp', ...(this.config.workerTunnelEnabled && this.workerRuntime ? ['worker-protocol-v1'] : []), ...(this.config.skillTunnelEnabled ? ['codex-native-skills-v1'] : [])]
   }
 
   private async workerLoop(): Promise<void> {
     let retryMs = WORKER_RPC_RETRY_MIN_MS
-    while (!this.stopped && this.workerRuntime) {
+    while (!this.stopped && (this.config.workerTunnelEnabled || this.config.skillTunnelEnabled)) {
       try {
-        const lease = await this.client.leaseWorkerRpc(25)
+        const capabilities = [
+          ...(this.config.workerTunnelEnabled && this.workerRuntime ? ['worker-protocol-v1'] : []),
+          ...(this.config.skillTunnelEnabled ? ['codex-native-skills-v1'] : [])
+        ]
+        if (!capabilities.length) return
+        let lease = await this.client.leaseWorkerRpc(25, capabilities)
         retryMs = WORKER_RPC_RETRY_MIN_MS
         if (!lease) continue
-        const runtime = await this.workerRuntime()
         let result: unknown
         try {
-          result = await executeZero3WorkerRpc(runtime, lease)
+          if (isZero3SkillRpcTool(lease.tool)) {
+            if (!this.config.skillTunnelEnabled) throw new Error('Skill RPC tunnel is disabled')
+            if (lease.tool === 'invoke_skill') {
+              const requested = typeof lease.arguments.cwd === 'string' ? lease.arguments.cwd.trim() : ''
+              const allowed = requested ? zero3RemoteWorkspaceAllowed(this.config, requested) : null
+              if (!allowed) throw new Error('Skill invocation cwd is required and must match a Zero3 allow-listed workspace')
+              lease = { ...lease, arguments: { ...lease.arguments, cwd: allowed } }
+            }
+            result = await executeZero3SkillRpc(this.skillRuntime, lease)
+          } else {
+            if (!this.config.workerTunnelEnabled || !this.workerRuntime) throw new Error('Worker RPC tunnel is disabled')
+            result = await executeZero3WorkerRpc(await this.workerRuntime(), lease)
+          }
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error)
           await this.client.failWorkerRpc(lease, reason)
@@ -209,7 +231,7 @@ export class Zero3RemoteNode {
         await this.client.completeWorkerRpc(lease, result)
       } catch (error) {
         if (this.stopped) return
-        this.statusValue.lastError = `worker RPC tunnel failed: ${error instanceof Error ? error.message : String(error)}`
+        this.statusValue.lastError = `worker/skill RPC tunnel failed: ${error instanceof Error ? error.message : String(error)}`
         await delay(retryMs)
         retryMs = Math.min(retryMs * 2, WORKER_RPC_RETRY_MAX_MS)
       }
