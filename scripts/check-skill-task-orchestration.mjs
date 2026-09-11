@@ -18,6 +18,7 @@ const workerV2 = read('apps/zero3-desktop/worker-runtime/v2/contracts.ts')
 const lifecycle = read('apps/zero3-desktop/worker-runtime/v2/lifecycle-runtime.ts')
 const lifecycleOverlay = read('apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs')
 const skillWorkspace = read('apps/zero3-desktop/ui-v2/skills/SkillWorkspace.tsx')
+const agentIntegration = read('apps/zero3-desktop/scripts/apply-agent-integration-runtime.mjs')
 
 need(contracts, 'requiredSkills?: readonly string[]', 'Execution Step must declare requiredSkills.')
 need(contracts, 'optionalSkills?: readonly string[]', 'Execution Step must declare optionalSkills.')
@@ -41,6 +42,9 @@ need(workerV2, 'skill?: {', 'Worker v2 legacy single-Skill contract must remain 
 need(lifecycle, "runtime.skillPreflight?.executor === 'GPT_WEB'", 'Web lifecycle must not claim AUTO Steps routed by Skill preflight to another Agent.')
 need(lifecycleOverlay, 'refreshSkillPreflight: taskId => zero3ExecutionRuntime.refreshSkillPreflight(taskId)', 'Web lifecycle composition must refresh Skill preflight before claims.')
 need(skillWorkspace, 'Agent Capability Matrix', 'Skills management must expose the Agent Skill capability matrix.')
+need(agentIntegration, "zero3CodexAppServer.request('account/read'", 'Codex Agent availability must read native app-server account state.')
+need(agentIntegration, 'account.requiresOpenaiAuth === false', 'Codex Agent availability must permit providers that explicitly do not require OpenAI auth.')
+forbid(agentIntegration, 'authenticated: codexAvailable ? true : false', 'Starting Codex app-server must never be treated as authentication proof.')
 for (const forbidden of ['SkillRegistry', 'skill_packages']) forbid(bridge, forbidden, `Execution bridge must not create a second Skill authority: ${forbidden}`)
 
 console.log('Zero3 Skill × Task × Workflow guard passed: Step requirements -> native Skill preflight -> Scheduler capability gate -> routed Assignment -> real Task UI / Agent capability matrix.')

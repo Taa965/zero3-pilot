@@ -119,9 +119,16 @@ const zero3CodexTaskAdapter = new Zero3CodexTaskAdapter(zero3LocalCodexRunner)
 
 async function zero3ProviderAvailability() {
   let codexAvailable = false
+  let codexAuthenticated: boolean | null = null
   try {
     await zero3CodexAppServer.ensureStarted()
     codexAvailable = true
+    try {
+      const account = zero3CodexRecord(await zero3CodexAppServer.request('account/read', { refreshToken: false }))
+      codexAuthenticated = account.account != null || account.requiresOpenaiAuth === false
+    } catch {
+      codexAuthenticated = null
+    }
   } catch {}
 
   const geminiStatus = zero3Antigravity.status()
@@ -142,7 +149,7 @@ async function zero3ProviderAvailability() {
   if (geminiAuthenticated !== true && sawKnownUnauthenticated) geminiAuthenticated = false
 
   return {
-    codex: { available: codexAvailable, authenticated: codexAvailable ? true : false },
+    codex: { available: codexAvailable, authenticated: codexAuthenticated },
     gemini: { available: geminiStatus.available, authenticated: geminiAuthenticated }
   }
 }
