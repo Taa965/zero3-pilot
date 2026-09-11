@@ -212,8 +212,18 @@ impl WorkerGatewayRuntime {
             .unwrap_or_else(|_| PathBuf::from("/var/lib/zero3-pilot/worker-gateway"));
         let oauth = if oauth_enabled {
             let issuer = required_env("ZERO3_WORKER_OAUTH_ISSUER")?;
-            let owner_file = required_env("ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE")?;
-            let owner_secret = read_secret_file(&owner_file)?;
+            let owner_file = std::env::var("ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("ZERO3_WORKER_MCP_TOKEN_FILE")
+                        .ok()
+                        .filter(|value| !value.trim().is_empty())
+                })
+                .ok_or_else(|| anyhow::anyhow!(
+                    "ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE or ZERO3_WORKER_MCP_TOKEN_FILE is required when Worker OAuth is enabled"
+                ))?;
+            let owner_secret = read_secret_file(owner_file.trim())?;
             Some(Arc::new(OAuthServer::open(
                 root.join("oauth"),
                 issuer,

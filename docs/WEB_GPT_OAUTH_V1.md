@@ -23,7 +23,7 @@ Unauthorized `/mcp` responses advertise the protected-resource metadata URL in `
 
 ChatGPT registers as a public OAuth client. Only `authorization_code` and `refresh_token` grants are accepted, and authorization requires S256 PKCE. The interactive authorization page additionally requires the dedicated Zero3 OAuth Owner Secret.
 
-The Owner Secret is read from `ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE`; it must not reuse the Host, Control or Worker MCP token. OAuth access tokens, refresh tokens and authorization codes are never stored in plaintext. Their SHA-256 hashes and scoped metadata are persisted under the Worker Gateway data directory.
+The Owner Secret is normally read from `ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE`; production deployments should keep it separate from Host, Control and Worker MCP tokens. For backward-compatible bootstrap only, if the dedicated owner-secret variable is unset, the runtime falls back to the configured Worker MCP token file. OAuth access tokens, refresh tokens and authorization codes are never stored in plaintext. Their SHA-256 hashes and scoped metadata are persisted under the Worker Gateway data directory.
 
 Access tokens expire after one hour. Refresh tokens expire after 30 days and rotate on use. `offline_access` is advertised and produces a refresh token so ChatGPT can maintain connectivity without repeatedly asking the owner to authorize.
 
