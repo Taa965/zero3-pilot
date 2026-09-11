@@ -583,8 +583,21 @@ function zero3ApiAgentFinalText(turn: Record<string, unknown>) {
 }
 async function zero3ApiAgentWaitForTurn(threadId: string, turnId: string) {
   const deadline = Date.now() + ZERO3_API_TIMEOUT_MS
+  const rolloutReadyDeadline = Date.now() + 10_000
   while (Date.now() < deadline) {
-    const read = await zero3CodexAppServer.request('thread/read', { threadId, includeTurns: true })
+    let read: unknown
+    try {
+      read = await zero3CodexAppServer.request('thread/read', { threadId, includeTurns: true })
+    } catch (error) {
+      // turn/start can return before the rollout writer flushes session metadata.
+      // Retry only that initial persistence race, without resubmitting the turn.
+      const message = error instanceof Error ? error.message : String(error)
+      const emptyRollout = message.includes('failed to read session metadata ') &&
+        /rollout at [^\r\n]+ is empty(?:\s|$)/.test(message)
+      if (!emptyRollout || Date.now() >= rolloutReadyDeadline) throw error
+      await new Promise(resolve => setTimeout(resolve, ZERO3_API_AGENT_BRIDGE_POLL_MS))
+      continue
+    }
     const turn = zero3ApiAgentTurnFromRead(read, turnId)
     if (!turn) {
       await new Promise(resolve => setTimeout(resolve, ZERO3_API_AGENT_BRIDGE_POLL_MS))
