@@ -34,6 +34,10 @@ const codexStructuredInput = read('apps/zero3-desktop/scripts/apply-codex-struct
 const codexStructuredInputHardening = read('apps/zero3-desktop/scripts/apply-codex-structured-input-hardening.mjs')
 const autonomousTaskLoop = read('apps/zero3-desktop/worker-runtime/v2/autonomous-task-loop.ts')
 const agentLifecycleOverlay = read('apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs')
+const taskWorkspace = read('apps/zero3-desktop/ui-v2/tasks/TaskWorkspace.tsx')
+const taskWorkflowRegistry = read('apps/zero3-desktop/execution-runtime/workflows/registry.ts')
+const executionDesktopRuntime = read('apps/zero3-desktop/execution-runtime/desktop/desktop-runtime.ts')
+const executionBridge = read('apps/zero3-desktop/scripts/apply-execution-runtime-bridge.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -413,5 +417,21 @@ forbidText(
   "enabled: true,\n    autoDispatch: true",
   'Autonomous Task Loop must not enable unattended intake and dispatch unconditionally.'
 )
+
+for (const required of ['任务名称', '任务说明', '工作流', 'listTaskWorkflows', 'createWorkflowTask']) {
+  requireText(taskWorkspace, required, `Task creation UI lost workflow-first field/bridge: ${required}`)
+}
+for (const forbidden of ['Required Skills（逗号分隔）', 'Optional Skills（逗号分隔）', '步骤（每行一个，按顺序执行）', '<span>执行方</span>', '<AddStep']) {
+  forbidText(taskWorkspace, forbidden, `Task creation UI must not expose workflow internals: ${forbidden}`)
+}
+for (const required of ['genericTaskWorkflow', 'softwareDevelopmentWorkflow', 'bugFixWorkflow', 'researchWorkflow', "source: 'task-workflow'", 'workflowName: module.summary.name']) {
+  requireText(taskWorkflowRegistry, required, `Task workflow registry lost required module/metadata: ${required}`)
+}
+for (const required of ['this.taskWorkflows.compile(input)', 'this.runtime.createTask(this.taskWorkflows.compile(input))']) {
+  requireText(executionDesktopRuntime, required, `Execution desktop runtime must compile workflow tasks through the authoritative Execution Runtime: ${required}`)
+}
+for (const required of ['zero3:execution:workflow:list', 'zero3:execution:workflow:create-task']) {
+  requireText(executionBridge, required, `Execution preload bridge lost workflow-first IPC: ${required}`)
+}
 
 console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / R3A+R3B native Item projection / R3C typed text+localImage input / Hermes UI shell / DeepSeek donor / external-agent collaboration / durable fail-closed autonomous task loop.')

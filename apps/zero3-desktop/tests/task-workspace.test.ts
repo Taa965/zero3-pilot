@@ -6,7 +6,7 @@ import test from 'node:test'
 import { Zero3ExecutionRuntime } from '../execution-runtime/runtime.ts'
 import { Zero3ExecutionStore } from '../execution-runtime/store.ts'
 import { makeStep, makeTask, matchesTask, requiredOutputGaps } from '../ui-v2/tasks/task-model.ts'
-import { readTaskSnapshots } from '../ui-v2/tasks/TaskAdapter.ts'
+import { readTaskSnapshots, readTaskWorkflows } from '../ui-v2/tasks/TaskAdapter.ts'
 
 async function withRuntime(run: (runtime: Zero3ExecutionRuntime, dir: string) => Promise<void>) {
   const dir = await mkdtemp(join(tmpdir(), 'zero3-task-ui-'))
@@ -115,4 +115,12 @@ test('resuming a paused assignment respects capacity and submits an auditable co
     const result = await runtime.gatePassed(id, a.stepId)
     assert.equal(result.runtime.task.status, 'cancelled')
   })
+})
+
+test('task workflow adapter accepts registry summaries and rejects malformed data', () => {
+  assert.deepEqual(readTaskWorkflows([{
+    id: 'generic-task', name: 'Generic', description: 'Generic workflow', category: 'test', revision: 1
+  }]).map(item => item.id), ['generic-task'])
+  assert.throws(() => readTaskWorkflows({ workflows: [] }), /无效列表/)
+  assert.throws(() => readTaskWorkflows([{ id: 'bad' }]), /不完整/)
 })

@@ -7,6 +7,8 @@ import { Zero3ExecutionReporterHttpServer } from '../reporter-http.ts'
 import { Zero3ExecutionReporter } from '../reporter.ts'
 import { Zero3ExecutionRuntime, type BindExecutionSessionInput, type CreateExecutionTaskInput } from '../runtime.ts'
 import { Zero3ExecutionStore } from '../store.ts'
+import { createDefaultTaskWorkflowRegistry, Zero3TaskWorkflowRegistry } from '../workflows/registry.ts'
+import type { TaskWorkflowCreateInput } from '../workflows/contracts.ts'
 import type {
   ExecutionDesktopPort,
   ExecutionDesktopReporterAccess,
@@ -24,6 +26,7 @@ export interface ExecutionDesktopRuntimeOptions {
   nodeExecutable?: string
   powershellExecutable?: string
   skillCapabilityProvider?: ExecutionSkillCapabilityProvider
+  taskWorkflowRegistry?: Zero3TaskWorkflowRegistry
 }
 
 function loadOrCreateSecret(file: string): Buffer {
@@ -50,6 +53,7 @@ export class Zero3ExecutionDesktopRuntime implements ExecutionDesktopPort {
   readonly runtime: Zero3ExecutionRuntime
   readonly reporter: Zero3ExecutionReporter
   readonly reporterServer: Zero3ExecutionReporterHttpServer
+  readonly taskWorkflows: Zero3TaskWorkflowRegistry
   readonly endpointFile: string
   readonly #options: ExecutionDesktopRuntimeOptions
 
@@ -60,6 +64,7 @@ export class Zero3ExecutionDesktopRuntime implements ExecutionDesktopPort {
     this.endpointFile = path.join(this.root, 'reporter-endpoint.json')
     this.store = new Zero3ExecutionStore(path.join(this.root, 'tasks'))
     this.runtime = new Zero3ExecutionRuntime(this.store)
+    this.taskWorkflows = options.taskWorkflowRegistry ?? createDefaultTaskWorkflowRegistry()
     this.reporter = new Zero3ExecutionReporter(this.runtime, loadOrCreateSecret(path.join(this.root, 'reporter-secret')))
     this.reporterServer = new Zero3ExecutionReporterHttpServer(this.reporter, { descriptorPath: this.endpointFile })
   }
@@ -111,6 +116,8 @@ export class Zero3ExecutionDesktopRuntime implements ExecutionDesktopPort {
   }
 
   getTask(taskId: string): Promise<unknown> { return this.runtime.snapshot(taskId) }
+  async listTaskWorkflows(): Promise<unknown> { return this.taskWorkflows.list() }
+  createWorkflowTask(input: TaskWorkflowCreateInput): Promise<unknown> { return this.runtime.createTask(this.taskWorkflows.compile(input)) }
   createTask(input: CreateExecutionTaskInput): Promise<unknown> { return this.runtime.createTask(input) }
   addSteps(taskId: string, steps: readonly Record<string, unknown>[]): Promise<unknown> {
     return this.runtime.addSteps(taskId, steps as Parameters<Zero3ExecutionRuntime['addSteps']>[1])

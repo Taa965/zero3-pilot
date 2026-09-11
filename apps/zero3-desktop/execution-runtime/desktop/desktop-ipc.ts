@@ -3,6 +3,7 @@ import { ipcMain } from 'electron'
 import type { ExecutionExecutorTarget, ExecutionSessionBindingState, ExecutionStepStatus } from '../contracts.ts'
 import type { BindExecutionSessionInput, CreateExecutionTaskInput } from '../runtime.ts'
 import type { ExecutionReportType } from '../reporter-contracts.ts'
+import type { TaskWorkflowCreateInput } from '../workflows/contracts.ts'
 import {
   EXECUTION_DESKTOP_CHANNELS,
   type ExecutionDesktopPort,
@@ -76,6 +77,9 @@ export function registerExecutionDesktopIpc(port: ExecutionDesktopPort): () => v
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.reconcileReadiness, (_event, taskId: unknown) => port.reconcileReadiness(id(taskId, 'taskId')))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.listTasks, () => port.listTasks())
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.getTask, (_event, taskId: unknown) => port.getTask(id(taskId, 'taskId')))
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.listTaskWorkflows, () => port.listTaskWorkflows())
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.createWorkflowTask, (_event, input: unknown) =>
+    port.createWorkflowTask(record(input, 'task workflow input') as unknown as TaskWorkflowCreateInput))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.createTask, (_event, input: unknown) =>
     port.createTask(record(input, 'execution task input') as unknown as CreateExecutionTaskInput))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.addSteps, (_event, taskId: unknown, steps: unknown) =>

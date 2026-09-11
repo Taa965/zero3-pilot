@@ -21,7 +21,18 @@ const ui = path.join(repo, 'apps/zero3-desktop/ui-v2/tasks')
 const temp = await mkdtemp(path.join(tmpdir(), 'zero3-task-browser-'))
 const output = path.join(repo, 'output/task-workspace')
 fs.mkdirSync(output, { recursive: true })
-const desktop = createExecutionDesktopRuntime(path.join(temp, 'execution'), { reporterClientPath: path.join(repo, 'apps/zero3-desktop/execution-runtime/zero3-exec.mjs'), reporterClientKind: 'node' })
+const desktop = createExecutionDesktopRuntime(path.join(temp, 'execution'), {
+  reporterClientPath: path.join(repo, 'apps/zero3-desktop/execution-runtime/zero3-exec.mjs'), reporterClientKind: 'node',
+  skillCapabilityProvider: {
+    matrix: async () => ({ agents: [{ executor: 'CODEX', adapterMode: 'native', available: true }] }),
+    preflight: async (_task, step) => ({
+      state: 'not_required', executor: 'CODEX', adapterMode: 'native',
+      requiredSkills: [...(step.requiredSkills ?? [])], optionalSkills: [...(step.optionalSkills ?? [])],
+      availableRequiredSkills: [...(step.requiredSkills ?? [])], availableOptionalSkills: [...(step.optionalSkills ?? [])],
+      missingRequiredSkills: [], missingOptionalSkills: [], checkedAt: new Date().toISOString()
+    })
+  }
+})
 let browser
 let server
 try {
@@ -45,7 +56,7 @@ try {
   const page = await browser.newPage({ viewport:{width:1280,height:900} })
   const errors=[]
   page.on('pageerror',error=>errors.push(error.message))
-  const methods=['listTasks','createTask','addSteps','createAssignment','bindSession','transitionStep','gatePassed','gateFailed']
+  const methods=['listTasks','listTaskWorkflows','createWorkflowTask','createTask','addSteps','createAssignment','createRoutedAssignment','refreshSkillPreflight','bindSession','transitionStep','gatePassed','gateFailed']
   await page.exposeFunction('taskRpc',async(method,args)=>{
     if(!methods.includes(method)) throw new Error('unsupported test operation')
     return desktop[method](...args)
@@ -55,16 +66,16 @@ try {
   await page.getByText('暂无任务，点击“新建任务”开始。').waitFor()
   await page.getByRole('button',{name:'＋ 新建任务',exact:true}).click()
   await page.getByLabel('任务名称',{exact:true}).fill('任务板块端到端验收')
-  await page.getByLabel('目标与验收要求').fill('验证真实持久化、审核与依赖释放')
-  await page.getByLabel('步骤（每行一个，按顺序执行）').fill('实现任务页面\n核对交付结果')
+  await page.getByLabel('任务说明').fill('验证工作流生成、真实持久化、审核与依赖释放')
+  await page.getByLabel('工作流',{exact:true}).selectOption({ label: '软件开发工作流' })
   await page.getByRole('button',{name:'创建任务',exact:true}).click()
   await page.getByRole('heading',{name:'任务板块端到端验收'}).waitFor()
   let [snapshot]=await desktop.listTasks()
   const id=snapshot.definition.task.taskId
   const [first,second]=snapshot.definition.steps
   await page.getByRole('button',{name:'执行过程',exact:true}).click()
-  await page.getByRole('button',{name:'分配执行',exact:true}).click()
-  await page.getByLabel('实现任务页面会话编号').fill('test-codex-session')
+  await page.getByRole('button',{name:'自动路由并分配',exact:true}).click()
+  await page.getByLabel('方案与影响分析会话编号').fill('test-codex-session')
   await page.getByRole('button',{name:'绑定会话',exact:true}).click()
   await page.getByText('会话：test-codex-session · active').waitFor()
   await desktop.runtime.transitionStep(id,first.stepId,'running')
@@ -75,12 +86,12 @@ try {
   await page.getByRole('button',{name:'审核',exact:true}).click()
   await page.getByRole('button',{name:'通过',exact:true}).waitFor()
   assert.equal(await page.getByRole('button',{name:'通过',exact:true}).isDisabled(),true)
-  await page.getByLabel('实现任务页面处理说明').fill('请补充验证证据')
+  await page.getByLabel('方案与影响分析处理说明').fill('请补充验证证据')
   await page.getByRole('button',{name:'要求修改',exact:true}).click()
   await page.getByText('需要修改 · 95%',{exact:true}).waitFor()
   await desktop.runtime.requestCompletion(id,first.stepId)
   await page.getByRole('button',{name:'刷新',exact:true}).click()
-  await page.getByLabel('实现任务页面处理说明').fill('已核对差异和测试记录')
+  await page.getByLabel('方案与影响分析处理说明').fill('已核对差异和测试记录')
   await page.getByRole('button',{name:'通过',exact:true}).click()
   await page.getByText('已完成 · 100%',{exact:true}).waitFor()
   assert.equal((await desktop.runtime.snapshot(id)).runtime.steps[1].status,'ready')
@@ -96,13 +107,13 @@ try {
   await page.reload()
   await page.getByRole('heading',{name:'任务板块端到端验收'}).waitFor()
   await page.getByRole('button',{name:'执行过程',exact:true}).click()
-  await page.getByLabel('核对交付结果处理说明').fill('转交人工确认')
-  const secondCard=page.locator('article').filter({has:page.getByRole('heading',{name:'核对交付结果',exact:true})})
+  await page.getByLabel('实现变更处理说明').fill('转交人工确认')
+  const secondCard=page.locator('article').filter({has:page.getByRole('heading',{name:'实现变更',exact:true})})
   await secondCard.getByRole('button',{name:'转人工',exact:true}).click()
   await page.getByText('等待人工 · 0%',{exact:true}).waitFor()
   await page.getByRole('button',{name:'待审核',exact:true}).click()
   assert.equal(await page.locator('aside').getByText('任务板块端到端验收',{exact:true}).count(),1)
-  await page.getByLabel('核对交付结果处理说明').fill('等待补充材料')
+  await page.getByLabel('实现变更处理说明').fill('等待补充材料')
   await secondCard.getByRole('button',{name:'标记阻塞',exact:true}).click()
   await page.getByText('阻塞 · 0%',{exact:true}).waitFor()
   await page.getByRole('button',{name:'异常',exact:true}).click()

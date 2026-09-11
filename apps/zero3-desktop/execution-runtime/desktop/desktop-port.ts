@@ -1,6 +1,7 @@
 import type { ExecutionExecutorTarget, ExecutionSessionBindingState, ExecutionStepStatus } from '../contracts.ts'
 import type { BindExecutionSessionInput, CreateExecutionTaskInput } from '../runtime.ts'
 import type { ExecutionReportType } from '../reporter-contracts.ts'
+import type { TaskWorkflowCreateInput } from '../workflows/contracts.ts'
 
 export interface ExecutionReporterTicketRequest {
   ttlSeconds?: number
@@ -27,6 +28,8 @@ export interface ExecutionDesktopPort {
   reconcileReadiness(taskId: string): Promise<unknown>
   listTasks(): Promise<unknown>
   getTask(taskId: string): Promise<unknown>
+  listTaskWorkflows(): Promise<unknown>
+  createWorkflowTask(input: TaskWorkflowCreateInput): Promise<unknown>
   createTask(input: CreateExecutionTaskInput): Promise<unknown>
   addSteps(taskId: string, steps: readonly Record<string, unknown>[]): Promise<unknown>
   createAssignment(taskId: string, stepId: string, executor: Exclude<ExecutionExecutorTarget, 'AUTO'>, executorId?: string | null): Promise<unknown>
@@ -46,6 +49,8 @@ export const EXECUTION_DESKTOP_CHANNELS = {
   reconcileReadiness: 'zero3:execution:reconcile-readiness',
   listTasks: 'zero3:execution:list',
   getTask: 'zero3:execution:get',
+  listTaskWorkflows: 'zero3:execution:workflow:list',
+  createWorkflowTask: 'zero3:execution:workflow:create-task',
   createTask: 'zero3:execution:create',
   addSteps: 'zero3:execution:add-steps',
   createAssignment: 'zero3:execution:create-assignment',

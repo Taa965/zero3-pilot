@@ -1,15 +1,13 @@
-import { useState, type FormEvent } from 'react'
-import type { ExecutionExecutorTarget, ExecutionTaskSnapshot } from '../../execution-runtime/contracts.ts'
+import { useEffect, useState, type FormEvent } from 'react'
+import type { ExecutionTaskSnapshot } from '../../execution-runtime/contracts.ts'
 import { allowedStepTransitions } from '../../execution-runtime/state-machine'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
-import { taskBridge } from './TaskAdapter'
+import { readTaskSnapshots, readTaskWorkflows, taskBridge, type TaskWorkflowSummary } from './TaskAdapter'
 import { useTasks } from './TaskContext'
-import { makeStep, makeTask, percent, requiredOutputGaps, statusLabel, taskArtifacts } from './task-model'
+import { percent, requiredOutputGaps, statusLabel, taskArtifacts } from './task-model'
 
 const inputClass = 'w-full rounded border border-(--ui-border) bg-background p-2 text-sm'
 const buttonClass = 'rounded border border-(--ui-border) px-3 py-1.5 text-sm hover:bg-(--ui-control-hover-background) disabled:cursor-not-allowed disabled:opacity-40'
-const executors: ExecutionExecutorTarget[] = ['AUTO', 'CODEX', 'GPT_WEB', 'GEMINI_WEB', 'CLAUDE', 'ANTIGRAVITY', 'ZERO3', 'REMOTE_COMPUTE', 'HUMAN']
-const skillList = (value: string) => [...new Set(value.split(/[，,\n]/u).map(item => item.trim()).filter(Boolean))]
 const tabs = [['overview', '总览'], ['execution', '执行过程'], ['changes', '代码变更'], ['artifacts', '产物'], ['verification', '验证'], ['review', '审核'], ['timeline', '时间轴']]
 const gateLabels: Record<string, string> = { human_review: '人工审核', required_outputs: '必需产物齐全' }
 const eventLabels: Record<string, string> = {
@@ -40,57 +38,56 @@ function EventList({ events, empty }: { events: ExecutionTaskSnapshot['events'];
 function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
   const { busy, mutate, select, setCreating } = useTasks()
   const [title, setTitle] = useState('')
-  const [goal, setGoal] = useState('')
-  const [stepText, setStepText] = useState('')
-  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('CODEX')
-  const [requiredSkills, setRequiredSkills] = useState('')
-  const [optionalSkills, setOptionalSkills] = useState('')
+  const [description, setDescription] = useState('')
+  const [workflowId, setWorkflowId] = useState('')
+  const [workflows, setWorkflows] = useState<TaskWorkflowSummary[]>([])
+  const [workflowError, setWorkflowError] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    void taskBridge().listTaskWorkflows().then(value => {
+      if (!active) return
+      const rows = readTaskWorkflows(value)
+      setWorkflows(rows)
+      setWorkflowId(current => current || rows[0]?.id || '')
+    }).catch(error => {
+      if (active) setWorkflowError(error instanceof Error ? error.message : String(error))
+    })
+    return () => { active = false }
+  }, [])
+  const selectedWorkflow = workflows.find(item => item.id === workflowId) ?? null
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     let id = ''
     const success = await mutate(async () => {
-      const required = skillList(requiredSkills)
-      const optional = skillList(optionalSkills)
-      const steps = stepText.split('\n').map(line => line.trim()).filter(Boolean).map(line => makeStep(line, executor, [], required, optional))
-      for (let i = 1; i < steps.length; i++) steps[i].dependsOn = [steps[i - 1].stepId]
-      const input = makeTask(title, goal, project?.id ?? null, steps)
-      id = input.task.taskId
-      await taskBridge().createTask(input)
+      const created = await taskBridge().createWorkflowTask({
+        title, description, projectId: project?.id ?? null,
+        workspace: project?.rootPath ?? null, workflowId
+      })
+      id = readTaskSnapshots([created])[0].definition.task.taskId
     })
     if (success) { select(id); setCreating(false) }
   }
-  return <form onSubmit={event => void submit(event)} className="mx-auto max-w-2xl space-y-4 p-6">
-    <h2 className="text-lg font-medium">新建任务</h2>
-    <p className="text-xs text-(--ui-text-secondary)">所属项目：{project?.name ?? '无项目'}。创建后可在执行过程中分配步骤、绑定执行会话。</p>
-    <label className="block space-y-1 text-sm"><span>任务名称</span><input required value={title} onChange={event => setTitle(event.target.value)} className={inputClass} /></label>
-    <label className="block space-y-1 text-sm"><span>目标与验收要求</span><textarea required rows={4} value={goal} onChange={event => setGoal(event.target.value)} className={inputClass} /></label>
-    <label className="block space-y-1 text-sm"><span>执行方</span><select value={executor} onChange={event => setExecutor(event.target.value as ExecutionExecutorTarget)} className={inputClass}>{executors.map(item => <option key={item}>{item}</option>)}</select></label>
-    <label className="block space-y-1 text-sm"><span>Required Skills（逗号分隔）</span><input value={requiredSkills} onChange={event => setRequiredSkills(event.target.value)} placeholder="cognitive-store-script" className={inputClass} /></label>
-    <label className="block space-y-1 text-sm"><span>Optional Skills（逗号分隔）</span><input value={optionalSkills} onChange={event => setOptionalSkills(event.target.value)} placeholder="可留空" className={inputClass} /></label>
-    <label className="block space-y-1 text-sm"><span>步骤（每行一个，按顺序执行）</span><textarea required rows={5} value={stepText} onChange={event => setStepText(event.target.value)} className={inputClass} /></label>
-    <div className="flex gap-2"><button disabled={busy} className={buttonClass}>{busy ? '正在保存…' : '创建任务'}</button><button type="button" disabled={busy} onClick={() => setCreating(false)} className={buttonClass}>取消</button></div>
-  </form>
-}
-function AddStep({ snapshot }: { snapshot: ExecutionTaskSnapshot }) {
-  const { busy, mutate } = useTasks()
-  const [title, setTitle] = useState('')
-  const [dependency, setDependency] = useState('')
-  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('CODEX')
-  const [requiredSkills, setRequiredSkills] = useState('')
-  const [optionalSkills, setOptionalSkills] = useState('')
-  return <form className="space-y-2 rounded border border-(--ui-border) p-3" onSubmit={event => {
-    event.preventDefault()
-    void mutate(() => taskBridge().addSteps(snapshot.definition.task.taskId, [makeStep(title, executor, dependency ? [dependency] : [], skillList(requiredSkills), skillList(optionalSkills))])).then(ok => { if (ok) { setTitle(''); setRequiredSkills(''); setOptionalSkills('') } })
-  }}>
-    <h3 className="text-sm font-medium">添加步骤</h3>
-    <input aria-label="新增步骤目标" required value={title} onChange={event => setTitle(event.target.value)} placeholder="步骤目标" className={inputClass} />
-    <input aria-label="新增步骤 Required Skills" value={requiredSkills} onChange={event => setRequiredSkills(event.target.value)} placeholder="Required Skills，逗号分隔" className={inputClass} />
-    <input aria-label="新增步骤 Optional Skills" value={optionalSkills} onChange={event => setOptionalSkills(event.target.value)} placeholder="Optional Skills，逗号分隔" className={inputClass} />
-    <div className="flex flex-wrap gap-2">
-      <select aria-label="新增步骤执行方" value={executor} onChange={event => setExecutor(event.target.value as ExecutionExecutorTarget)} className={inputClass}>{executors.map(item => <option key={item}>{item}</option>)}</select>
-      <select aria-label="前置步骤" value={dependency} onChange={event => setDependency(event.target.value)} className={inputClass}><option value="">无前置步骤</option>{snapshot.definition.steps.map(step => <option key={step.stepId} value={step.stepId}>{step.title}</option>)}</select>
-      <button disabled={busy} className={buttonClass}>添加步骤</button>
+  return <form onSubmit={event => void submit(event)} className="mx-auto max-w-2xl space-y-5 p-6">
+    <div className="space-y-1">
+      <h2 className="text-lg font-medium">新建任务</h2>
+      <p className="text-xs text-(--ui-text-secondary)">所属项目：{project?.name ?? '无项目'}。工作流模块会自动生成执行步骤、Agent、Skill、依赖与审核规则。</p>
     </div>
+    <label className="block space-y-1 text-sm"><span>任务名称</span><input required value={title} onChange={event => setTitle(event.target.value)} className={inputClass} /></label>
+    <label className="block space-y-1 text-sm"><span>任务说明</span><textarea required rows={6} value={description} onChange={event => setDescription(event.target.value)} placeholder="说明要完成什么、背景、约束和期望结果" className={inputClass} /></label>
+    <label className="block space-y-1 text-sm">
+      <span>工作流</span>
+      <select aria-label="工作流" required value={workflowId} disabled={!workflows.length} onChange={event => setWorkflowId(event.target.value)} className={inputClass}>
+        {!workflows.length && <option value="">正在加载工作流…</option>}
+        {workflows.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+      </select>
+    </label>
+    {selectedWorkflow && <div className="rounded border border-(--ui-border) bg-(--ui-pane-background) p-3 text-xs text-(--ui-text-secondary)">
+      <div className="font-medium text-foreground">{selectedWorkflow.name}</div>
+      <div className="mt-1">{selectedWorkflow.description}</div>
+      <div className="mt-2 text-(--ui-text-tertiary)">分类：{selectedWorkflow.category} · 模块版本：{selectedWorkflow.revision}</div>
+    </div>}
+    {workflowError && <p role="alert" className="text-sm text-red-500">{workflowError}</p>}
+    <div className="flex gap-2"><button disabled={busy || !workflowId} className={buttonClass}>{busy ? '正在创建…' : '创建任务'}</button><button type="button" disabled={busy} onClick={() => setCreating(false)} className={buttonClass}>取消</button></div>
   </form>
 }
 function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnapshot; stepId: string; review: boolean }) {
@@ -177,15 +174,14 @@ export function TaskWorkspace({ project = null }: { project?: Zero3ProjectRecord
     <nav aria-label="任务详情页签" className="flex shrink-0 gap-5 overflow-x-auto border-b border-(--ui-border) px-6">{tabs.map(([id, label]) => <button type="button" key={id} aria-current={activeTab === id ? 'page' : undefined} onClick={() => setActiveTab(id)} className={`whitespace-nowrap border-b-2 py-3 text-sm ${activeTab === id ? 'border-blue-500 text-blue-500' : 'border-transparent text-(--ui-text-secondary)'}`}>{label}</button>)}</nav>
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-6" key={`${task.taskId}:${activeTab}`}>
       {activeTab === 'overview' && <>
-        <h3 className="font-medium">目标与验收要求</h3><p className="whitespace-pre-wrap text-sm">{task.goal}</p>
-        <div className="grid gap-3 text-sm sm:grid-cols-2"><p>项目：{task.projectId ?? '无项目'}</p><p>工作流：{task.workflowId ?? '自定义任务'}</p><p>步骤：{snapshot.runtime.steps.filter(step => step.status === 'completed').length}/{snapshot.runtime.steps.length} 已完成</p><p>最大并行步骤：{task.maxParallelSteps}</p><p>创建：{new Date(task.createdAt).toLocaleString()}</p><p>更新：{new Date(snapshot.runtime.task.updatedAt).toLocaleString()}</p></div>
+        <h3 className="font-medium">任务说明</h3><p className="whitespace-pre-wrap text-sm">{task.goal}</p>
+        <div className="grid gap-3 text-sm sm:grid-cols-2"><p>项目：{task.projectId ?? '无项目'}</p><p>工作流：{String(task.metadata.workflowName ?? task.workflowId ?? '自定义任务')}</p><p>步骤：{snapshot.runtime.steps.filter(step => step.status === 'completed').length}/{snapshot.runtime.steps.length} 已完成</p><p>最大并行步骤：{task.maxParallelSteps}</p><p>创建：{new Date(task.createdAt).toLocaleString()}</p><p>更新：{new Date(snapshot.runtime.task.updatedAt).toLocaleString()}</p></div>
         {[...snapshot.runtime.task.blockers, ...snapshot.runtime.steps.flatMap(step => step.blocker ? [step.blocker] : [])].map((blocker, index) => <p key={index} className="text-sm text-amber-500">{blocker}</p>)}
         <h3 className="font-medium">步骤状态</h3>{snapshot.definition.steps.map(step => { const state = snapshot.runtime.steps.find(item => item.stepId === step.stepId)!; return <div key={step.stepId} className="space-y-1 border-b border-(--ui-border) py-2 text-sm"><div className="flex justify-between gap-3"><span>{step.title}</span><span>{statusLabel(state.status)}</span></div>{!!step.requiredSkills?.length && <div className="text-xs text-blue-500">Required Skills：{step.requiredSkills.join('、')}</div>}{state.skillPreflight?.executor && <div className="text-xs text-(--ui-text-tertiary)">推荐 Agent：{state.skillPreflight.executor} · {state.skillPreflight.adapterMode}</div>}</div>})}
       </>}
       {(activeTab === 'execution' || activeTab === 'review') && <>
         {snapshot.definition.steps.length === 0 && <p className="text-sm text-(--ui-text-secondary)">尚未添加步骤。</p>}
         {snapshot.definition.steps.map(step => <StepControl key={step.stepId} snapshot={snapshot} stepId={step.stepId} review={activeTab === 'review'} />)}
-        {activeTab === 'execution' && !['completed', 'cancelled'].includes(snapshot.runtime.task.status) && <AddStep snapshot={snapshot} />}
       </>}
       {activeTab === 'changes' && <EventList events={changes} empty="尚未收到代码差异回报。执行方可将 diff、patch 或 changedFiles 随产物回报记录。" />}
       {activeTab === 'artifacts' && <><p className="text-xs text-(--ui-text-secondary)">以下为执行方回报的产物记录。文件是否已归档以产物中的存储证据为准。</p><EventList events={artifacts} empty="尚未收到产物回报。" /></>}
