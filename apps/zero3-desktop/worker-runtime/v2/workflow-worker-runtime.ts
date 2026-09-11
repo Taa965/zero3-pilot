@@ -84,6 +84,7 @@ export type WorkflowWorkerClaimView = {
   workerSlotId: string
   workerSessionId: string
   generation: number
+  status: string
   leaseUntil: string
   units: WorkflowWorkUnit[]
 }
@@ -408,6 +409,17 @@ export class Zero3WorkflowWorkerRuntime {
     return result
   }
 
+  listWorkflowRuns(): Array<Record<string, unknown>> {
+    return (this.store.db.prepare('SELECT * FROM workflow_runs ORDER BY created_at,workflow_run_id').all() as any[]).map(run => ({
+      workflowRunId: run.workflow_run_id,
+      taskId: run.task_id,
+      moduleId: run.module_id,
+      moduleVersion: run.module_version,
+      status: run.status,
+      metadata: workflowParse(run.metadata_json, {})
+    }))
+  }
+
   workflowSnapshot(workflowRunIdValue: unknown): Record<string, unknown> {
     const workflowRunId = id(workflowRunIdValue, 'workflowRunId')
     const run = this.store.db.prepare('SELECT * FROM workflow_runs WHERE workflow_run_id=?').get(workflowRunId) as any
@@ -480,6 +492,7 @@ export class Zero3WorkflowWorkerRuntime {
       workerSlotId: row.worker_slot_id,
       workerSessionId: row.worker_session_id,
       generation: Number(row.generation),
+      status: row.status,
       leaseUntil: row.lease_until,
       units: stageRows.map(stage => this.stageView(stage) as unknown as WorkflowWorkUnit)
     }
@@ -539,6 +552,21 @@ export class Zero3WorkflowWorkerRuntime {
     return { claims, binding, slot, session }
   }
 
+  issueBindingTicket(workerSlotIdValue: unknown, expiresInSeconds = 86_400): Record<string, unknown> {
+    const workerSlotId = id(workerSlotIdValue, 'workerSlotId')
+    const ttl = integer(expiresInSeconds, 'expiresInSeconds', 60, 86_400)
+    const { binding } = this.binding(workerSlotId)
+    const slot = this.slot(workerSlotId)
+    if (!slot.active_worker_session_id) throw new Error('worker slot has no active physical session')
+    const session = this.session(slot.active_worker_session_id)
+    if (['LOST', 'CLOSED'].includes(session.state)) throw new Error(`physical worker session is ${session.state}`)
+    if (session.generation !== Number(slot.generation)) throw new Error('physical worker session generation is stale')
+    const issued = issueWorkerBindingTicket(binding, session, {
+      secret: this.options.ticketSecret, clock: this.clock, expiresInSeconds: ttl
+    })
+    return { ticket: issued.ticket, claims: issued.claims, session, binding }
+  }
+
   openPhysicalSession(inputValue: unknown): Record<string, unknown> {
     const input = object(inputValue, 'physical worker session input')
     const workerSlotId = id(input.workerSlotId, 'workerSlotId')
@@ -558,16 +586,16 @@ export class Zero3WorkflowWorkerRuntime {
       const session = normalizePhysicalWorkerSession({
         workerSlotId, workerSessionId, logicalSessionId,
         ...(conversationId ? { conversationId } : {}), ...(conversationUrl ? { conversationUrl } : {}),
-        generation: Number(slot.generation), state: 'ACTIVE', processedItemCount: 0, startedAt: at
+        generation: Number(slot.generation), state: 'STARTING', processedItemCount: 0, startedAt: at
       })
       this.store.db.prepare(`INSERT INTO physical_worker_sessions
         (worker_session_id,worker_slot_id,generation,logical_session_id,conversation_id,conversation_url,state,processed_item_count,started_at,last_activity_at)
-        VALUES (?,?,?,?,?,?, 'ACTIVE',0,?,?)`).run(workerSessionId, workerSlotId, session.generation, logicalSessionId, conversationId, conversationUrl, at, at)
+        VALUES (?,?,?,?,?,?, 'STARTING',0,?,?)`).run(workerSessionId, workerSlotId, session.generation, logicalSessionId, conversationId, conversationUrl, at, at)
       this.store.db.prepare("UPDATE worker_slots SET active_worker_session_id=?,state='ACTIVE',updated_at=? WHERE worker_slot_id=?")
         .run(workerSessionId, at, workerSlotId)
       this.store.db.prepare('UPDATE worker_binding_generations SET worker_session_id=? WHERE worker_slot_id=? AND generation=?')
         .run(workerSessionId, workerSlotId, session.generation)
-      const issued = issueWorkerBindingTicket(binding, session, { secret: this.options.ticketSecret, clock: this.clock })
+      const issued = issueWorkerBindingTicket(binding, session, { secret: this.options.ticketSecret, clock: this.clock, expiresInSeconds: 86_400 })
       this.event({ workflowRunId: binding.workflowRunId, workerDefinitionId: binding.workerDefinitionId,
         workerSlotId, workerSessionId, type: 'physical_session.opened', payload: { generation: session.generation, logicalSessionId }, at })
       return { workerSessionId, generation: session.generation, ticket: issued.ticket, binding, session }
@@ -647,6 +675,7 @@ export class Zero3WorkflowWorkerRuntime {
   claimWorkV2(inputValue: unknown): Record<string, unknown> {
     const input = object(inputValue, 'workflow claim input')
     const verified = this.verifiedTicket(input.bindingTicket ?? input.ticket)
+    if (verified.session.state === 'STARTING') throw new Error('physical worker session must call bootstrap_worker before claim_work')
     const maxItems = Math.min(verified.binding.maxBatchSize,
       input.maxItems == null ? verified.binding.maxBatchSize : integer(input.maxItems, 'maxItems', 1, MAX_BATCH_SIZE))
     const leaseSeconds = input.leaseSeconds == null
@@ -916,14 +945,14 @@ export class Zero3WorkflowWorkerRuntime {
       const workerSessionId = `gptws-${randomUUID()}`
       this.store.db.prepare(`INSERT INTO physical_worker_sessions
         (worker_session_id,worker_slot_id,generation,logical_session_id,conversation_id,conversation_url,state,processed_item_count,started_at,last_activity_at)
-        VALUES (?,?,?,?,?,?, 'ACTIVE',0,?,?)`).run(
+        VALUES (?,?,?,?,?,?, 'STARTING',0,?,?)`).run(
         workerSessionId, workerSlotId, generation, logicalSessionId, conversationId, conversationUrl, at, at)
       this.store.db.prepare("UPDATE worker_slots SET generation=?,state='ACTIVE',active_worker_session_id=?,updated_at=? WHERE worker_slot_id=?")
         .run(generation, workerSessionId, at, workerSlotId)
       this.store.db.prepare('INSERT INTO worker_binding_generations (worker_slot_id,generation,worker_session_id,reason,at) VALUES (?,?,?,?,?)')
         .run(workerSlotId, generation, workerSessionId, reason, at)
       const session = this.session(workerSessionId)
-      const issued = issueWorkerBindingTicket(binding, session, { secret: this.options.ticketSecret, clock: this.clock })
+      const issued = issueWorkerBindingTicket(binding, session, { secret: this.options.ticketSecret, clock: this.clock, expiresInSeconds: 86_400 })
       this.event({ workflowRunId: binding.workflowRunId, workerDefinitionId: binding.workerDefinitionId,
         workerSlotId, workerSessionId, type: 'physical_session.rotated', payload: { generation, reason }, at })
       return { state: 'ROTATED', workerSessionId, generation, ticket: issued.ticket, session }

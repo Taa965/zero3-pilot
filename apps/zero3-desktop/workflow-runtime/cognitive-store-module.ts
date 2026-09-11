@@ -15,6 +15,7 @@ export type CognitiveStoreSource = {
 export type InstallCognitiveStoreWorkflowInput = {
   workflowRunId: string
   taskId: string
+  projectId: string
   sources: CognitiveStoreSource[]
   idempotencyKey: string
 }
@@ -206,6 +207,7 @@ export function installCognitiveStoreWorkflow(
 ): Record<string, unknown> {
   const workflowRunId = id(inputValue.workflowRunId, 'workflowRunId')
   const taskId = id(inputValue.taskId, 'taskId')
+  const projectId = id(inputValue.projectId, 'projectId')
   const idempotencyKey = id(inputValue.idempotencyKey, 'idempotencyKey')
   if (!Array.isArray(inputValue.sources) || inputValue.sources.length === 0 || inputValue.sources.length > 1000) {
     throw new Error('sources must contain 1..1000 scripts')
@@ -214,9 +216,10 @@ export function installCognitiveStoreWorkflow(
   runtime.ensureWorkflowRun({
     workflowRunId,
     taskId,
+    projectId,
     moduleId: COGNITIVE_STORE_MODULE_ID,
     moduleVersion: COGNITIVE_STORE_MODULE_VERSION,
-    metadata: { pipeline: 'script-visual-image', workItemCount: inputValue.sources.length }
+    metadata: { projectId, autoProvisionGptWorkers: true, pipeline: 'script-visual-image', workItemCount: inputValue.sources.length }
   })
 
   const bindings = cognitiveStoreWorkerBindings(workflowRunId)
@@ -233,6 +236,7 @@ export function installCognitiveStoreWorkflow(
   return {
     workflowRunId,
     taskId,
+    projectId,
     moduleId: COGNITIVE_STORE_MODULE_ID,
     moduleVersion: COGNITIVE_STORE_MODULE_VERSION,
     bindings: bindings.map(item => item.binding.workerSlotId),

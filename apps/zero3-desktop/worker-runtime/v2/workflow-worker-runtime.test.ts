@@ -17,6 +17,12 @@ function runtime(options: { defaultLeaseSeconds?: number } = {}) {
   return { store, worker }
 }
 
+function openSession(worker: Zero3WorkflowWorkerRuntime, input: Record<string, unknown>) {
+  const opened = worker.openPhysicalSession(input) as any
+  worker.bootstrapWorker({ bindingTicket: opened.ticket })
+  return opened
+}
+
 function binding(workerSlotId = 'script-worker-01', maxBatchSize = 1, maxItemsPerPhysicalSession: number | null = null) {
   return {
     workflowRunId: 'run-001', moduleId: 'cognitive-store', moduleVersion: 'v2',
@@ -56,11 +62,23 @@ function artifactFor(claim: any, sessionId: string, suffix = '') {
   }
 }
 
+test('P2 Physical Session must bootstrap before claiming work', () => {
+  const { store, worker } = runtime()
+  try {
+    seedSingleStage(worker, 1)
+    const opened = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-starting' }) as any
+    assert.equal(opened.session.state, 'STARTING')
+    assert.throws(() => worker.claimWorkV2({ bindingTicket: opened.ticket, idempotencyKey: 'claim-before-bootstrap' }), /bootstrap_worker/)
+    worker.bootstrapWorker({ bindingTicket: opened.ticket })
+    assert.equal((worker.claimWorkV2({ bindingTicket: opened.ticket, idempotencyKey: 'claim-after-bootstrap' }) as any).state, 'CLAIMED')
+  } finally { store.close() }
+})
+
 test('P2 single long-lived worker processes 20 WorkItems continuously', () => {
   const { store, worker } = runtime()
   try {
     seedSingleStage(worker, 20)
-    const opened = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-script-01' }) as any
+    const opened = openSession(worker, { workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-script-01' }) as any
     const boot = worker.bootstrapWorker({ bindingTicket: opened.ticket }) as any
     assert.equal(boot.activeClaim, null)
     let result = worker.claimWorkV2({ bindingTicket: opened.ticket, idempotencyKey: 'claim-1' }) as any
@@ -96,8 +114,8 @@ test('P2 two worker slots never claim the same StageRun', () => {
         requiredCapability: 'script-rewrite', instruction: 'rewrite', inputs: [], expectedOutputs: [],
         policy: { maxAttempts: 3, leaseSeconds: 1800 }, metadata: {} }]
     })) })
-    const a = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-a' }) as any
-    const b = worker.openPhysicalSession({ workerSlotId: 'script-worker-02', logicalSessionId: 'gpt-b' }) as any
+    const a = openSession(worker, { workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-a' }) as any
+    const b = openSession(worker, { workerSlotId: 'script-worker-02', logicalSessionId: 'gpt-b' }) as any
     const ca = (worker.claimWorkV2({ bindingTicket: a.ticket, maxItems: 5, idempotencyKey: 'ca' }) as any).claim
     const cb = (worker.claimWorkV2({ bindingTicket: b.ticket, maxItems: 5, idempotencyKey: 'cb' }) as any).claim
     const ids = [...ca.units, ...cb.units].map((unit: any) => unit.stageRunId)
@@ -122,8 +140,8 @@ test('P2 completing an upstream StageRun immediately releases its dependent Stag
           dependsOn: ['item-01-script'], instruction: 'plan visuals', inputs: [], expectedOutputs: [], policy: { maxAttempts: 3, leaseSeconds: 1800 }, metadata: {} }
       ]
     }] })
-    const s = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'script' }) as any
-    const v = worker.openPhysicalSession({ workerSlotId: 'visual-worker-01', logicalSessionId: 'visual' }) as any
+    const s = openSession(worker, { workerSlotId: 'script-worker-01', logicalSessionId: 'script' }) as any
+    const v = openSession(worker, { workerSlotId: 'visual-worker-01', logicalSessionId: 'visual' }) as any
     assert.equal((worker.claimWorkV2({ bindingTicket: v.ticket, idempotencyKey: 'v-before' }) as any).state, 'NO_WORK_AVAILABLE')
     const scriptClaim = (worker.claimWorkV2({ bindingTicket: s.ticket, idempotencyKey: 's-claim' }) as any).claim
     const commit = worker.commitAndClaimNext({ bindingTicket: s.ticket, claimId: scriptClaim.claimId,
@@ -145,7 +163,7 @@ test('P2 session rotation fences the old ticket generation', () => {
         workerDefinitionId: 'script-rewriter', requiredCapability: 'script-rewrite', instruction: 'rewrite', inputs: [],
         expectedOutputs: [{ logicalName: '重构脚本.md', required: true }], policy: { maxAttempts: 3, leaseSeconds: 1800 }, metadata: {} }]
     }] })
-    const first = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'old-session' }) as any
+    const first = openSession(worker, { workerSlotId: 'script-worker-01', logicalSessionId: 'old-session' }) as any
     const claim = (worker.claimWorkV2({ bindingTicket: first.ticket, idempotencyKey: 'old-claim' }) as any).claim
     const done = worker.commitAndClaimNext({ bindingTicket: first.ticket, claimId: claim.claimId,
       artifacts: [artifactFor(claim, first.workerSessionId, '-rotate')], idempotencyKey: 'old-done' }) as any
@@ -169,8 +187,8 @@ test('P2 expired lease requeues work for another worker slot', () => {
       workItemId: 'e-1', title: 'Expire', stages: [{ stageRunId: 'e-1-script', stageKey: 'script-rewrite', workerDefinitionId: 'script-rewriter',
         requiredCapability: 'script-rewrite', instruction: 'rewrite', inputs: [], expectedOutputs: [], policy: { maxAttempts: 3, leaseSeconds: 10 }, metadata: {} }]
     }] })
-    const first = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'expire-a' }) as any
-    const second = worker.openPhysicalSession({ workerSlotId: 'script-worker-02', logicalSessionId: 'expire-b' }) as any
+    const first = openSession(worker, { workerSlotId: 'script-worker-01', logicalSessionId: 'expire-a' }) as any
+    const second = openSession(worker, { workerSlotId: 'script-worker-02', logicalSessionId: 'expire-b' }) as any
     const original = (worker.claimWorkV2({ bindingTicket: first.ticket, leaseSeconds: 10, idempotencyKey: 'expire-claim-a' }) as any).claim
     const expired = worker.expireLeases({ workflowRunId: 'run-001', at: '2026-09-11T00:00:11.000Z' }) as any
     assert.deepEqual(expired.expiredClaimIds, [original.claimId])
@@ -196,9 +214,9 @@ test('P5 READY queue 0->1 creates one deduped wakeup and claimed work suppresses
           dependsOn: ['wake-script'], instruction: 'visual', inputs: [], expectedOutputs: [], policy: { maxAttempts: 3, leaseSeconds: 1800 }, metadata: {} }
       ]
     }] })
-    const visual = worker.openPhysicalSession({ workerSlotId: 'visual-worker-01', logicalSessionId: 'gpt-visual-entry' }) as any
+    const visual = openSession(worker, { workerSlotId: 'visual-worker-01', logicalSessionId: 'gpt-visual-entry' }) as any
     assert.equal((worker.claimWorkV2({ bindingTicket: visual.ticket, idempotencyKey: 'visual-wait' }) as any).state, 'NO_WORK_AVAILABLE')
-    const script = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-script-entry' }) as any
+    const script = openSession(worker, { workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-script-entry' }) as any
     const scriptClaim = (worker.claimWorkV2({ bindingTicket: script.ticket, idempotencyKey: 'script-claim-wakeup' }) as any).claim
     worker.commitAndClaimNext({ bindingTicket: script.ticket, claimId: scriptClaim.claimId,
       artifacts: [artifactFor(scriptClaim, script.workerSessionId, '-wakeup')], idempotencyKey: 'script-complete-wakeup' })
