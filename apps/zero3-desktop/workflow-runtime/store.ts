@@ -9,6 +9,8 @@ import {
   type WorkflowArtifactRelocation,
   type WorkflowArtifactSeed,
   type WorkflowEventRecord,
+  type WorkflowExternalJobRecord,
+  type WorkflowExternalJobState,
   type WorkflowItemRecord,
   type WorkflowRunPlan,
   type WorkflowRunRecord,
@@ -116,6 +118,23 @@ export class Zero3WorkflowStore {
         FOREIGN KEY(stage_run_id) REFERENCES stage_runs(stage_run_id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_artifacts_item ON workflow_artifacts(workflow_run_id, item_id, stage_id, logical_name);
+
+      CREATE TABLE IF NOT EXISTS workflow_external_jobs (
+        job_id TEXT PRIMARY KEY,
+        workflow_run_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        stage_run_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        request_key TEXT NOT NULL,
+        external_id TEXT,
+        state TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(stage_run_id) REFERENCES stage_runs(stage_run_id) ON DELETE CASCADE,
+        UNIQUE(stage_run_id, request_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_external_jobs_run ON workflow_external_jobs(workflow_run_id, state, updated_at);
 
       CREATE TABLE IF NOT EXISTS workflow_events (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -225,8 +244,9 @@ export class Zero3WorkflowStore {
     const items = this.db.prepare('SELECT * FROM work_items WHERE workflow_run_id=? ORDER BY ordinal,item_id').all(runId).map(rowValue => this.itemView(rowValue))
     const stages = this.db.prepare('SELECT * FROM stage_runs WHERE workflow_run_id=? ORDER BY item_id,stage_id').all(runId).map(rowValue => this.stageView(rowValue))
     const artifacts = this.db.prepare('SELECT * FROM workflow_artifacts WHERE workflow_run_id=? ORDER BY created_at,artifact_id').all(runId).map(rowValue => this.artifactView(rowValue))
+    const externalJobs = this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? ORDER BY created_at,job_id').all(runId).map(rowValue => this.externalJobView(rowValue))
     const events = this.db.prepare('SELECT * FROM workflow_events WHERE workflow_run_id=? ORDER BY sequence').all(runId).map(rowValue => this.eventView(rowValue))
-    return { plan, run: this.runView(row), items, stages, artifacts, events }
+    return { plan, run: this.runView(row), items, stages, artifacts, externalJobs, events }
   }
 
   readyStages(runIdValue: string, workerDefinitionId?: string | null): WorkflowStageRunRecord[] {
@@ -394,6 +414,105 @@ export class Zero3WorkflowStore {
       }, at)
       return updated
     })
+  }
+
+  ensureExternalJobIntent(
+    runIdValue: string,
+    stageRunIdValue: string,
+    providerValue: string,
+    requestKeyValue: string,
+    metadata: Readonly<Record<string, unknown>> = {}
+  ): WorkflowExternalJobRecord {
+    return this.transaction(() => {
+      const runId = id(runIdValue, 'workflowRunId')
+      const stageRunId = id(stageRunIdValue, 'stageRunId')
+      const provider = id(providerValue, 'externalJob provider')
+      const requestKey = id(requestKeyValue, 'externalJob requestKey')
+      const stage = this.requireStageRow(runId, stageRunId)
+      const existing = this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? AND stage_run_id=? AND request_key=?').get(runId, stageRunId, requestKey)
+      if (existing) {
+        const view = this.externalJobView(existing)
+        if (view.provider !== provider) throw new Error(`external job intent provider conflicts with existing request ${requestKey}`)
+        return view
+      }
+      const latest = this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? AND stage_run_id=? ORDER BY created_at DESC,job_id DESC LIMIT 1').get(runId, stageRunId)
+      if (latest) {
+        const previous = this.externalJobView(latest)
+        if (!['FAILED', 'CANCELLED'].includes(previous.state)) {
+          throw new Error(`external job stage ${stageRunId} already has non-terminal request ${previous.requestKey} in ${previous.state}`)
+        }
+      }
+      const at = now()
+      const jobId = `wjob-${randomUUID()}`
+      this.db.prepare(`INSERT INTO workflow_external_jobs
+        (job_id,workflow_run_id,item_id,stage_run_id,provider,request_key,external_id,state,metadata_json,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,NULL,'PENDING',?,?,?)`)
+        .run(jobId, runId, stage.item_id, stageRunId, provider, requestKey, json(metadata), at, at)
+      this.appendEventTx(runId, stage.item_id, stageRunId, 'external_job.intent', { jobId, provider, requestKey }, at)
+      return this.externalJobView(this.db.prepare('SELECT * FROM workflow_external_jobs WHERE job_id=?').get(jobId))
+    })
+  }
+
+  recordExternalJobSubmitted(
+    runIdValue: string,
+    stageRunIdValue: string,
+    externalIdValue: string,
+    metadataPatch: Readonly<Record<string, unknown>> = {}
+  ): WorkflowExternalJobRecord {
+    return this.transaction(() => {
+      const runId = id(runIdValue, 'workflowRunId')
+      const stageRunId = id(stageRunIdValue, 'stageRunId')
+      const externalId = externalIdValue.trim()
+      if (!externalId || externalId.length > 2048 || externalId.includes('\0')) throw new Error('external job id is invalid')
+      const row = this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? AND stage_run_id=? ORDER BY created_at DESC,job_id DESC LIMIT 1').get(runId, stageRunId)
+      if (!row) throw new Error(`external job intent not found for stage ${stageRunId}`)
+      const current = this.externalJobView(row)
+      if (current.externalId && current.externalId !== externalId) throw new Error('external job already bound to a different external id')
+      const metadata = { ...current.metadata, ...metadataPatch }
+      const at = now()
+      this.db.prepare("UPDATE workflow_external_jobs SET external_id=?,state='SUBMITTED',metadata_json=?,updated_at=? WHERE job_id=?")
+        .run(externalId, json(metadata), at, current.jobId)
+      if (current.externalId !== externalId || current.state !== 'SUBMITTED') {
+        this.appendEventTx(runId, current.itemId, stageRunId, 'external_job.submitted', { jobId: current.jobId, externalId }, at)
+      }
+      return this.externalJobView(this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? AND stage_run_id=? ORDER BY created_at DESC,job_id DESC LIMIT 1').get(runId, stageRunId))
+    })
+  }
+
+  updateExternalJobState(
+    runIdValue: string,
+    stageRunIdValue: string,
+    state: WorkflowExternalJobState,
+    metadataPatch: Readonly<Record<string, unknown>> = {}
+  ): WorkflowExternalJobRecord {
+    const allowed = new Set<WorkflowExternalJobState>(['PENDING', 'SUBMITTED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'OUTCOME_UNKNOWN'])
+    if (!allowed.has(state)) throw new Error('external job state is invalid')
+    return this.transaction(() => {
+      const runId = id(runIdValue, 'workflowRunId')
+      const stageRunId = id(stageRunIdValue, 'stageRunId')
+      const row = this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? AND stage_run_id=? ORDER BY created_at DESC,job_id DESC LIMIT 1').get(runId, stageRunId)
+      if (!row) throw new Error(`external job intent not found for stage ${stageRunId}`)
+      const current = this.externalJobView(row)
+      const metadata = { ...current.metadata, ...metadataPatch }
+      if (current.state === state && JSON.stringify(current.metadata) === JSON.stringify(metadata)) return current
+      const at = now()
+      this.db.prepare('UPDATE workflow_external_jobs SET state=?,metadata_json=?,updated_at=? WHERE job_id=?')
+        .run(state, json(metadata), at, current.jobId)
+      this.appendEventTx(runId, current.itemId, stageRunId, 'external_job.state_changed', { jobId: current.jobId, from: current.state, to: state }, at)
+      return this.externalJobView(this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? AND stage_run_id=? ORDER BY created_at DESC,job_id DESC LIMIT 1').get(runId, stageRunId))
+    })
+  }
+
+  externalJob(runIdValue: string, stageRunIdValue: string): WorkflowExternalJobRecord | null {
+    const runId = id(runIdValue, 'workflowRunId')
+    const stageRunId = id(stageRunIdValue, 'stageRunId')
+    const row = this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? AND stage_run_id=? ORDER BY created_at DESC,job_id DESC LIMIT 1').get(runId, stageRunId)
+    return row ? this.externalJobView(row) : null
+  }
+
+  listExternalJobs(runIdValue: string): WorkflowExternalJobRecord[] {
+    const runId = id(runIdValue, 'workflowRunId')
+    return this.db.prepare('SELECT * FROM workflow_external_jobs WHERE workflow_run_id=? ORDER BY created_at,job_id').all(runId).map(row => this.externalJobView(row))
   }
 
   private missingRequiredOutputsTx(runId: string, itemId: string, stageId: string): string[] {
@@ -598,6 +717,22 @@ export class Zero3WorkflowStore {
       state: row.state,
       metadata: parse(row.metadata_json, {}),
       createdAt: row.created_at
+    }
+  }
+
+  private externalJobView(row: any): WorkflowExternalJobRecord {
+    return {
+      jobId: row.job_id,
+      workflowRunId: row.workflow_run_id,
+      itemId: row.item_id,
+      stageRunId: row.stage_run_id,
+      provider: row.provider,
+      requestKey: row.request_key,
+      externalId: row.external_id,
+      state: row.state,
+      metadata: parse(row.metadata_json, {}),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
     }
   }
 

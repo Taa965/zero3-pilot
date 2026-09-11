@@ -1,4 +1,4 @@
-import type { WorkflowArtifactRelocation, WorkflowArtifactSeed, WorkflowRunSnapshot, WorkflowValidationResult } from './contracts.ts'
+import type { WorkflowArtifactRelocation, WorkflowArtifactSeed, WorkflowExternalJobState, WorkflowRunSnapshot, WorkflowValidationResult } from './contracts.ts'
 import { Zero3WorkflowRegistry } from './registry.ts'
 import { Zero3WorkflowStore } from './store.ts'
 
@@ -49,4 +49,15 @@ export class Zero3WorkflowRuntime {
   relocateArtifact(runId: string, artifactId: string, relocation: WorkflowArtifactRelocation) {
     return this.store.relocateArtifact(runId, artifactId, relocation)
   }
+  ensureExternalJobIntent(runId: string, stageRunId: string, provider: string, requestKey: string, metadata: Readonly<Record<string, unknown>> = {}) {
+    return this.store.ensureExternalJobIntent(runId, stageRunId, provider, requestKey, metadata)
+  }
+  recordExternalJobSubmitted(runId: string, stageRunId: string, externalId: string, metadataPatch: Readonly<Record<string, unknown>> = {}) {
+    return this.store.recordExternalJobSubmitted(runId, stageRunId, externalId, metadataPatch)
+  }
+  updateExternalJobState(runId: string, stageRunId: string, state: WorkflowExternalJobState, metadataPatch: Readonly<Record<string, unknown>> = {}) {
+    return this.store.updateExternalJobState(runId, stageRunId, state, metadataPatch)
+  }
+  externalJob(runId: string, stageRunId: string) { return this.store.externalJob(runId, stageRunId) }
+  listExternalJobs(runId: string) { return this.store.listExternalJobs(runId) }
 }

@@ -85,6 +85,7 @@ export type WorkflowSnapshot = {
   items: WorkflowItem[]
   stages: WorkflowStage[]
   artifacts: WorkflowArtifact[]
+  externalJobs: { jobId: string; itemId: string; stageRunId: string; provider: string; requestKey: string; externalId: string | null; state: string; metadata: Record<string, unknown>; createdAt: string; updatedAt: string }[]
   events: { sequence: number; type: string; itemId: string | null; stageRunId: string | null; payload: Record<string, unknown>; at: string }[]
 }
 

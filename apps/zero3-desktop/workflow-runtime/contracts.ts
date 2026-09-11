@@ -30,6 +30,16 @@ export type WorkflowStageStatus =
 export type WorkflowArtifactState = 'PENDING' | 'AVAILABLE' | 'VERIFIED' | 'MISSING' | 'INVALID'
 export type WorkflowArtifactStorageProvider = 'GOOGLE_DRIVE' | 'LOCAL' | 'REMOTE_COMPUTE' | 'URL'
 
+export type WorkflowExternalJobState =
+  | 'PENDING'
+  | 'SUBMITTED'
+  | 'RUNNING'
+  | 'SUCCEEDED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'OUTCOME_UNKNOWN'
+
+
 export interface WorkflowArtifactLocator {
   provider: WorkflowArtifactStorageProvider
   fileId?: string
@@ -192,6 +202,20 @@ export interface WorkflowArtifactRecord {
   createdAt: string
 }
 
+export interface WorkflowExternalJobRecord {
+  jobId: string
+  workflowRunId: string
+  itemId: string
+  stageRunId: string
+  provider: string
+  requestKey: string
+  externalId: string | null
+  state: WorkflowExternalJobState
+  metadata: Readonly<Record<string, unknown>>
+  createdAt: string
+  updatedAt: string
+}
+
 export interface WorkflowEventRecord {
   sequence: number
   eventId: string
@@ -209,6 +233,7 @@ export interface WorkflowRunSnapshot {
   items: readonly WorkflowItemRecord[]
   stages: readonly WorkflowStageRunRecord[]
   artifacts: readonly WorkflowArtifactRecord[]
+  externalJobs: readonly WorkflowExternalJobRecord[]
   events: readonly WorkflowEventRecord[]
 }
 

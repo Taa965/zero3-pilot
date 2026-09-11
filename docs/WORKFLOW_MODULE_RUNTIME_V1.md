@@ -66,3 +66,9 @@ V1 now implements the module registry, durable per-item runtime, Artifact regist
 ### Google Drive direct configuration
 
 Zero3 never exposes Drive tokens to the renderer. The desktop main process enables direct Drive when either `ZERO3_GOOGLE_DRIVE_ACCESS_TOKEN_FILE` points to an externally refreshed bearer token file, or the refresh-token triplet `ZERO3_GOOGLE_DRIVE_CLIENT_ID`, `ZERO3_GOOGLE_DRIVE_CLIENT_SECRET_FILE`, and `ZERO3_GOOGLE_DRIVE_REFRESH_TOKEN_FILE` is configured. Local scripts are then uploaded idempotently by Artifact id, relocated to a Drive locator, verified, and only then release that WorkItem's `script-rewrite` StageRun. Interactive OAuth account-connection UI is still a later product step.
+
+## Durable remote render identity
+
+`workflow_external_jobs` is the authoritative remote-job ledger for cloud stages. Zero3 persists a provider + request key intent before any submission. A returned remote execution id is immutable for that attempt and later polling reconciles that same id. A new request key is allowed only after a definite `FAILED` or `CANCELLED` outcome.
+
+`Zero3WorkflowRemoteRenderService` requires an idempotent provider adapter and first tries `resolveByRequestKey`. If a submission response is ambiguous, the job becomes `OUTCOME_UNKNOWN` and the StageRun moves to `WAITING_HUMAN`; the runtime will not blindly submit another GPU job. The concrete AIGate/cloud adapter is intentionally still outside the generic Workflow Runtime.
