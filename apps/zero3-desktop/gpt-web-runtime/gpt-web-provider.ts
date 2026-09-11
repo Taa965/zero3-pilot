@@ -67,7 +67,7 @@ const TIMEOUT_RECOVERY_START_TIMEOUT_MS = 15_000
 const TIMEOUT_RECOVERY_PROMPT = '现在完成到哪一步了？如果还没完成，请继续执行'
 const TIMEOUT_LOCKED_ROTATION_DELAY_MS = 15_000
 const MAX_TIMEOUT_PHYSICAL_ROTATIONS = 1
-const TIMEOUT_ROTATION_PROMPT = '刚才的会话因消息发送超时且一直卡在执行中，已切换到新的会话。现在完成到哪一步了？如果还没完成，请从未完成的位置继续执行，不要重复已经完成的部分。如果这是 Zero3 Worker 任务，请先调用 recover_worker 获取当前任务状态和最后检查点，再继续。'
+const TIMEOUT_ROTATION_PROMPT = '刚才的会话因消息发送超时或连接中断并且已经无法继续交互，已切换到新的会话。现在完成到哪一步了？如果还没完成，请从未完成的位置继续执行，不要重复已经完成的部分。如果这是 Zero3 Worker 任务，请先调用 recover_worker 获取当前任务状态和最后检查点，再继续。'
 const RENDER_WAIT_TIMEOUT_MS = 8_000
 const SNAPSHOT_MAX_COUNT = 30
 const SNAPSHOT_MAX_WIDTH = 1_280
@@ -111,13 +111,28 @@ const CHATGPT_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
     }
     return false
   })
+  const connectionLostPatterns = [
+    /连接已中断[。.]?\s*正在等待完整回复/,
+    /connection (?:was )?interrupted/i,
+    /waiting for (?:the )?full response/i
+  ]
   const turns = document.querySelectorAll('article[data-testid^="conversation-turn-"]')
+  const lastTurn = turns.item(turns.length - 1)
+  const connectionCandidates = [
+    lastTurn,
+    ...document.querySelectorAll('[role="alert"], [data-testid*="error"], [data-testid*="warning"], [aria-live="assertive"], [aria-live="polite"]')
+  ]
+  const connectionLostVisible = connectionCandidates.some(element => {
+    if (!(element instanceof HTMLElement) || !visibleInViewport(element)) return false
+    const text = (element.innerText || '').slice(-512)
+    return connectionLostPatterns.some(pattern => pattern.test(text))
+  })
   const root = turns.item(turns.length - 1)?.parentElement || document.querySelector('main') || document.body
   const key = '__zero3ExecutionWatchdogV1'
   let watchdog = window[key]
   if (!watchdog || watchdog.root !== root) {
     watchdog?.observer?.disconnect?.()
-    watchdog = { root, executing: false, lastProgressAt: Date.now(), observer: null }
+    watchdog = { root, executing: false, lastProgressAt: Date.now(), connectionLostHits: 0, observer: null }
     const observer = new MutationObserver(records => {
       if (records.some(record => record.type === 'characterData' || record.type === 'childList' || record.type === 'attributes')) {
         watchdog.lastProgressAt = Date.now()
@@ -130,7 +145,9 @@ const CHATGPT_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
   if (executing && !watchdog.executing) watchdog.lastProgressAt = Date.now()
   watchdog.executing = executing
   if (!executing) watchdog.lastProgressAt = Date.now()
-  return { executing, lastProgressAt: watchdog.lastProgressAt, timeoutError }
+  watchdog.connectionLostHits = connectionLostVisible ? Math.min((watchdog.connectionLostHits || 0) + 1, 3) : 0
+  const connectionLost = watchdog.connectionLostHits >= 3
+  return { executing, lastProgressAt: watchdog.lastProgressAt, timeoutError, connectionLost }
 })()`
 const CHATGPT_TIMEOUT_RECOVERY_SCRIPT = String.raw`(async () => {
   const prompt = ${JSON.stringify(TIMEOUT_RECOVERY_PROMPT)}
@@ -142,19 +159,25 @@ const CHATGPT_TIMEOUT_RECOVERY_SCRIPT = String.raw`(async () => {
     const rect = element.getBoundingClientRect()
     return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth
   }
-  const timeoutVisible = () => {
+  const recoverableErrorVisible = () => {
     const retryLabels = new Set(['重试', 'Retry', 'Try again'])
-    const patterns = [/消息发送超时/, /message(?: sending)? timed out/i, /request timed out/i, /timed out.*try again/i]
-    return Array.from(document.querySelectorAll('button')).some(button => {
+    const timeoutPatterns = [/消息发送超时/, /message(?: sending)? timed out/i, /request timed out/i, /timed out.*try again/i]
+    const timeout = Array.from(document.querySelectorAll('button')).some(button => {
       if (!(button instanceof HTMLElement) || !visible(button)) return false
       const label = [button.getAttribute('aria-label') || '', button.innerText || ''].join(' ').trim()
       if (![...retryLabels].some(candidate => label === candidate || label.includes(candidate))) return false
       let node = button
       for (let depth = 0; depth < 5 && node; depth += 1, node = node.parentElement) {
-        if (patterns.some(pattern => pattern.test((node.innerText || '').slice(0, 512)))) return true
+        if (timeoutPatterns.some(pattern => pattern.test((node.innerText || '').slice(0, 512)))) return true
       }
       return false
     })
+    if (timeout) return true
+    const connectionPatterns = [/连接已中断[。.]?\s*正在等待完整回复/, /connection (?:was )?interrupted/i, /waiting for (?:the )?full response/i]
+    const turns = document.querySelectorAll('article[data-testid^="conversation-turn-"]')
+    const lastTurn = turns.item(turns.length - 1)
+    const candidates = [lastTurn, ...document.querySelectorAll('[role="alert"], [data-testid*="error"], [data-testid*="warning"], [aria-live="assertive"], [aria-live="polite"]')]
+    return candidates.some(element => element instanceof HTMLElement && visible(element) && connectionPatterns.some(pattern => pattern.test((element.innerText || '').slice(-512))))
   }
   const composerText = composer => composer instanceof HTMLTextAreaElement ? composer.value : (composer.innerText || composer.textContent || '')
   const fillComposer = composer => {
@@ -179,7 +202,7 @@ const CHATGPT_TIMEOUT_RECOVERY_SCRIPT = String.raw`(async () => {
   }
   const deadline = Date.now() + 8000
   while (Date.now() < deadline) {
-    if (!timeoutVisible()) return 'resolved'
+    if (!recoverableErrorVisible()) return 'resolved'
     const composer = document.querySelector('#prompt-textarea')
     if (!(composer instanceof HTMLElement) || !visible(composer)) { await sleep(250); continue }
     if (composerText(composer).trim()) return 'blocked'
@@ -378,6 +401,10 @@ function stoppedExecutionStatus(): Zero3GptWebExecutionStatus {
   return { executing: false, health: null, lastProgressAt: null, idleForMs: 0, recoveryAttempt: 0 }
 }
 
+function isRecoverableFailureHealth(health: Zero3GptWebExecutionStatus['health']): health is 'timeout_error' | 'connection_lost' {
+  return health === 'timeout_error' || health === 'connection_lost'
+}
+
 function executionStatusFromProbe(value: unknown, now = Date.now()): Zero3GptWebExecutionStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return stoppedExecutionStatus()
   const raw = value as Record<string, unknown>
@@ -385,6 +412,9 @@ function executionStatusFromProbe(value: unknown, now = Date.now()): Zero3GptWeb
   const observed = typeof raw.lastProgressAt === 'number' && Number.isFinite(raw.lastProgressAt)
     ? Math.min(now, Math.max(0, raw.lastProgressAt)) : now
   const idleForMs = Math.max(0, now - observed)
+  if (raw.connectionLost === true) {
+    return { executing, health: 'connection_lost', lastProgressAt: observed, idleForMs, recoveryAttempt: 0 }
+  }
   if (raw.timeoutError === true) {
     return { executing, health: 'timeout_error', lastProgressAt: observed, idleForMs, recoveryAttempt: 0 }
   }
@@ -1036,7 +1066,7 @@ export class Zero3GptWebProvider {
     if (!live || live.view.webContents.isDestroyed()) { this.clearTimeoutRotation(entryId); return }
     const detected = await this.readExecutionState(live)
     const recovery = this.timeoutRecoveryStates.get(entryId)
-    const eligible = recovery?.phase === 'failed' || (detected?.health === 'timeout_error' && detected.executing)
+    const eligible = recovery?.phase === 'failed' || (isRecoverableFailureHealth(detected?.health ?? null) && detected?.executing === true)
     if (!eligible) { this.clearTimeoutRotation(entryId); if (detected) this.publishExecutionState(entryId, detected); return }
     const attempts = this.timeoutRotationAttempts.get(entryId) ?? 0
     if (attempts >= MAX_TIMEOUT_PHYSICAL_ROTATIONS) {
@@ -1073,7 +1103,7 @@ export class Zero3GptWebProvider {
     if (!live || live.view.webContents.isDestroyed()) { this.clearTimeoutRecovery(entryId); return }
     const detected = await this.readExecutionState(live)
     if (!detected) { this.clearTimeoutRecovery(entryId); return }
-    if (detected.health !== 'timeout_error' || detected.executing) {
+    if (!isRecoverableFailureHealth(detected.health) || detected.executing) {
       this.clearTimeoutRecovery(entryId)
       this.publishExecutionState(entryId, detected)
       return
@@ -1123,7 +1153,7 @@ export class Zero3GptWebProvider {
     }
     if (recovery?.phase === 'recovering') {
       const elapsed = recovery.sentAt ? Date.now() - recovery.sentAt : TIMEOUT_RECOVERY_START_TIMEOUT_MS
-      if (status.health === 'timeout_error') {
+      if (isRecoverableFailureHealth(status.health)) {
         if (elapsed < TIMEOUT_RECOVERY_START_TIMEOUT_MS && !recovery.sawExecutionAfterSend) {
           this.publishExecutionState(entryId, status)
           return
@@ -1156,13 +1186,13 @@ export class Zero3GptWebProvider {
       return
     }
     if (recovery?.phase === 'scheduled') {
-      if (status.health !== 'timeout_error' || status.executing) {
+      if (!isRecoverableFailureHealth(status.health) || status.executing) {
         this.clearTimeoutRecovery(entryId)
         this.publishExecutionState(entryId, status)
       } else this.publishExecutionState(entryId, status)
       return
     }
-    if (status.health === 'timeout_error') {
+    if (isRecoverableFailureHealth(status.health)) {
       this.publishExecutionState(entryId, status)
       if (status.executing) {
         if ((this.timeoutRotationAttempts.get(entryId) ?? 0) < MAX_TIMEOUT_PHYSICAL_ROTATIONS) this.scheduleTimeoutRotation(live)

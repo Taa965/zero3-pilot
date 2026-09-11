@@ -6,7 +6,7 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '..')
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8')
 
-test('session list distinguishes active, idle, stalled, timeout recovery, and unread-complete states', () => {
+test('session list distinguishes active, idle, stalled, connection loss, timeout recovery, and unread-complete states', () => {
   const list = read('ui-v2/conversations/UnifiedSessionList.tsx')
   assert.match(list, /session\.executionHealth \?\? \(executing \? 'active' : null\)/)
   assert.match(list, /data-session-health/)
@@ -17,6 +17,7 @@ test('session list distinguishes active, idle, stalled, timeout recovery, and un
   assert.match(list, /等待进展/)
   assert.match(list, /疑似卡住/)
   assert.match(list, /发送超时/)
+  assert.match(list, /连接中断/)
   assert.match(list, /自动恢复 1\/1/)
   assert.match(list, /准备换会话/)
   assert.match(list, /切换新会话/)
@@ -61,6 +62,7 @@ test('web execution health is carried through the renderer adapter', () => {
   const types = read('ui-v2/conversations/session-types.ts')
   const shell = read('ui-v2/shell/Zero3AppShell.tsx')
   assert.match(types, /'timeout_error'/)
+  assert.match(types, /'connection_lost'/)
   assert.match(types, /'recovering'/)
   assert.match(types, /'recovery_failed'/)
   assert.match(types, /'rotating'/)
@@ -80,7 +82,7 @@ test('GPT timeout recovery classifies the error locally and never opens Ctrl+F',
   assert.match(gpt, /TIMEOUT_RECOVERY_DELAY_MS = 3_000/)
   assert.match(gpt, /TIMEOUT_LOCKED_ROTATION_DELAY_MS = 15_000/)
   assert.match(gpt, /MAX_TIMEOUT_PHYSICAL_ROTATIONS = 1/)
-  assert.match(gpt, /TIMEOUT_ROTATION_PROMPT = '刚才的会话因消息发送超时且一直卡在执行中/)
+  assert.match(gpt, /TIMEOUT_ROTATION_PROMPT = '刚才的会话因消息发送超时或连接中断并且已经无法继续交互/)
   assert.match(gpt, /archivePreRotationConversation/)
   assert.match(gpt, /conversationUrl: null/)
   assert.match(gpt, /rotatePhysicalConversation/)
@@ -92,10 +94,26 @@ test('GPT timeout recovery classifies the error locally and never opens Ctrl+F',
   assert.doesNotMatch(gpt, /findInPage|window\.find|execCommand\(['"]find/i)
 })
 
+test('GPT connection-lost detection is debounced and uses the existing recovery/rotation path', () => {
+  const gpt = read('gpt-web-runtime/gpt-web-provider.ts')
+  const shell = read('ui-v2/shell/Zero3AppShell.tsx')
+  assert.match(gpt, /连接已中断/)
+  assert.match(gpt, /waiting for \(\?:the \)\?full response/i)
+  assert.match(gpt, /connectionLostHits/)
+  assert.match(gpt, /connectionLostHits >= 3/)
+  assert.match(gpt, /health: 'connection_lost'/)
+  assert.match(gpt, /isRecoverableFailureHealth/)
+  assert.match(gpt, /TIMEOUT_LOCKED_ROTATION_DELAY_MS = 15_000/)
+  assert.match(gpt, /MAX_TIMEOUT_PHYSICAL_ROTATIONS = 1/)
+  assert.match(gpt, /boundProjectUrl\(entry\.projectId\)/)
+  assert.match(shell, /status\.health === 'connection_lost'/)
+  assert.doesNotMatch(gpt, /findInPage|window\.find|OCR/i)
+})
+
 test('generated preload type overlays expose provider-specific health contracts', () => {
   const gpt = read('scripts/apply-gpt-web-provider.mjs')
   const gemini = read('scripts/apply-gemini-web-provider.mjs')
-  assert.match(gpt, /'timeout_error' \| 'recovering' \| 'recovery_failed' \| 'rotating' \| 'rotation_failed'/)
+  assert.match(gpt, /'timeout_error' \| 'connection_lost' \| 'recovering' \| 'recovery_failed' \| 'rotating' \| 'rotation_failed'/)
   assert.match(gpt, /recoveryAttempt: 0 \| 1/)
   assert.match(gemini, /health: 'active' \| 'idle' \| 'stalled' \| null/)
   for (const source of [gpt, gemini]) {

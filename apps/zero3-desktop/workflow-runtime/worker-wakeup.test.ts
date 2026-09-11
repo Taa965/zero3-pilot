@@ -72,6 +72,15 @@ test('P5 timeout recovery state defers worker wakeup to avoid duplicate continua
   assert.match(events[0], /^deferred:wake-1:/)
 })
 
+test('P5 connection-lost state defers worker wakeup to avoid duplicate continuation', async () => {
+  const { runtime, events } = runtimePort()
+  const { gpt, sent } = gptPort({ executing: true, health: 'connection_lost' })
+  const controller = new Zero3WorkerWakeupController(runtime, gpt)
+  await controller.tick()
+  assert.equal(sent.length, 0)
+  assert.match(events[0], /^deferred:wake-1:/)
+})
+
 test('P5 provider-side conversation rotation defers duplicate worker wakeup', async () => {
   const { runtime, events } = runtimePort()
   const { gpt, sent } = gptPort({ executing: false, health: 'rotating' })

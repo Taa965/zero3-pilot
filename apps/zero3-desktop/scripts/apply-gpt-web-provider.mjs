@@ -176,7 +176,7 @@ type Zero3GptWebEvent =
       conversationUrl: string | null
       pageTitle: string | null
     }
-  | { kind: 'execution'; entryId: string; executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null; lastProgressAt: number | null; idleForMs: number; recoveryAttempt: 0 | 1 }
+  | { kind: 'execution'; entryId: string; executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'connection_lost' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null; lastProgressAt: number | null; idleForMs: number; recoveryAttempt: 0 | 1 }
 `
 
 const globalWindowSurface = String.raw`    zero3GptWeb: {
@@ -187,7 +187,7 @@ const globalWindowSurface = String.raw`    zero3GptWeb: {
       show: (request: { id: string; bounds: Zero3GptWebBounds }) => Promise<Zero3WorkspaceEntry>
       warm: (request: { id: string }) => Promise<{ state: 'warming' | 'warm' | 'visible' }>
       snapshot: (request: { id: string }) => Promise<{ dataUrl: string | null }>
-      executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null; lastProgressAt: number | null; idleForMs: number; recoveryAttempt: 0 | 1 }>
+      executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'connection_lost' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null; lastProgressAt: number | null; idleForMs: number; recoveryAttempt: 0 | 1 }>
       hide: (request: { id: string }) => Promise<{ hidden: boolean }>
       setChromeVisible: (request: { id: string; visible: boolean }) => Promise<{ visible: boolean }>
       toolbarAction: (request: { id: string; action: Zero3GptWebToolbarAction }) => Promise<{ action: Zero3GptWebToolbarAction; invoked: true }>
@@ -373,15 +373,15 @@ export function applyZero3GptWebProvider() {
   }])
   patchFile('src/global.d.ts', [{
     label: 'GPT Web execution event health fields',
-    already: "health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null",
+    already: "health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'connection_lost' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null",
     from: "  | { kind: 'execution'; entryId: string; executing: boolean }",
-    to: "  | { kind: 'execution'; entryId: string; executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null; lastProgressAt: number | null; idleForMs: number; recoveryAttempt: 0 | 1 }"
+    to: "  | { kind: 'execution'; entryId: string; executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'connection_lost' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null; lastProgressAt: number | null; idleForMs: number; recoveryAttempt: 0 | 1 }"
   }])
   patchFile('src/global.d.ts', [{
     label: 'GPT Web execution status renderer method',
     already: "executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error'",
     from: "      executionStatus: (request: { id: string }) => Promise<{ executing: boolean }>",
-    to: "      executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null; lastProgressAt: number | null; idleForMs: number; recoveryAttempt: 0 | 1 }>"
+    to: "      executionStatus: (request: { id: string }) => Promise<{ executing: boolean; health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'connection_lost' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null; lastProgressAt: number | null; idleForMs: number; recoveryAttempt: 0 | 1 }>"
   }])
 
   applyZero3GptWebUi()

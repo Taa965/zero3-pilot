@@ -155,11 +155,12 @@ export function UnifiedSessionList({
     const idle = health === 'idle'
     const stalled = health === 'stalled'
     const timeoutError = health === 'timeout_error'
+    const connectionLost = health === 'connection_lost'
     const recovering = health === 'recovering'
     const recoveryFailed = health === 'recovery_failed'
     const rotating = health === 'rotating'
     const rotationFailed = health === 'rotation_failed'
-    const attentionRing = executing || completionUnread || timeoutError || recovering || recoveryFailed || rotating || rotationFailed
+    const attentionRing = executing || completionUnread || timeoutError || connectionLost || recovering || recoveryFailed || rotating || rotationFailed
     const mark = PROVIDER_MARKS[session.provider]
     return (
       <button
@@ -185,12 +186,12 @@ export function UnifiedSessionList({
           <div className="flex min-w-0 items-center gap-1.5 font-medium">
             <span
               className="relative grid size-4 shrink-0 place-items-center"
-              title={rotationFailed ? '新会话接管失败，需要人工处理' : rotating ? '旧会话锁死，正在切换新的 GPT 会话' : recoveryFailed ? '自动恢复失败，准备切换新会话' : recovering ? '检测到发送超时，正在自动继续（1/1）' : timeoutError ? '检测到消息发送超时，准备自动恢复' : stalled ? '疑似卡住：已超过 5 分钟没有可见进展' : idle ? '执行中：已超过 90 秒没有可见进展' : executing ? '正在执行' : completionUnread ? '执行完成，尚未查看' : undefined}
+              title={rotationFailed ? '新会话接管失败，需要人工处理' : rotating ? '旧会话锁死，正在切换新的 GPT 会话' : recoveryFailed ? '自动恢复失败，准备切换新会话' : recovering ? '检测到会话故障，正在自动继续（1/1）' : connectionLost ? 'ChatGPT 连接已中断，正在确认是否需要重开会话' : timeoutError ? '检测到消息发送超时，准备自动恢复' : stalled ? '疑似卡住：已超过 5 分钟没有可见进展' : idle ? '执行中：已超过 90 秒没有可见进展' : executing ? '正在执行' : completionUnread ? '执行完成，尚未查看' : undefined}
             >
               {attentionRing && (
                 <span className={cn(
                   'pointer-events-none absolute inset-[-2px] rounded-full border',
-                  rotationFailed || recoveryFailed || timeoutError || stalled ? 'border-red-500' : rotating || recovering || idle ? 'border-amber-500' : 'border-emerald-500'
+                  rotationFailed || recoveryFailed || timeoutError || connectionLost || stalled ? 'border-red-500' : rotating || recovering || idle ? 'border-amber-500' : 'border-emerald-500'
                 )} />
               )}
               {executing && health === 'active' && (
@@ -203,6 +204,9 @@ export function UnifiedSessionList({
                 <span className="pointer-events-none absolute inset-[-3px] rounded-full border border-red-400/80 motion-safe:animate-pulse" />
               )}
               {timeoutError && (
+                <span className="pointer-events-none absolute inset-[-3px] rounded-full border border-red-400/80 motion-safe:animate-pulse" />
+              )}
+              {connectionLost && (
                 <span className="pointer-events-none absolute inset-[-3px] rounded-full border border-red-400/80 motion-safe:animate-pulse" />
               )}
               {recovering && (
@@ -220,6 +224,7 @@ export function UnifiedSessionList({
             {idle && <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-normal text-amber-600">等待进展</span>}
             {stalled && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">疑似卡住</span>}
             {timeoutError && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">发送超时</span>}
+            {connectionLost && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">连接中断</span>}
             {recovering && <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-normal text-amber-600">自动恢复 1/1</span>}
             {recoveryFailed && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">准备换会话</span>}
             {rotating && <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-normal text-amber-600">切换新会话</span>}

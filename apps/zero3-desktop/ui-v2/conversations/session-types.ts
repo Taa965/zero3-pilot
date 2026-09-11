@@ -4,6 +4,7 @@ export type WorkspaceExecutionHealth =
   | 'idle'
   | 'stalled'
   | 'timeout_error'
+  | 'connection_lost'
   | 'recovering'
   | 'recovery_failed'
   | 'rotating'
