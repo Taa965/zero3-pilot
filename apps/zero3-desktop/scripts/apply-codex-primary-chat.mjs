@@ -8,6 +8,10 @@ function patchFile(relativePath, replacements) {
   let source = fs.readFileSync(file, 'utf8')
 
   for (const replacement of replacements) {
+    // appliedMarkers record output that a later overlay (e.g. R3D thread
+    // actions) supersedes; their presence means this hunk is already applied
+    // in its final form and must not be re-patched from the pinned source.
+    if (replacement.appliedMarkers?.every(marker => source.includes(marker))) continue
     if (source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) {
       throw new Error(
@@ -1167,6 +1171,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe archive action',
+      appliedMarkers: ['codexPrimaryChat.archiveThread(sessionId)'],
       from: '    onArchiveSession: sessionId => void archiveSession(sessionId),',
       to:
         "    onArchiveSession: sessionId =>\n" +
@@ -1174,6 +1179,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe branch current action',
+      appliedMarkers: ['codexPrimaryChat.branchFromMessage(messageId)'],
       from: '    onBranchInNewChat: messageId => void branchInNewChat(messageId),',
       to:
         "    onBranchInNewChat: messageId =>\n" +
@@ -1181,6 +1187,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe branch session action',
+      appliedMarkers: ['codexPrimaryChat.forkThread(sessionId)'],
       from: '    onBranchSession: sessionId => void branchStoredSession(sessionId),',
       to:
         "    onBranchSession: sessionId =>\n" +
@@ -1188,6 +1195,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe selected delete action',
+      appliedMarkers: ['codexPrimaryChat.deleteThread(id)'],
       from:
         "    onDeleteSelectedSession: () => {\n" +
         "      const id = $selectedStoredSessionId.get()\n\n" +
@@ -1205,6 +1213,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe sidebar delete action',
+      appliedMarkers: ['codexPrimaryChat.deleteThread(sessionId)'],
       from: '    onDeleteSession: sessionId => void removeSession(sessionId),',
       to:
         "    onDeleteSession: sessionId =>\n" +
@@ -1212,6 +1221,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe edit action',
+      appliedMarkers: ['codexPrimaryChat.editMessage(edited)'],
       from: '    onEdit: editMessage,',
       to:
         "    onEdit: message =>\n" +
@@ -1231,6 +1241,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe reload action',
+      appliedMarkers: ['codexPrimaryChat.reloadFromMessage(parentId)'],
       from: '    onReload: reloadFromMessage,',
       to:
         "    onReload: parentId =>\n" +
@@ -1238,6 +1249,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe restore action',
+      appliedMarkers: ['codexPrimaryChat.restoreToMessage(messageId, target)'],
       from: '    onRestoreToMessage: restoreToMessage,',
       to:
         "    onRestoreToMessage: (messageId, target) =>\n" +
@@ -1265,6 +1277,7 @@ export function applyZero3CodexPrimaryChat() {
     },
     {
       label: 'Codex-safe steer action',
+      appliedMarkers: ['codexPrimaryChat.steerText(text)'],
       from: '    onSteer: steerPrompt,',
       to:
         "    onSteer: text =>\n" +
