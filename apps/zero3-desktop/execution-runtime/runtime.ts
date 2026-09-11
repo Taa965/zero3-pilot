@@ -299,7 +299,8 @@ export class Zero3ExecutionRuntime {
       }
       if (!Number.isFinite(new Date(preflight.checkedAt).getTime())) throw new Error('Skill preflight checkedAt is invalid')
       if (preflight.state === 'ready' && preflight.missingRequiredSkills.length > 0) throw new Error('ready Skill preflight cannot contain missing required Skills')
-      const blocker = preflight.missingRequiredSkills.length > 0 ? `Missing required Skills: ${preflight.missingRequiredSkills.join(', ')}` : null
+      const skillBlocker = preflight.missingRequiredSkills.length > 0 ? `Missing required Skills: ${preflight.missingRequiredSkills.join(', ')}` : null
+      const blocker = skillBlocker ?? (current.blocker?.startsWith('Missing required Skills:') ? null : current.blocker)
       let runtime: ExecutionRuntimeState = { ...snapshot.runtime, steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? { ...step, skillPreflight: structuredClone(preflight), blocker } : step) }
       const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'skill.preflight', payload: { state: preflight.state, executor: preflight.executor, adapterMode: preflight.adapterMode, requiredSkills: preflight.requiredSkills, optionalSkills: preflight.optionalSkills, availableRequiredSkills: preflight.availableRequiredSkills, missingRequiredSkills: preflight.missingRequiredSkills, missingOptionalSkills: preflight.missingOptionalSkills } })
       runtime = refreshDerived(recorded.runtime)

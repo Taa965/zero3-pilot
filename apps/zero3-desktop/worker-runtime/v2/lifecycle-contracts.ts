@@ -78,3 +78,30 @@ export type LifecycleMemoryCommitInput = {
   warnings?: Array<string | Record<string, unknown>>
   recommendedNextActions?: Array<string | Record<string, unknown>>
 }
+
+export type AutonomousTaskIntakeRecord = {
+  sourceKey: string
+  projectId: string
+  entityType: string
+  entityId: string
+  sourceTaskId: string | null
+  sourceVersion: number
+  fingerprint: string
+  taskId: string | null
+  detail: Record<string, unknown>
+  firstSeenAt: string
+  lastSeenAt: string
+}
+
+export type AutonomousTaskDispatchRecord = {
+  dispatchKey: string
+  projectId: string
+  taskId: string
+  stepId: string
+  attempt: number
+  state: 'RESERVED' | 'SESSION_CREATED' | 'CLAIMED' | 'WAKEUP_SENT' | 'ABORTED'
+  sessionId: string | null
+  lastError: string | null
+  createdAt: string
+  updatedAt: string
+}

@@ -32,6 +32,8 @@ const codexItemRenderingHardening = read('apps/zero3-desktop/scripts/apply-codex
 const codexMoreItems = read('apps/zero3-desktop/scripts/apply-codex-more-items.mjs')
 const codexStructuredInput = read('apps/zero3-desktop/scripts/apply-codex-structured-input.mjs')
 const codexStructuredInputHardening = read('apps/zero3-desktop/scripts/apply-codex-structured-input-hardening.mjs')
+const autonomousTaskLoop = read('apps/zero3-desktop/worker-runtime/v2/autonomous-task-loop.ts')
+const agentLifecycleOverlay = read('apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs')
 const externalAgents = read('crates/zero3-subagents/src/lib.rs')
 
 requireText(
@@ -384,4 +386,32 @@ for (const forbidden of [
   )
 }
 
-console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / R3A+R3B native Item projection / R3C typed text+localImage input / Hermes UI shell / DeepSeek donor / external-agent collaboration.')
+for (const required of [
+  "ZERO3_AUTONOMOUS_TASK_LOOP = 'zero3.pilot.autonomous-task-loop.v1'",
+  'this.store.getAutonomousIntake(candidate.sourceKey)',
+  "const SEMANTIC_DEDUPE_TYPES = new Set(['problem', 'blocker', 'dependency', 'error', 'warning', 'next_actions'])",
+  'this.store.findAutonomousIntakeByFingerprint(project.id, candidate.entityType, candidate.fingerprint)',
+  'candidate.sourceVersion < existing.sourceVersion',
+  'MIN_SEMANTIC_KEY_LENGTH',
+  'this.ports.execution.createTask({',
+  "target !== 'GPT_WEB'",
+  "entity_type: 'task_outcome'",
+  "source: { type: 'system', ref: taskId }"
+]) {
+  requireText(autonomousTaskLoop, required, `Autonomous Task Loop lost required fail-closed/durable behavior: ${required}`)
+}
+for (const required of [
+  "ZERO3_AUTONOMOUS_TASK_LOOP_ENABLED",
+  "ZERO3_AUTONOMOUS_TASK_AUTO_DISPATCH",
+  'zero3AutonomousTaskLoop.start()',
+  'zero3AutonomousTaskLoop.stop()'
+]) {
+  requireText(agentLifecycleOverlay, required, `Agent Lifecycle overlay is missing safe Autonomous Task Loop wiring: ${required}`)
+}
+forbidText(
+  agentLifecycleOverlay,
+  "enabled: true,\n    autoDispatch: true",
+  'Autonomous Task Loop must not enable unattended intake and dispatch unconditionally.'
+)
+
+console.log('Zero3 architecture guard passed: pinned Codex app-server core / primary chat / queued native prompts / R3A+R3B native Item projection / R3C typed text+localImage input / Hermes UI shell / DeepSeek donor / external-agent collaboration / durable fail-closed autonomous task loop.')

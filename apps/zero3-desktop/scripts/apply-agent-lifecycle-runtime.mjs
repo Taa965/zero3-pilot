@@ -111,6 +111,39 @@ const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(
   },
   { memoryForProject: projectId => zero3SharedMemoryForProject(projectId) }
 )
+function zero3AutonomousTaskFlag(name: string): boolean {
+  return ['1', 'true', 'yes', 'on'].includes((process.env[name] ?? '').trim().toLowerCase())
+}
+const zero3AutonomousTaskInterval = Number.parseInt(process.env.ZERO3_AUTONOMOUS_TASK_INTERVAL_MS ?? '', 10)
+const zero3AutonomousTaskLoop = new Zero3AutonomousTaskLoop(
+  zero3AgentLifecycleStore,
+  {
+    projects: { list: () => zero3Projects.list() },
+    memoryForProject: projectId => zero3SharedMemoryForProject(projectId),
+    execution: {
+      listTasks: async () => await zero3ExecutionRuntime.listTasks() as any[],
+      getTask: taskId => zero3ExecutionRuntime.getTask(taskId) as any,
+      createTask: input => zero3ExecutionRuntime.createTask(input as any) as any,
+      refreshSkillPreflight: taskId => zero3ExecutionRuntime.refreshSkillPreflight(taskId),
+      reconcileReadiness: taskId => zero3ExecutionRuntime.reconcileReadiness(taskId) as any,
+      transitionStep: (taskId, stepId, status, reason) => zero3ExecutionRuntime.transitionStep(taskId, stepId, status as any, reason) as any
+    },
+    lifecycle: {
+      sessionStart: input => zero3AgentLifecycleRuntime.sessionStart(input) as any,
+      taskClaim: input => zero3AgentLifecycleRuntime.taskClaim(input) as any
+    },
+    gpt: {
+      create: projectId => zero3GptWeb.create(projectId),
+      sendWakeup: (entryId, message) => zero3GptWeb.sendWakeup(entryId, message)
+    }
+  },
+  {
+    enabled: zero3AutonomousTaskFlag('ZERO3_AUTONOMOUS_TASK_LOOP_ENABLED'),
+    autoDispatch: zero3AutonomousTaskFlag('ZERO3_AUTONOMOUS_TASK_AUTO_DISPATCH'),
+    ...(Number.isSafeInteger(zero3AutonomousTaskInterval) && zero3AutonomousTaskInterval > 0 ? { intervalMs: zero3AutonomousTaskInterval } : {})
+  }
+)
+void app.whenReady().then(() => zero3AutonomousTaskLoop.start())
 function zero3WorkflowWorkerInput(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('workflow worker request must be an object')
   return value as Record<string, unknown>
@@ -154,7 +187,7 @@ async function zero3WorkerRpcRuntime() {
     reportProgressV2: input => zero3WorkflowWorkerRuntime.reportProgressV2(input)
   }
 }
-app.on('before-quit', () => { zero3WorkerStationManager.stop(); zero3WorkerWakeupController.stop(); zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })
+app.on('before-quit', () => { zero3AutonomousTaskLoop.stop(); zero3WorkerStationManager.stop(); zero3WorkerWakeupController.stop(); zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })
 `
 
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
@@ -205,6 +238,14 @@ export function applyZero3AgentLifecycleRuntime() {
         to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
       },
       {
+        // Runs after the Agent Lifecycle import replacement, which re-emits the
+        // same anchor, so the loop import is added without disturbing it.
+        label: 'Autonomous Task Loop runtime import',
+        appliedMarker: "import { Zero3AutonomousTaskLoop } from './zero3/worker-runtime/v2/index'",
+        from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
+        to: "import { Zero3AutonomousTaskLoop } from './zero3/worker-runtime/v2/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      },
+      {
         label: 'Agent Lifecycle composition after Execution Runtime',
         appliedMarker: 'const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(',
         fromAny: [EXECUTION_RUNTIME_COMPOSITION],
@@ -225,7 +266,9 @@ export function applyZero3AgentLifecycleRuntime() {
       { label: 'Workflow Worker store composition point', text: 'const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(', count: 1 },
       { label: 'Worker RPC composite runtime definition', text: 'async function zero3WorkerRpcRuntime(', count: 1 },
       { label: 'Worker RPC composite runtime provider', text: '() => zero3WorkerRpcRuntime()', count: 1 },
-      { label: 'Agent Lifecycle teardown', text: 'zero3AgentLifecycleStore.close()', count: 1 }
+      { label: 'Agent Lifecycle teardown', text: 'zero3AgentLifecycleStore.close()', count: 1 },
+      { label: 'Autonomous Task Loop composition point', text: 'const zero3AutonomousTaskLoop = new Zero3AutonomousTaskLoop(', count: 1 },
+      { label: 'Autonomous Task Loop teardown', text: 'zero3AutonomousTaskLoop.stop()', count: 1 }
     ]
   )
   patchFile('electron/preload.ts', [

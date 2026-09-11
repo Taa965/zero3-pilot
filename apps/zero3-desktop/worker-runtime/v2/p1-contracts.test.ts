@@ -124,7 +124,10 @@ test('ticket signature and expiry fail closed', () => {
   const issued = issueWorkerBindingTicket(binding(), session(), {
     secret: SECRET, clock: () => NOW, expiresInSeconds: 60
   })
-  const tampered = `${issued.ticket.slice(0, -1)}${issued.ticket.endsWith('A') ? 'B' : 'A'}`
+  // The final base64url character of a 32-byte signature carries only its top two bits, so
+  // rewriting it can decode back to the very same signature bytes and make this test flaky.
+  // Tamper a fully significant character instead.
+  const tampered = `${issued.ticket.slice(0, -2)}${issued.ticket.at(-2) === 'A' ? 'B' : 'A'}${issued.ticket.slice(-1)}`
   assert.throws(() => verifyWorkerBindingTicket(tampered, { secret: SECRET, clock: () => NOW }), /signature is invalid/)
   assert.throws(() => verifyWorkerBindingTicket(issued.ticket, {
     secret: SECRET, clock: () => new Date(NOW.getTime() + 61_000)

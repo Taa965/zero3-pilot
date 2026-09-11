@@ -6,6 +6,8 @@ import { DatabaseSync } from 'node:sqlite'
 import type {
   AgentLifecycleClaim,
   AgentLifecycleSession,
+  AutonomousTaskDispatchRecord,
+  AutonomousTaskIntakeRecord,
   ContextChange,
   LifecycleAgentType,
   LifecycleClaimMode,
@@ -73,7 +75,19 @@ function openDatabase(filename: string): DatabaseSync {
       PRIMARY KEY(scope_key,idempotency_key));
     CREATE TABLE IF NOT EXISTS lifecycle_memory_outbox (
       event_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT, payload_json TEXT NOT NULL,
-      state TEXT NOT NULL, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`)
+      state TEXT NOT NULL, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS autonomous_task_intake (
+      source_key TEXT PRIMARY KEY, project_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+      source_task_id TEXT, source_version INTEGER NOT NULL, fingerprint TEXT NOT NULL, task_id TEXT,
+      detail_json TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_autonomous_intake_project ON autonomous_task_intake(project_id,last_seen_at);
+    CREATE INDEX IF NOT EXISTS idx_autonomous_intake_task ON autonomous_task_intake(task_id);
+    CREATE INDEX IF NOT EXISTS idx_autonomous_intake_fingerprint ON autonomous_task_intake(project_id,entity_type,fingerprint);
+    CREATE TABLE IF NOT EXISTS autonomous_task_dispatch (
+      dispatch_key TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL, step_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL, state TEXT NOT NULL, session_id TEXT, last_error TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_autonomous_dispatch_task ON autonomous_task_dispatch(task_id,step_id,state);`)
   return db
 }
 
@@ -304,6 +318,78 @@ export class Zero3AgentLifecycleStore {
       .run(state, error?.slice(0, 4096) ?? null, at, eventId)
   }
 
+  memoryOutboxEntry(eventIdValue: unknown): { eventId: string; event: Record<string, unknown>; state: string; lastError: string | null } | null {
+    const row = this.db.prepare('SELECT * FROM lifecycle_memory_outbox WHERE event_id=?').get(id(eventIdValue, 'memory event id')) as any
+    return row ? { eventId: row.event_id, event: parse(row.payload_json), state: row.state, lastError: row.last_error ?? null } : null
+  }
+
+  getAutonomousIntake(sourceKeyValue: unknown): AutonomousTaskIntakeRecord | null {
+    const row = this.db.prepare('SELECT * FROM autonomous_task_intake WHERE source_key=?').get(id(sourceKeyValue, 'sourceKey')) as any
+    return row ? this.autonomousIntakeRow(row) : null
+  }
+
+  findAutonomousIntakeByFingerprint(projectIdValue: unknown, entityType: string, fingerprint: string): AutonomousTaskIntakeRecord | null {
+    const projectId = id(projectIdValue, 'projectId')
+    if (!/^[0-9a-f]{64}$/i.test(fingerprint)) throw new Error('autonomous intake fingerprint is invalid')
+    const row = this.db.prepare(`SELECT * FROM autonomous_task_intake
+      WHERE project_id=? AND entity_type=? AND fingerprint=?
+      ORDER BY (task_id IS NULL),first_seen_at,source_key LIMIT 1`)
+      .get(projectId, entityType.slice(0, 256), fingerprint) as any
+    return row ? this.autonomousIntakeRow(row) : null
+  }
+
+  upsertAutonomousIntake(input: Omit<AutonomousTaskIntakeRecord, 'firstSeenAt' | 'lastSeenAt'> & { at: string }): AutonomousTaskIntakeRecord {
+    const sourceKey = id(input.sourceKey, 'sourceKey')
+    const projectId = id(input.projectId, 'projectId')
+    if (!Number.isSafeInteger(input.sourceVersion) || input.sourceVersion < 0) throw new Error('sourceVersion is invalid')
+    if (!/^[0-9a-f]{64}$/i.test(input.fingerprint)) throw new Error('autonomous intake fingerprint is invalid')
+    const existing = this.getAutonomousIntake(sourceKey)
+    const taskId = input.taskId == null ? existing?.taskId ?? null : id(input.taskId, 'taskId')
+    if (existing && existing.projectId !== projectId) throw new Error('autonomous intake source belongs to a different project')
+    this.db.prepare(`INSERT INTO autonomous_task_intake
+      (source_key,project_id,entity_type,entity_id,source_task_id,source_version,fingerprint,task_id,detail_json,first_seen_at,last_seen_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_key) DO UPDATE SET
+      source_version=excluded.source_version,fingerprint=excluded.fingerprint,task_id=COALESCE(excluded.task_id,autonomous_task_intake.task_id),
+      detail_json=excluded.detail_json,last_seen_at=excluded.last_seen_at
+      WHERE excluded.source_version >= autonomous_task_intake.source_version`)
+      .run(sourceKey, projectId, input.entityType.slice(0, 256), input.entityId.slice(0, 512), input.sourceTaskId ?? null,
+        input.sourceVersion, input.fingerprint, taskId, json(input.detail, 'autonomous intake detail'), existing?.firstSeenAt ?? input.at, input.at)
+    return this.getAutonomousIntake(sourceKey)!
+  }
+
+  bindAutonomousTask(sourceKeyValue: unknown, taskIdValue: unknown, at: string): AutonomousTaskIntakeRecord {
+    const sourceKey = id(sourceKeyValue, 'sourceKey')
+    const taskId = id(taskIdValue, 'taskId')
+    if (!this.getAutonomousIntake(sourceKey)) throw new Error('autonomous intake source not found')
+    this.db.prepare('UPDATE autonomous_task_intake SET task_id=?,last_seen_at=? WHERE source_key=?').run(taskId, at, sourceKey)
+    return this.getAutonomousIntake(sourceKey)!
+  }
+
+  getAutonomousDispatch(dispatchKeyValue: unknown): AutonomousTaskDispatchRecord | null {
+    const row = this.db.prepare('SELECT * FROM autonomous_task_dispatch WHERE dispatch_key=?').get(id(dispatchKeyValue, 'dispatchKey')) as any
+    return row ? this.autonomousDispatchRow(row) : null
+  }
+
+  reserveAutonomousDispatch(input: { dispatchKey: string; projectId: string; taskId: string; stepId: string; attempt: number; at: string }): AutonomousTaskDispatchRecord {
+    const key = id(input.dispatchKey, 'dispatchKey')
+    const existing = this.getAutonomousDispatch(key)
+    if (existing) return existing
+    if (!Number.isSafeInteger(input.attempt) || input.attempt < 1) throw new Error('autonomous dispatch attempt is invalid')
+    this.db.prepare(`INSERT INTO autonomous_task_dispatch
+      (dispatch_key,project_id,task_id,step_id,attempt,state,created_at,updated_at) VALUES (?,?,?,?,?,'RESERVED',?,?)`)
+      .run(key, id(input.projectId, 'projectId'), id(input.taskId, 'taskId'), id(input.stepId, 'stepId'), input.attempt, input.at, input.at)
+    return this.getAutonomousDispatch(key)!
+  }
+
+  updateAutonomousDispatch(dispatchKeyValue: unknown, input: { state: AutonomousTaskDispatchRecord['state']; sessionId?: string | null; lastError?: string | null; at: string }): AutonomousTaskDispatchRecord {
+    const key = id(dispatchKeyValue, 'dispatchKey')
+    if (!this.getAutonomousDispatch(key)) throw new Error('autonomous dispatch reservation not found')
+    const sessionId = input.sessionId == null ? null : id(input.sessionId, 'sessionId')
+    this.db.prepare('UPDATE autonomous_task_dispatch SET state=?,session_id=COALESCE(?,session_id),last_error=?,updated_at=? WHERE dispatch_key=?')
+      .run(input.state, sessionId, input.lastError?.slice(0, 4096) ?? null, input.at, key)
+    return this.getAutonomousDispatch(key)!
+  }
+
   private sessionRow(row: any): AgentLifecycleSession {
     return {
       sessionId: row.session_id, agentId: row.agent_id, agentType: row.agent_type,
@@ -326,6 +412,22 @@ export class Zero3AgentLifecycleStore {
       worklogId: row.worklog_id, sessionId: row.session_id, agentId: row.agent_id, agentType: row.agent_type,
       projectId: row.project_id, taskId: row.task_id, eventType: row.event_type, importance: row.importance,
       content: parse(row.content_json), createdAt: row.created_at
+    }
+  }
+
+  private autonomousIntakeRow(row: any): AutonomousTaskIntakeRecord {
+    return {
+      sourceKey: row.source_key, projectId: row.project_id, entityType: row.entity_type, entityId: row.entity_id,
+      sourceTaskId: row.source_task_id ?? null, sourceVersion: Number(row.source_version), fingerprint: row.fingerprint,
+      taskId: row.task_id ?? null, detail: parse(row.detail_json), firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at
+    }
+  }
+
+  private autonomousDispatchRow(row: any): AutonomousTaskDispatchRecord {
+    return {
+      dispatchKey: row.dispatch_key, projectId: row.project_id, taskId: row.task_id, stepId: row.step_id,
+      attempt: Number(row.attempt), state: row.state, sessionId: row.session_id ?? null,
+      lastError: row.last_error ?? null, createdAt: row.created_at, updatedAt: row.updated_at
     }
   }
 }
