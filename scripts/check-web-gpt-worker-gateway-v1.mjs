@@ -66,7 +66,18 @@ for (const forbidden of [
   forbidText(oauth, forbidden, `OAuth adapter must not gain execution authority: ${forbidden}`)
 }
 
-for (const forbidden of ["runtime[lease.tool]", "runtime[tool]", 'dispatchCodex', 'runGpu', 'execCommand']) {
+// Fast Path P0 adds exactly one bounded typed dispatch tool to this adapter.
+// It stays an exact switch entry point; anything that looks like a raw or
+// dynamic Codex/GPU/exec dispatch still means the boundary was widened.
+requireText(workerRpc, "case 'dispatch_codex_task':", 'Fast Path dispatch must stay an exact bounded Worker tool.')
+for (const forbidden of [
+  'runtime[lease.tool]',
+  'runtime[tool]',
+  'runGpu',
+  'execCommand',
+  'dispatchCodex(',
+  'Zero3ControlClient'
+]) {
   forbidText(workerRpc, forbidden, `Worker RPC adapter must remain an exact bounded-tool switch: ${forbidden}`)
 }
 

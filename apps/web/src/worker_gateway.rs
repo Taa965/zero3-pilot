@@ -33,7 +33,7 @@ const BUILT_WORKER_OAUTH_ISSUER: Option<&str> = option_env!("ZERO3_WORKER_OAUTH_
 const WORKER_CAPABILITY: &str = "worker-protocol-v1";
 const SKILL_CAPABILITY: &str = "codex-native-skills-v1";
 const SKILL_TOOLS: [&str; 4] = ["list_skills", "search_skills", "get_skill", "invoke_skill"];
-const WORKER_TOOLS: [&str; 18] = [
+const WORKER_TOOLS: [&str; 21] = [
     "register_worker",
     "claim_work",
     "report_progress",
@@ -48,6 +48,9 @@ const WORKER_TOOLS: [&str; 18] = [
     "task_complete",
     "memory_commit",
     "handoff_create",
+    "task_bootstrap",
+    "dispatch_codex_task",
+    "verify_commit",
     "bootstrap_worker",
     "commit_and_claim_next",
     "report_blocked",
@@ -369,7 +372,7 @@ impl WorkerGateway {
             created_at: now,
             updated_at: now,
             expires_at: now
-                + if capability == SKILL_CAPABILITY {
+                + if capability == SKILL_CAPABILITY || tool == "verify_commit" {
                     Duration::seconds(SKILL_REQUEST_TTL_SECONDS)
                 } else {
                     self.request_ttl
@@ -428,7 +431,7 @@ impl WorkerGateway {
         })?;
         record.lease_expires_at = Some(
             Utc::now()
-                + if record.capability == SKILL_CAPABILITY {
+                + if record.capability == SKILL_CAPABILITY || record.tool == "verify_commit" {
                     Duration::seconds(SKILL_LEASE_TTL_SECONDS)
                 } else {
                     self.lease_ttl
@@ -1253,6 +1256,40 @@ fn worker_tool_catalog() -> Vec<Value> {
             }), &["sessionId","idempotencyKey"], false,
         ),
         tool_definition(
+            "task_bootstrap", "Bootstrap Zero3 Agent Task",
+            "Start or resume the authoritative Web GPT session, claim available GPT_WEB work and resolve filtered shared context in one retry-safe round trip.",
+            json!({
+                "agentType":{"type":"string","enum":["web_gpt"]}, "agentId":id_schema(),
+                "sessionId":id_schema(), "projectId":id_schema(), "taskId":id_schema(),
+                "conversationId":{"type":"string","maxLength":512}, "conversationUrl":{"type":"string","maxLength":4096},
+                "idempotencyKey":id_schema()
+            }), &["agentType","sessionId","projectId","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "dispatch_codex_task", "Dispatch Bounded Codex Task",
+            "Dispatch one typed high-level development task through the existing Zero3 Remote Host control plane. No shell command, filesystem primitive, token, or destination node is exposed.",
+            json!({
+                "sessionId":id_schema(), "workspace":{"type":"string","minLength":1,"maxLength":4096},
+                "objective":{"type":"string","minLength":1,"maxLength":64000}, "baseRef":{"type":"string","maxLength":256},
+                "constraints":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}},
+                "acceptanceCriteria":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}},
+                "permissionProfile":{"type":"string","enum":["read_only","standard","elevated"]},
+                "maxTurns":{"type":"integer","minimum":1,"maximum":8}, "timeoutSeconds":{"type":"integer","minimum":30,"maximum":28800},
+                "requireCleanWorktree":{"type":"boolean"}, "requireCleanWorktreeOnSuccess":{"type":"boolean"},
+                "requireRemoteSyncOnSuccess":{"type":"boolean"}, "idempotencyKey":id_schema()
+            }), &["sessionId","workspace","objective","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "verify_commit", "Verify Commit And Push",
+            "Run only allow-listed static checks, then stage only declared task-owned paths, create one scoped Git commit and non-force push the current branch. Fails closed on unrelated staged changes or unsafe repository state.",
+            json!({
+                "sessionId":id_schema(), "workspace":{"type":"string","minLength":1,"maxLength":4096},
+                "paths":{"type":"array","minItems":1,"maxItems":256,"items":{"type":"string","minLength":1,"maxLength":4096}},
+                "checks":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"string","enum":["git_diff_check","cargo_fmt_check","cargo_check_web","desktop_typecheck"]}},
+                "commitMessage":{"type":"string","minLength":1,"maxLength":512}, "idempotencyKey":id_schema()
+            }), &["sessionId","workspace","paths","checks","commitMessage","idempotencyKey"], false,
+        ),
+        tool_definition(
             "bootstrap_worker", "Bootstrap Zero3 Workflow Worker",
             "Validate a generation-fenced Worker Binding Ticket and restore the long-lived Workflow worker slot/session context.",
             json!({"bindingTicket":{"type":"string","minLength":1,"maxLength":16384}}),
@@ -1583,7 +1620,9 @@ mod tests {
             .collect();
         assert_eq!(names, WORKER_TOOLS);
         let serialized = serde_json::to_string(&catalog).unwrap();
-        assert!(!serialized.contains("dispatch_codex"));
+        assert!(serialized.contains("dispatch_codex_task"));
+        assert!(serialized.contains("verify_commit"));
+        assert!(serialized.contains("task_bootstrap"));
         assert!(!serialized.contains("run_gpu"));
         assert!(!serialized.contains("workflow_admin"));
     }
@@ -1616,6 +1655,28 @@ mod tests {
             .try_lease_for("node-1", &[SKILL_CAPABILITY.to_string()])
             .unwrap()
             .unwrap();
+        let expiry = DateTime::parse_from_rfc3339(&lease.lease_expires_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(expiry - Utc::now() > Duration::minutes(10));
+    }
+
+    #[test]
+    fn verify_commit_is_deduplicated_and_gets_a_long_execution_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        let gateway = WorkerGateway::open(dir.path().to_path_buf(), "node-1".into()).unwrap();
+        let args = json!({
+            "sessionId":"session-1", "workspace":"C:/repo", "paths":["apps/web"],
+            "checks":["git_diff_check"], "commitMessage":"test", "idempotencyKey":"verify-1"
+        });
+        let first = gateway.submit("verify_commit", args.clone()).unwrap();
+        let replay = gateway.submit("verify_commit", args).unwrap();
+        assert_eq!(first.request_id, replay.request_id);
+        assert!(
+            first.expires_at - first.created_at >= Duration::seconds(SKILL_REQUEST_TTL_SECONDS)
+        );
+        let lease = gateway.try_lease("node-1").unwrap().unwrap();
+        assert_eq!(lease.tool, "verify_commit");
         let expiry = DateTime::parse_from_rfc3339(&lease.lease_expires_at)
             .unwrap()
             .with_timezone(&Utc);

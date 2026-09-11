@@ -9,5 +9,6 @@ export type {
 } from './remote-types'
 
 export * from './remote-worker-rpc'
+export * from './web-gpt-fast-path'
 
 export * from './remote-skill-rpc'

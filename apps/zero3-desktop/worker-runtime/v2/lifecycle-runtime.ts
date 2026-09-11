@@ -199,6 +199,38 @@ export class Zero3AgentLifecycleRuntime {
     }))
   }
 
+  async taskBootstrap(inputValue: unknown): Promise<Record<string, unknown>> {
+    const startedAt = Date.now()
+    const input = object(inputValue, 'task.bootstrap input')
+    const sessionId = id(input.sessionId ?? input.session_id, 'sessionId')
+    const projectId = id(input.projectId ?? input.project_id, 'projectId')
+    const key = id(input.idempotencyKey ?? input.idempotency_key, 'idempotencyKey')
+    const sessionStartedAt = Date.now()
+    const session = await this.sessionStart({
+      ...input, sessionId, projectId, idempotencyKey: `${key}:session`
+    })
+    const claimedAt = Date.now()
+    const claim = await this.taskClaim({
+      ...input,
+      sessionId,
+      taskId: session.taskId,
+      idempotencyKey: `${key}:claim`
+    })
+    const contextAt = Date.now()
+    const context = await this.contextResolve({ sessionId })
+    return {
+      session,
+      claim,
+      context,
+      timingMs: {
+        session: claimedAt - sessionStartedAt,
+        claim: contextAt - claimedAt,
+        context: Date.now() - contextAt,
+        total: Date.now() - startedAt
+      }
+    }
+  }
+
   async taskClaim(inputValue: unknown): Promise<Record<string, unknown>> {
     const input = object(inputValue, 'task.claim input')
     const session = this.requireSession(input.sessionId ?? input.session_id)

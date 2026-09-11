@@ -183,6 +183,24 @@ async function zero3WorkerRpcRuntime() {
     commitAndClaimNextV2: input => zero3WorkflowWorkerRuntime.commitAndClaimNext(input),
     reportBlockedV2: input => zero3WorkflowWorkerRuntime.reportBlockedV2(input),
     recoverWorker: input => zero3WorkflowWorkerRuntime.recoverWorker(input),
+    taskBootstrap: input => zero3AgentLifecycleRuntime.taskBootstrap(input),
+    dispatchCodexTask: async input => {
+      const context = await zero3AgentLifecycleRuntime.contextResolve({ sessionId: input.sessionId }) as any
+      const task = context.task?.definition?.task ?? {}
+      return dispatchZero3CodexTask(zero3Control, input, {
+        projectContext: {
+          project_id: task.projectId,
+          context_version: context.contextVersion,
+          source_entry_id: input.sessionId,
+          source_kind: 'gpt_web'
+        }
+      })
+    },
+    verifyCommit: async input => {
+      const context = await zero3AgentLifecycleRuntime.contextResolve({ sessionId: input.sessionId }) as any
+      const result = await verifyZero3Commit(input)
+      return { ...result, taskId: context.task?.definition?.task?.taskId ?? null, contextVersion: context.contextVersion }
+    },
     claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),
     reportProgressV2: input => zero3WorkflowWorkerRuntime.reportProgressV2(input)
   }
@@ -235,7 +253,7 @@ export function applyZero3AgentLifecycleRuntime() {
         label: 'Agent Lifecycle runtime import',
         appliedMarker: "from './zero3/worker-runtime/v2/index'",
         from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
-        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\nimport { dispatchZero3CodexTask, verifyZero3Commit } from './zero3/remote-host/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
       },
       {
         // Runs after the Agent Lifecycle import replacement, which re-emits the

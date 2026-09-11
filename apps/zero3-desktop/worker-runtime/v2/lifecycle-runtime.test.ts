@@ -274,3 +274,24 @@ test('AUTO step routed by Skill preflight to Codex cannot be claimed by a Web GP
     await cleanup(value)
   }
 })
+
+
+test('Fast Path taskBootstrap composes session, claim and context and replays the same authoritative claim', async () => {
+  const value = await fixture()
+  try {
+    await createTask(value)
+    const input = {
+      agentType: 'web_gpt', sessionId: 'fast-session', projectId: 'project-1', taskId: 'task-1',
+      conversationId: 'conv-1', idempotencyKey: 'fast-bootstrap-1'
+    }
+    const first: any = await value.runtime.taskBootstrap(input)
+    const replay: any = await value.runtime.taskBootstrap(input)
+    assert.equal(first.session.taskId, 'task-1')
+    assert.equal(first.claim.state, 'CLAIMED')
+    assert.equal(first.claim.claim.claimId, replay.claim.claim.claimId)
+    assert.equal(first.context.task.definition.task.taskId, 'task-1')
+    assert.ok(first.timingMs.total >= 0)
+    const snapshot = await value.execution.snapshot('task-1')
+    assert.equal(snapshot.runtime.assignments.length, 1)
+  } finally { await cleanup(value) }
+})

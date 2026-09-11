@@ -21,6 +21,9 @@ export type Zero3WorkerRuntimePort = {
   commitAndClaimNextV2(input: Record<string, unknown>): unknown
   reportBlockedV2(input: Record<string, unknown>): unknown
   recoverWorker(input: Record<string, unknown>): unknown
+  taskBootstrap(input: Record<string, unknown>): unknown
+  dispatchCodexTask(input: Record<string, unknown>): unknown
+  verifyCommit(input: Record<string, unknown>): unknown
 }
 
 const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
@@ -41,7 +44,10 @@ const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
   'bootstrap_worker',
   'commit_and_claim_next',
   'report_blocked',
-  'recover_worker'
+  'recover_worker',
+  'task_bootstrap',
+  'dispatch_codex_task',
+  'verify_commit'
 ])
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -99,5 +105,11 @@ export async function executeZero3WorkerRpc(
       return runtime.reportBlockedV2(input)
     case 'recover_worker':
       return runtime.recoverWorker(input)
+    case 'task_bootstrap':
+      return runtime.taskBootstrap(input)
+    case 'dispatch_codex_task':
+      return runtime.dispatchCodexTask(input)
+    case 'verify_commit':
+      return runtime.verifyCommit(input)
   }
 }

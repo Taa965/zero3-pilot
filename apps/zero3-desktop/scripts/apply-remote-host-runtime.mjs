@@ -16,6 +16,10 @@ function write(file, content) {
   fs.writeFileSync(file, content)
 }
 
+function normalizeRelativeTypeScriptSpecifiers(source) {
+  return source.replace(/(['"])(\.\.?\/[^'"\r\n]+)\.(?:ts|tsx)\1/gu, '$1$2$1')
+}
+
 function patchFile(relativePath, replacements, invariants = []) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   const patched = patchOverlaySource({
@@ -40,6 +44,7 @@ function copyRuntimeSources() {
     'remote-outbox.ts',
     'remote-outbox-drain.ts',
     'remote-worker-rpc.ts',
+    'web-gpt-fast-path.ts',
     'remote-skill-rpc.ts',
     'remote-task-runner.ts',
     'remote-node.ts',
@@ -48,7 +53,7 @@ function copyRuntimeSources() {
   for (const file of files) {
     const source = path.join(sourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 Remote Host source template missing: ${source}`)
-    write(path.join(targetDir, file), overlayRuntimeSource(read(source)))
+    write(path.join(targetDir, file), overlayRuntimeSource(normalizeRelativeTypeScriptSpecifiers(read(source))))
   }
 }
 

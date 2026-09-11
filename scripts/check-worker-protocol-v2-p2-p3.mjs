@@ -23,12 +23,15 @@ for (const method of [
   'reportBlockedV2(', 'recoverWorker(', 'rotatePhysicalSession(', 'expireLeases('
 ]) requireText(runtime, method, `Worker Runtime v2 method missing: ${method}`)
 
-for (const tool of ['bootstrap_worker', 'commit_and_claim_next', 'report_blocked', 'recover_worker']) {
+for (const tool of [
+  'bootstrap_worker', 'commit_and_claim_next', 'report_blocked', 'recover_worker',
+  'task_bootstrap', 'dispatch_codex_task', 'verify_commit'
+]) {
   requireText(rpc, `'${tool}'`, `Worker RPC v2 tool missing: ${tool}`)
   requireText(gateway, `\"${tool}\"`, `Private Gateway v2 tool missing: ${tool}`)
 }
 requireText(rpc, "'bindingTicket' in input", 'claim_work/report_progress must preserve v1/v2 polymorphic compatibility.')
-requireText(gateway, 'const WORKER_TOOLS: [&str; 18]', 'Private Gateway v2 catalog size is stale.')
+requireText(gateway, 'const WORKER_TOOLS: [&str; 21]', 'Private Gateway v2 catalog size is stale.')
 requireText(runtime, "status='COMPLETED'", 'StageRun commit path must persist completion before downstream release.')
 requireText(runtime, 'recalculateStageReadiness', 'Per-item downstream Stage release is missing.')
 requireText(runtime, 'verifyWorkerBindingTicket', 'Generation-fenced Binding Ticket verification is missing from Worker Runtime v2.')
@@ -36,7 +39,9 @@ requireText(overlay, 'zero3WorkflowWorkerRuntime', 'Desktop must compose Worker 
 requireText(overlay, "zero3:workflow-worker:ensure-run", 'Local Task/Workflow administration surface is missing.')
 
 for (const source of [store, runtime, rpc]) {
-  for (const forbidden of ['dispatch_codex', 'run_gpu', 'powershell', 'cmd.exe', 'child_process', 'shell.execute']) {
+  // Fast Path P0 adds the bounded `dispatch_codex_task` tool; the bare
+  // `dispatch_codex` capability must stay absent from every layer.
+  for (const forbidden of ["'dispatch_codex'", 'run_gpu', 'powershell', 'cmd.exe', 'child_process', 'shell.execute']) {
     forbidText(source, forbidden, `Worker Protocol v2 must not gain executor authority: ${forbidden}`)
   }
 }

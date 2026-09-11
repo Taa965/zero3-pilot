@@ -35,12 +35,15 @@ function fakeRuntime(calls: string[]): Zero3WorkerRuntimePort {
     reportProgressV2(input) { calls.push('report_progress_v2'); return { input } },
     commitAndClaimNextV2(input) { calls.push('commit_and_claim_next'); return { input } },
     reportBlockedV2(input) { calls.push('report_blocked'); return { input } },
-    recoverWorker(input) { calls.push('recover_worker'); return { input } }
+    recoverWorker(input) { calls.push('recover_worker'); return { input } },
+    taskBootstrap(input) { calls.push('task_bootstrap'); return { input } },
+    dispatchCodexTask(input) { calls.push('dispatch_codex_task'); return { input } },
+    verifyCommit(input) { calls.push('verify_commit'); return { input } }
   }
 }
 
 test('worker RPC executor exposes the bounded Worker Protocol and shared lifecycle actions', async () => {
-  const expected = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context','session_start','context_resolve','task_claim','event_record','artifact_register','task_complete','memory_commit','handoff_create','bootstrap_worker','commit_and_claim_next','report_blocked','recover_worker']
+  const expected = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context','session_start','context_resolve','task_claim','event_record','artifact_register','task_complete','memory_commit','handoff_create','bootstrap_worker','commit_and_claim_next','report_blocked','recover_worker','task_bootstrap','dispatch_codex_task','verify_commit']
   const calls: string[] = []
   const runtime = fakeRuntime(calls)
   for (const tool of expected) await executeZero3WorkerRpc(runtime, lease(tool, { tool }))

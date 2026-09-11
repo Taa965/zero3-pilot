@@ -26,10 +26,42 @@ const MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 const REQUEST_TIMEOUT_MS = 15_000
 const REMOTE_TASK_PROTOCOL = 'zero3.pilot.remote-task.v1'
 const TASK_EXTENSION_SCHEMA = 'zero3.pilot.task-extension.v1'
+const TASK_EXTENSION_FIELDS = ['project_context', 'handoff', 'provider', 'review'] as const
+
+/** Control-plane HTTP failure carrying the status so callers can distinguish a
+ * version/identity conflict from an unreachable or misconfigured plane. */
+export class Zero3ControlRequestError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'Zero3ControlRequestError'
+    this.status = status
+  }
+}
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
   return value as Record<string, unknown>
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(entry => canonicalJson(entry)).join(',')}]`
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(',')}}`
+}
+
+function extensionReplayMatches(existing: unknown, requested: Record<string, unknown>): boolean {
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return false
+  const stored = existing as Record<string, unknown>
+  if (stored.schema !== TASK_EXTENSION_SCHEMA) return false
+  if (stored.execution_id !== requested.execution_id) return false
+  return TASK_EXTENSION_FIELDS.every(
+    field => canonicalJson(stored[field] ?? null) === canonicalJson(requested[field] ?? null)
+  )
 }
 
 function requiredText(value: unknown, label: string, max: number): string {
@@ -164,17 +196,29 @@ export class Zero3ControlClient {
     // Write the sidecar first. A sidecar without a core task cannot execute,
     // while queuing the core task before its context/handoff sidecar creates a
     // race where the Remote Host could lease incomplete task semantics.
-    if (extension) {
-      await this.request(`/api/control/v1/tasks/${encodeURIComponent(taskId)}/extensions`, {
-        method: 'POST',
-        body: JSON.stringify(extension)
-      })
-    }
+    if (extension) await this.putTaskExtension(taskId, extension)
 
     return this.request('/api/control/v1/tasks', {
       method: 'POST',
       body: JSON.stringify(task)
     })
+  }
+
+  private async putTaskExtension(taskId: string, extension: Record<string, unknown>): Promise<void> {
+    const pathname = `/api/control/v1/tasks/${encodeURIComponent(taskId)}/extensions`
+    try {
+      await this.request(pathname, { method: 'POST', body: JSON.stringify(extension) })
+    } catch (error) {
+      // The sidecar is created before the core task and always with
+      // expected_version 0, so a dispatch retried after a timeout or restart is
+      // a stale writer for its own sidecar. Only a stored sidecar that provably
+      // equals the dispatched payload and execution is accepted as an
+      // idempotent replay; a different context, handoff, provider, review or
+      // execution keeps failing closed with the original conflict.
+      if (!(error instanceof Zero3ControlRequestError) || error.status !== 409) throw error
+      const existing = await this.getTaskExtension(taskId)
+      if (!extensionReplayMatches(existing, extension)) throw error
+    }
   }
 
   async getTaskExtension(taskId: unknown): Promise<unknown> {
@@ -199,7 +243,10 @@ export class Zero3ControlClient {
       const payload = text.trim() ? JSON.parse(text) : null
       if (!response.ok) {
         const detail = payload && typeof payload === 'object' && 'error' in payload ? String((payload as { error?: unknown }).error) : ''
-        throw new Error(`Zero3 control request failed: HTTP ${response.status}${detail ? `: ${detail}` : ''}`)
+        throw new Zero3ControlRequestError(
+          response.status,
+          `Zero3 control request failed: HTTP ${response.status}${detail ? `: ${detail}` : ''}`
+        )
       }
       return payload
     } catch (error) {

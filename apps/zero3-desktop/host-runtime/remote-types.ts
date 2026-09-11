@@ -73,6 +73,9 @@ export type Zero3WorkerRpcTool =
   | 'commit_and_claim_next'
   | 'report_blocked'
   | 'recover_worker'
+  | 'task_bootstrap'
+  | 'dispatch_codex_task'
+  | 'verify_commit'
 
 export type Zero3RemoteRpcTool = Zero3WorkerRpcTool | Zero3SkillRpcTool
 

@@ -61,6 +61,22 @@ struct PutTaskExtensionBody {
     review: Option<Value>,
 }
 
+impl TaskExtensionRecord {
+    /// Replay identity for the sidecar, mirroring the core task contract: the
+    /// same schema, execution and extension fields mean the caller re-sent the
+    /// sidecar this task already carries. `version` and the timestamps are store
+    /// bookkeeping, so an exact replay returns the stored record instead of
+    /// rewriting it as a new version.
+    fn matches_payload(&self, body: &PutTaskExtensionBody) -> bool {
+        self.schema == body.schema
+            && self.execution_id == body.execution_id
+            && self.project_context == body.project_context
+            && self.handoff == body.handoff
+            && self.provider == body.provider
+            && self.review == body.review
+    }
+}
+
 #[derive(Default)]
 struct TaskExtensionState {
     records: BTreeMap<String, TaskExtensionRecord>,
@@ -233,6 +249,15 @@ impl TaskExtensionStore {
                     StatusCode::CONFLICT,
                     "task_id is already bound to a different execution_id",
                 ));
+            }
+            // A retried dispatch re-sends the same sidecar before it retries the
+            // core task, and it always carries expected_version 0 because the
+            // sidecar is created before that task exists. Treat that exact replay
+            // as already satisfied instead of as a stale writer. Any difference
+            // in payload still falls through to the version check below, so a
+            // conflicting replay continues to fail closed.
+            if existing.matches_payload(&body) {
+                return Ok(existing.clone());
             }
         }
         let current_version = existing.as_ref().map(|value| value.version).unwrap_or(0);
@@ -505,5 +530,117 @@ mod tests {
             },
         );
         assert_eq!(rebind.unwrap_err().status, StatusCode::CONFLICT);
+    }
+
+    fn extension_body(
+        execution_id: &str,
+        expected_version: u64,
+        context_version: u64,
+    ) -> PutTaskExtensionBody {
+        PutTaskExtensionBody {
+            schema: TASK_EXTENSION_SCHEMA.into(),
+            execution_id: execution_id.into(),
+            expected_version: Some(expected_version),
+            project_context: Some(
+                json!({"project_id": "zero3", "context_version": context_version}),
+            ),
+            handoff: Some(json!({"return_entry_id": "gpt-web-1"})),
+            provider: None,
+            review: None,
+        }
+    }
+
+    #[test]
+    fn extension_store_replays_an_identical_sidecar_without_a_new_version() {
+        let dir = tempdir().unwrap();
+        let store = TaskExtensionStore::open(dir.path().to_path_buf()).unwrap();
+        let first = store.put("task-1", extension_body("exec-1", 0, 7)).unwrap();
+        assert_eq!(first.version, 1);
+
+        // Fast Path creates the sidecar before the core task and always sends
+        // expected_version 0, so a retried dispatch arrives as a stale writer.
+        // The identical payload must still be recognized as a replay.
+        let replay = store.put("task-1", extension_body("exec-1", 0, 7)).unwrap();
+        assert_eq!(replay.version, 1);
+        assert_eq!(replay.updated_at, first.updated_at);
+        assert_eq!(replay.project_context, first.project_context);
+        assert_eq!(replay.handoff, first.handoff);
+    }
+
+    #[test]
+    fn extension_store_fails_closed_on_a_conflicting_replay() {
+        let dir = tempdir().unwrap();
+        let store = TaskExtensionStore::open(dir.path().to_path_buf()).unwrap();
+        store.put("task-1", extension_body("exec-1", 0, 7)).unwrap();
+
+        // Same execution, different context, stale version: still a conflict.
+        let conflicting_context = store.put("task-1", extension_body("exec-1", 0, 8));
+        assert_eq!(
+            conflicting_context.unwrap_err().status,
+            StatusCode::CONFLICT
+        );
+
+        // Same execution, different execution identity: still a conflict.
+        let conflicting_execution = store.put("task-1", extension_body("exec-2", 0, 7));
+        assert_eq!(
+            conflicting_execution.unwrap_err().status,
+            StatusCode::CONFLICT
+        );
+
+        // A writer that proves the current version may still replace the sidecar.
+        let updated = store.put("task-1", extension_body("exec-1", 1, 8)).unwrap();
+        assert_eq!(updated.version, 2);
+        assert_eq!(
+            updated.project_context,
+            Some(json!({"project_id": "zero3", "context_version": 8}))
+        );
+    }
+
+    #[tokio::test]
+    async fn extension_route_replays_an_identical_dispatch_without_a_conflict() {
+        let dir = tempdir().unwrap();
+        let runtime =
+            TaskExtensionRuntime::test(dir.path().to_path_buf(), "host", "control").unwrap();
+        let app = router(runtime);
+        let body = json!({
+            "schema": TASK_EXTENSION_SCHEMA,
+            "execution_id": "exec-1",
+            "expected_version": 0,
+            "project_context": { "project_id": "zero3", "context_version": 7 }
+        });
+        let post = || {
+            Request::builder()
+                .method("POST")
+                .uri("/api/control/v1/tasks/task-1/extensions")
+                .header("authorization", "Bearer control")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+
+        let created = app.clone().oneshot(post()).await.unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let replayed = app.clone().oneshot(post()).await.unwrap();
+        assert_eq!(replayed.status(), StatusCode::OK);
+
+        let conflicting = json!({
+            "schema": TASK_EXTENSION_SCHEMA,
+            "execution_id": "exec-1",
+            "expected_version": 0,
+            "project_context": { "project_id": "zero3", "context_version": 8 }
+        });
+        let rejected = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/control/v1/tasks/task-1/extensions")
+                    .header("authorization", "Bearer control")
+                    .header("content-type", "application/json")
+                    .body(Body::from(conflicting.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::CONFLICT);
     }
 }
