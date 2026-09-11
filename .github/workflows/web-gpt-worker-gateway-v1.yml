@@ -7,9 +7,16 @@ on:
       - 'apps/web/src/worker_gateway.rs'
       - 'apps/web/src/main.rs'
       - 'apps/zero3-desktop/host-runtime/**'
+      - 'apps/zero3-desktop/worker-runtime/v2/**'
+      - 'apps/zero3-desktop/artifact-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-artifact-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-shared-memory.mjs'
       - 'apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs'
       - 'scripts/check-web-gpt-worker-gateway-v1.mjs'
       - 'docs/WEB_GPT_*'
+      - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
+      - 'scripts/check-agent-shared-state-mvp.mjs'
       - 'deployment/productization/self-host.env.example'
       - '.github/workflows/web-gpt-worker-gateway-v1.yml'
   push:
@@ -18,9 +25,16 @@ on:
       - 'apps/web/src/worker_gateway.rs'
       - 'apps/web/src/main.rs'
       - 'apps/zero3-desktop/host-runtime/**'
+      - 'apps/zero3-desktop/worker-runtime/v2/**'
+      - 'apps/zero3-desktop/artifact-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-artifact-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-shared-memory.mjs'
       - 'apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs'
       - 'scripts/check-web-gpt-worker-gateway-v1.mjs'
       - 'docs/WEB_GPT_*'
+      - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
+      - 'scripts/check-agent-shared-state-mvp.mjs'
       - 'deployment/productization/self-host.env.example'
       - '.github/workflows/web-gpt-worker-gateway-v1.yml'
 
@@ -38,6 +52,8 @@ jobs:
         run: git diff --check HEAD^...HEAD
       - name: Gateway architecture guard
         run: node scripts/check-web-gpt-worker-gateway-v1.mjs
+      - name: Shared organizational state guard
+        run: node scripts/check-agent-shared-state-mvp.mjs
       - name: Existing remote architecture guards
         run: |
           node scripts/check-remote-host-architecture.mjs

@@ -7,6 +7,14 @@ export type Zero3WorkerRuntimePort = {
   completeAndClaimNext(input: Record<string, unknown>): unknown
   reportFailure(input: Record<string, unknown>): unknown
   getTaskContext(input: Record<string, unknown>): unknown
+  sessionStart(input: Record<string, unknown>): unknown
+  contextResolve(input: Record<string, unknown>): unknown
+  taskClaim(input: Record<string, unknown>): unknown
+  eventRecord(input: Record<string, unknown>): unknown
+  artifactRegister(input: Record<string, unknown>): unknown
+  taskComplete(input: Record<string, unknown>): unknown
+  memoryCommit(input: Record<string, unknown>): unknown
+  handoffCreate(input: Record<string, unknown>): unknown
 }
 
 const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
@@ -15,7 +23,15 @@ const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
   'report_progress',
   'complete_and_claim_next',
   'report_failure',
-  'get_task_context'
+  'get_task_context',
+  'session_start',
+  'context_resolve',
+  'task_claim',
+  'event_record',
+  'artifact_register',
+  'task_complete',
+  'memory_commit',
+  'handoff_create'
 ])
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -49,5 +65,21 @@ export async function executeZero3WorkerRpc(
       return runtime.reportFailure(input)
     case 'get_task_context':
       return runtime.getTaskContext(input)
+    case 'session_start':
+      return runtime.sessionStart(input)
+    case 'context_resolve':
+      return runtime.contextResolve(input)
+    case 'task_claim':
+      return runtime.taskClaim(input)
+    case 'event_record':
+      return runtime.eventRecord(input)
+    case 'artifact_register':
+      return runtime.artifactRegister(input)
+    case 'task_complete':
+      return runtime.taskComplete(input)
+    case 'memory_commit':
+      return runtime.memoryCommit(input)
+    case 'handoff_create':
+      return runtime.handoffCreate(input)
   }
 }

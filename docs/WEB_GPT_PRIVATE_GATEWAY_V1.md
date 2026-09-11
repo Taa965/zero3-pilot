@@ -4,7 +4,7 @@
 
 This phase connects a private ChatGPT MCP app to the existing local Zero3 Worker Protocol without giving the web session Codex, GPU, shell, filesystem, or workflow-administration authority.
 
-The local Worker Runtime remains authoritative for Worker, Session, Claim, Lease, WorkUnit, progress, failure, and completion state. AWS stores only short-lived, durable RPC forwarding records.
+The local Zero3 runtimes remain authoritative: Worker Runtime owns V1 WorkUnit/Claim state, Execution Runtime owns Task/Step/Assignment state, Shared Memory owns organizational memory/decisions, and Artifact Runtime owns asset metadata. AWS stores only short-lived, durable RPC forwarding records.
 
 ```text
 ChatGPT private app
@@ -27,7 +27,7 @@ local Worker Runtime (SQLite)
 
 ## Public MCP surface
 
-The gateway exposes only six tools:
+The gateway exposes only bounded Worker/Agent lifecycle tools. V1 compatibility remains:
 
 - `register_worker`
 - `claim_work`
@@ -35,6 +35,17 @@ The gateway exposes only six tools:
 - `complete_and_claim_next`
 - `report_failure`
 - `get_task_context`
+
+Shared organizational lifecycle adds:
+
+- `session_start`
+- `context_resolve`
+- `task_claim`
+- `event_record`
+- `artifact_register`
+- `task_complete`
+- `memory_commit`
+- `handoff_create`
 
 `/mcp` requires a dedicated bearer secret from `ZERO3_WORKER_MCP_TOKEN_FILE`. It accepts the supported 2025 Streamable HTTP protocol revisions, validates any supplied Origin against ChatGPT/OpenAI HTTPS origins, bounds request bodies to 2 MiB, and returns HTTP 405 for unsupported GET streaming rather than opening an SSE channel.
 
@@ -52,7 +63,7 @@ Each cloud forwarding record is `queued -> leased -> completed|failed|expired`. 
 
 Write-oriented Worker calls keep the caller's `idempotencyKey`. A repeated MCP call with the same scoped key and identical arguments reuses the same cloud RPC record. If local execution succeeds but result publication fails, the host does not manufacture a failure; the RPC is safely replayed after lease recovery and the local Worker Runtime's idempotency protection returns the original outcome.
 
-The AWS process never imports or calls Codex, GPU, shell, filesystem, or generic desktop RPC APIs. Its only host-side operations are lease, complete, and fail for a bounded Worker RPC.
+The AWS process never imports or calls Codex, GPU, shell, filesystem, Google Drive credentials, or generic desktop RPC APIs. Its only host-side operations are lease, complete, and fail for a bounded Worker/Lifecycle RPC. Lifecycle tool execution happens inside the local Zero3 Task/Memory/Artifact authority boundary.
 
 ## Configuration
 

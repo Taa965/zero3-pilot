@@ -17,7 +17,7 @@ const workerRpc = read('apps/zero3-desktop/host-runtime/remote-worker-rpc.ts')
 const overlay = read('apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs')
 const design = read('docs/WEB_GPT_PRIVATE_GATEWAY_V1.md')
 
-const tools = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context']
+const tools = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context','session_start','context_resolve','task_claim','event_record','artifact_register','task_complete','memory_commit','handoff_create']
 for (const tool of tools) {
   requireText(gateway, `"${tool}"`, `AWS Worker Gateway is missing ${tool}.`)
   requireText(workerRpc, `case '${tool}':`, `Local Worker RPC adapter is missing ${tool}.`)
@@ -41,7 +41,8 @@ requireText(remoteNode, 'this.client.leaseWorkerRpc(25)', 'Local Zero3 must use 
 requireText(remoteNode, 'await this.client.completeWorkerRpc(lease, result)', 'Local Zero3 must return successful Worker results through the narrow host route.')
 requireText(remoteClient, "capabilities: ['worker-protocol-v1']", 'Worker RPC leasing must advertise only the bounded Worker capability.')
 requireText(overlay, "'remote-worker-rpc.ts'", 'Prepared desktop must include the Worker RPC adapter.')
-requireText(overlay, '}, () => zero3WorkerAdmin())', 'Prepared desktop must bind Remote Host Worker RPC to the local Worker Runtime.')
+const lifecycleOverlay = read('apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs')
+requireText(lifecycleOverlay, '}, () => zero3WorkerRpcRuntime())', 'Prepared desktop must bind Remote Host Worker RPC to the composite V1 + lifecycle runtime.')
 requireText(design, 'local Worker Runtime (SQLite)', 'Gateway design must keep WorkUnit/Claim authority local.')
 
 for (const forbidden of [
@@ -52,7 +53,7 @@ for (const forbidden of [
 }
 
 for (const forbidden of ["runtime[lease.tool]", "runtime[tool]", 'dispatchCodex', 'runGpu', 'execCommand']) {
-  forbidText(workerRpc, forbidden, `Worker RPC adapter must remain an exact six-tool switch: ${forbidden}`)
+  forbidText(workerRpc, forbidden, `Worker RPC adapter must remain an exact bounded-tool switch: ${forbidden}`)
 }
 
 requireText(
@@ -61,4 +62,4 @@ requireText(
   'Worker Tunnel must not turn result-publication failure into a false execution failure.'
 )
 
-console.log('Zero3 Web-GPT Worker Gateway V1 architecture guard passed: dedicated MCP auth -> durable fenced RPC queue -> outbound Worker-only host tunnel -> exact local six-tool adapter -> local SQLite authority.')
+console.log('Zero3 Web-GPT Worker Gateway V1 architecture guard passed: dedicated MCP auth -> durable fenced RPC queue -> outbound Worker-only host tunnel -> bounded Worker/Lifecycle adapter -> authoritative Task + Memory + Artifact runtimes.')
