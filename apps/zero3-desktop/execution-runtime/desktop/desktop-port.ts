@@ -28,6 +28,8 @@ export interface ExecutionDesktopPort {
   reconcileReadiness(taskId: string): Promise<unknown>
   listTasks(): Promise<unknown>
   getTask(taskId: string): Promise<unknown>
+  setTaskArchived(taskId: string, archived: boolean): Promise<unknown>
+  deleteTask(taskId: string): Promise<unknown>
   listTaskWorkflows(): Promise<unknown>
   createWorkflowTask(input: TaskWorkflowCreateInput): Promise<unknown>
   createTask(input: CreateExecutionTaskInput): Promise<unknown>
@@ -49,6 +51,8 @@ export const EXECUTION_DESKTOP_CHANNELS = {
   reconcileReadiness: 'zero3:execution:reconcile-readiness',
   listTasks: 'zero3:execution:list',
   getTask: 'zero3:execution:get',
+  setTaskArchived: 'zero3:execution:set-task-archived',
+  deleteTask: 'zero3:execution:delete-task',
   listTaskWorkflows: 'zero3:execution:workflow:list',
   createWorkflowTask: 'zero3:execution:workflow:create-task',
   createTask: 'zero3:execution:create',

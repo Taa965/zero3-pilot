@@ -573,8 +573,49 @@ export class Zero3ExecutionRuntime {
     })
   }
 
+  /**
+   * 归档或取消归档一个任务。归档只写入独立侧车记录并留下一条审计事件，
+   * 不修改任务定义与执行状态，因此不会打断正在执行的步骤。
+   */
+  async setTaskArchived(taskId: string, archived: boolean): Promise<ExecutionTaskSnapshot> {
+    if (typeof archived !== 'boolean') throw new Error('archived must be a boolean')
+    return this.mutate(taskId, async () => {
+      const snapshot = await this.store.loadSnapshot(taskId)
+      const current = await this.store.readArchive(taskId)
+      if (current.archived === archived) return this.snapshot(taskId)
+      const at = now()
+      await this.store.writeArchive(taskId, archived, at)
+      const recorded = await this.appendEvent(snapshot.runtime, {
+        taskId,
+        type: archived ? 'task.archived' : 'task.unarchived',
+        payload: { title: snapshot.definition.task.title },
+        at
+      })
+      await this.store.writeSnapshot(snapshot.definition, refreshDerived(recorded.runtime))
+      return this.snapshot(taskId)
+    })
+  }
+
+  /**
+   * 物理删除任务。有步骤处于活动状态时拒绝删除，避免外部执行方在无主任务上继续回报。
+   */
+  async deleteTask(taskId: string): Promise<void> {
+    return this.mutate(taskId, async () => {
+      const snapshot = await this.store.loadSnapshot(taskId)
+      const active = snapshot.runtime.steps.filter(step => ACTIVE_STEPS.has(step.status))
+      if (active.length > 0) {
+        throw new Error(`任务仍有 ${active.length} 个步骤处于执行中，请先取消或归档后再删除。`)
+      }
+      await this.store.deleteTask(taskId)
+    })
+  }
+
   async snapshot(taskId: string): Promise<ExecutionTaskSnapshot> {
-    const [snapshot, events] = await Promise.all([this.store.loadSnapshot(taskId), this.store.readEvents(taskId)])
-    return { definition: snapshot.definition, runtime: snapshot.runtime, events }
+    const [snapshot, events, archive] = await Promise.all([
+      this.store.loadSnapshot(taskId),
+      this.store.readEvents(taskId),
+      this.store.readArchive(taskId)
+    ])
+    return { definition: snapshot.definition, runtime: snapshot.runtime, events, archived: archive.archived }
   }
 }
