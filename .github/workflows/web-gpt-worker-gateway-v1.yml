@@ -80,3 +80,7 @@ jobs:
         run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/workflow-worker-runtime.test.ts
       - name: Worker Wakeup P5 tests
         run: node --experimental-transform-types --test apps/zero3-desktop/workflow-runtime/worker-wakeup.test.ts apps/zero3-desktop/gpt-web-runtime/chatgpt-wakeup.test.ts
+      - name: Worker Station Manager final guard
+        run: node scripts/check-worker-station-manager-final.mjs
+      - name: Worker Station Manager behavior
+        run: node --experimental-transform-types --test apps/zero3-desktop/workflow-runtime/worker-station-manager.test.ts

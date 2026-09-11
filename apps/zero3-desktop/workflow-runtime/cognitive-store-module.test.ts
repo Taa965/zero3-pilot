@@ -23,6 +23,12 @@ function runtime() {
   return { store, worker }
 }
 
+function openSession(worker: Zero3WorkflowWorkerRuntime, input: Record<string, unknown>) {
+  const opened = worker.openPhysicalSession(input) as any
+  worker.bootstrapWorker({ bindingTicket: opened.ticket })
+  return opened
+}
+
 function source(index: number, chapterImageCounts = [8]): CognitiveStoreSource {
   const workItemId = `script-${String(index).padStart(2, '0')}`
   return {
@@ -77,6 +83,7 @@ test('P6 installs 20 scripts and the three fixed long-lived worker stations', ()
     const installed = installCognitiveStoreWorkflow(worker, {
       workflowRunId: 'cognitive-run',
       taskId: 'task-cognitive-20',
+      projectId: 'project-cognitive',
       sources,
       idempotencyKey: 'install-20'
     }) as any
@@ -102,12 +109,13 @@ test('P6 Script -> Visual -> Image claims receive upstream artifacts without sca
     installCognitiveStoreWorkflow(worker, {
       workflowRunId: 'cognitive-run',
       taskId: 'task-cognitive-one',
+      projectId: 'project-cognitive',
       sources: [source(1, [8])],
       idempotencyKey: 'install-one'
     })
-    const script = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-script' }) as any
-    const visual = worker.openPhysicalSession({ workerSlotId: 'visual-worker-01', logicalSessionId: 'gpt-visual' }) as any
-    const image = worker.openPhysicalSession({ workerSlotId: 'image-worker-01', logicalSessionId: 'gpt-image' }) as any
+    const script = openSession(worker, { workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-script' }) as any
+    const visual = openSession(worker, { workerSlotId: 'visual-worker-01', logicalSessionId: 'gpt-visual' }) as any
+    const image = openSession(worker, { workerSlotId: 'image-worker-01', logicalSessionId: 'gpt-image' }) as any
 
     const scriptClaim = (worker.claimWorkV2({ bindingTicket: script.ticket, idempotencyKey: 'script-claim' }) as any).claim
     const scriptUnit = scriptClaim.units[0]

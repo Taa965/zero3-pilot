@@ -58,6 +58,12 @@ function zero3WorkerBindingSecret() {
 }
 const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))
 const zero3WorkflowWorkerRuntime = new Zero3WorkflowWorkerRuntime(zero3WorkflowWorkerStore, { ticketSecret: zero3WorkerBindingSecret() })
+const zero3WorkerStationManager = new Zero3WorkerStationManager(zero3WorkflowWorkerRuntime, {
+  create: projectId => zero3GptWeb.create(projectId),
+  executionStatus: entryId => zero3GptWeb.executionStatus(entryId),
+  sendWakeup: (entryId, message) => zero3GptWeb.sendWakeup(entryId, message)
+})
+void app.whenReady().then(() => zero3WorkerStationManager.start())
 const zero3WorkerWakeupController = new Zero3WorkerWakeupController(zero3WorkflowWorkerRuntime, {
   executionStatus: entryId => zero3GptWeb.executionStatus(entryId),
   sendWakeup: (entryId, message) => zero3GptWeb.sendWakeup(entryId, message)
@@ -109,7 +115,12 @@ function zero3WorkflowWorkerInput(value: unknown): Record<string, unknown> {
 ipcMain.handle('zero3:workflow-worker:ensure-run', (_event, request: unknown) => zero3WorkflowWorkerRuntime.ensureWorkflowRun(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:ensure-binding', (_event, request: unknown) => zero3WorkflowWorkerRuntime.ensureWorkerBinding(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:add-items', (_event, request: unknown) => zero3WorkflowWorkerRuntime.addWorkItems(zero3WorkflowWorkerInput(request)))
-ipcMain.handle('zero3:workflow-worker:install-cognitive-store', (_event, request: unknown) => installCognitiveStoreWorkflow(zero3WorkflowWorkerRuntime, zero3WorkflowWorkerInput(request) as never))
+ipcMain.handle('zero3:workflow-worker:install-cognitive-store', async (_event, request: unknown) => {
+  const input = zero3WorkflowWorkerInput(request)
+  const installed = installCognitiveStoreWorkflow(zero3WorkflowWorkerRuntime, input as never)
+  const stations = await zero3WorkerStationManager.reconcileRun(String(input.workflowRunId), String(input.projectId))
+  return { ...installed, stations }
+})
 ipcMain.handle('zero3:workflow-worker:open-session', (_event, request: unknown) => zero3WorkflowWorkerRuntime.openPhysicalSession(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:rotate-session', (_event, request: unknown) => zero3WorkflowWorkerRuntime.rotatePhysicalSession(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:snapshot', (_event, workflowRunId: unknown) => zero3WorkflowWorkerRuntime.workflowSnapshot(workflowRunId))
@@ -140,7 +151,7 @@ async function zero3WorkerRpcRuntime() {
     reportProgressV2: input => zero3WorkflowWorkerRuntime.reportProgressV2(input)
   }
 }
-app.on('before-quit', () => { zero3WorkerWakeupController.stop(); zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })
+app.on('before-quit', () => { zero3WorkerStationManager.stop(); zero3WorkerWakeupController.stop(); zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })
 `
 
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
@@ -175,7 +186,7 @@ export function applyZero3AgentLifecycleRuntime() {
       label: 'Agent Lifecycle runtime import',
       appliedMarker: "from './zero3/worker-runtime/v2/index'",
       from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
-      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
     },
     {
       label: 'Agent Lifecycle composition after Execution Runtime',

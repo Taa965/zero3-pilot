@@ -30,6 +30,7 @@ on:
       - 'scripts/check-worker-protocol-v2-p2-p3.mjs'
       - 'scripts/check-worker-wakeup-p5.mjs'
       - 'scripts/check-cognitive-store-worker-p6.mjs'
+      - 'scripts/check-worker-station-manager-final.mjs'
       - 'scripts/check-agent-shared-state-mvp.mjs'
       - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
       - 'skills/zero3-web-worker/**'
@@ -64,6 +65,7 @@ on:
       - 'scripts/check-worker-protocol-v2-p2-p3.mjs'
       - 'scripts/check-worker-wakeup-p5.mjs'
       - 'scripts/check-cognitive-store-worker-p6.mjs'
+      - 'scripts/check-worker-station-manager-final.mjs'
       - 'scripts/check-agent-shared-state-mvp.mjs'
       - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
       - 'skills/zero3-web-worker/**'
@@ -114,6 +116,10 @@ jobs:
         run: node scripts/check-cognitive-store-worker-p6.mjs
       - name: Cognitive Store P6 workflow tests
         run: node --experimental-transform-types --test apps/zero3-desktop/workflow-runtime/cognitive-store-module.test.ts
+      - name: Worker Station Manager final guard
+        run: node scripts/check-worker-station-manager-final.mjs
+      - name: Worker Station Manager behavior
+        run: node --experimental-transform-types --test apps/zero3-desktop/workflow-runtime/worker-station-manager.test.ts
       - name: Shared organizational state architecture guard
         run: node scripts/check-agent-shared-state-mvp.mjs
       - name: Shared organizational state lifecycle tests

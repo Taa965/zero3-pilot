@@ -108,3 +108,14 @@ test('P5 page/composer readiness failures are deferred and never treated as deli
   assert.match(events[0], /^deferred:wake-1:/)
   assert.equal(events.some(value => value.startsWith('delivered:')), false)
 })
+
+test('P5 wakeup attaches a fresh generation-scoped Binding Ticket when runtime can issue one', async () => {
+  const { runtime, events } = runtimePort()
+  runtime.issueBindingTicket = workerSlotId => ({ ticket: `fresh-ticket-for-${workerSlotId}` })
+  const { gpt, sent } = gptPort({ executing: false, health: null })
+  const controller = new Zero3WorkerWakeupController(runtime, gpt)
+  await controller.tick()
+  assert.equal(sent.length, 1)
+  assert.match(sent[0], /BindingTicket: fresh-ticket-for-visual-worker-01/)
+  assert.deepEqual(events, ['delivered:wake-1'])
+})

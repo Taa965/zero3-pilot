@@ -110,3 +110,12 @@ The generic Worker Runtime now merges Artifacts from direct dependency StageRuns
 The ChatGPT image-generation limit remains module-local. Each WorkItem creates a separate overview Stage, chapter image StageRuns partitioned into at most 10 images, and a package Stage that depends on every required image Stage. Examples: 8 -> `[8]`, 17 -> `[10,7]`, 23 -> `[10,10,3]`. The generic Worker Runtime contains no hard-coded image batch limit.
 
 The module installer is exposed only through local Zero3 IPC as `zero3:workflow-worker:install-cognitive-store`. It is intentionally absent from the public Worker MCP catalog; GPT Workers may execute Claims but cannot create Workflow topology or WorkItems.
+## Automatic GPT station lifecycle
+
+`Zero3WorkerStationManager` closes the remaining gap between a logical WorkerSlot and a real ChatGPT web conversation. Workflow Runs that set `autoProvisionGptWorkers: true` and carry a `projectId` are reconciled locally after Electron is ready and after module installation.
+
+A newly created Physical Session starts in `STARTING`. Zero3 creates a GPT Web entry, injects the version-controlled station prompt plus the current generation-scoped Binding Ticket, and the worker must call `bootstrap_worker` before `claim_work` is accepted. After bootstrap, the session becomes `ACTIVE`.
+
+When a session reaches its item limit or P5 stall recovery marks it `ROTATING`, the Station Manager waits for active Claims to clear, creates a new GPT Web entry, increments the WorkerSlot generation through `rotatePhysicalSession`, injects the same prompt revision with a new Ticket, and leaves the old conversation as history. Old-generation tickets stay fenced.
+
+P5 Wakeup also requests a fresh Binding Ticket immediately before sending a continuation message, so a long WAITING period does not depend on a stale ticket stored in chat. Session creation, prompt injection and rotation are local Electron capabilities only and are never exposed as public MCP tools.
