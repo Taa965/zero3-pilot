@@ -5,7 +5,7 @@ import { Zero3WorkflowRuntime, type CreateWorkflowRunRequest } from '../runtime.
 import { createGoogleDriveArtifactPortFromEnv } from '../google-drive-rest.ts'
 import { Zero3WorkflowInputIngestService } from '../input-ingest.ts'
 import { Zero3LocalHandoffIngestService } from '../local-handoff-ingest.ts'
-import { createZero3GptGpuRunnerPortFromEnv, type Zero3GptGpuRunnerPort } from '../gpt-gpu-runner-port.ts'
+import { createZero3GptGpuRunnerPortFromEnv, createZero3GptGpuRunnerPortFromProjectRoot, type Zero3GptGpuRunnerPort } from '../gpt-gpu-runner-port.ts'
 import { Zero3WorkflowRemoteRenderService } from '../remote-render.ts'
 import { FfprobeWorkflowVideoQcPort, Zero3WorkflowVideoPullbackService } from '../video-pullback.ts'
 import { Zero3WorkflowAutomationController } from '../automation-controller.ts'
@@ -25,6 +25,7 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
   readonly remoteRender: Zero3WorkflowRemoteRenderService | null
   readonly videoPullback: Zero3WorkflowVideoPullbackService | null
   readonly automation: Zero3WorkflowAutomationController
+  readonly #projectRunnerCache = new Map<string, { port: Zero3GptGpuRunnerPort | null; error: string | null }>()
 
   constructor(root: string) {
     const absolute = path.resolve(root)
@@ -47,17 +48,52 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
       inputIngest: this.inputIngest,
       handoffIngest: this.handoffIngest,
       remoteRender: this.remoteRender,
-      videoPullback: this.videoPullback
+      videoPullback: this.videoPullback,
+      remoteRenderForRun: runId => this.remoteRenderForRun(runId),
+      videoPullbackForRun: runId => this.videoPullbackForRun(runId)
     })
   }
 
-  runtimeCapabilities() {
+  private resolveProjectRunner(projectRootPath?: string | null): { port: Zero3GptGpuRunnerPort | null; error: string | null } {
+    if (this.gptGpuPort) return { port: this.gptGpuPort, error: null }
+    if (!projectRootPath?.trim()) return { port: null, error: this.gptGpuConfigError }
+    const root = path.resolve(projectRootPath.trim())
+    const cached = this.#projectRunnerCache.get(root)
+    if (cached) return cached
+    let port: Zero3GptGpuRunnerPort | null = null
+    let error: string | null = null
+    try { port = createZero3GptGpuRunnerPortFromProjectRoot(root) }
+    catch (reason) { error = reason instanceof Error ? reason.message : String(reason) }
+    const result = { port, error }
+    this.#projectRunnerCache.set(root, result)
+    return result
+  }
+
+  private projectRootForRun(runId: string): string | null {
+    const root = this.runtime.getRun(runId).plan.metadata.projectRootPath
+    return typeof root === 'string' && root.trim() ? root.trim() : null
+  }
+
+  private remoteRenderForRun(runId: string): Zero3WorkflowRemoteRenderService | null {
+    const resolved = this.resolveProjectRunner(this.projectRootForRun(runId))
+    return resolved.port ? new Zero3WorkflowRemoteRenderService(this.runtime, resolved.port) : null
+  }
+
+  private videoPullbackForRun(runId: string): Zero3WorkflowVideoPullbackService | null {
+    const resolved = this.resolveProjectRunner(this.projectRootForRun(runId))
+    return resolved.port
+      ? new Zero3WorkflowVideoPullbackService(this.runtime, resolved.port, new FfprobeWorkflowVideoQcPort(), path.join(this.root, 'video-output'))
+      : null
+  }
+
+  runtimeCapabilities(projectRootPath?: string | null) {
+    const projectRunner = this.resolveProjectRunner(projectRootPath)
     return {
       protocol: 'zero3.pilot.workflow-runtime.v1',
       artifactProviders: {
         GOOGLE_DRIVE: { configured: Boolean(this.drivePort), mode: this.drivePort ? 'direct-oauth' : 'unconfigured' },
         LOCAL: { configured: true },
-        REMOTE_COMPUTE: { configured: Boolean(this.gptGpuPort), provider: this.gptGpuPort?.provider ?? null, error: this.gptGpuConfigError }
+        REMOTE_COMPUTE: { configured: Boolean(projectRunner.port), provider: projectRunner.port?.provider ?? null, error: projectRunner.error }
       },
       automaticInputIngest: Boolean(this.inputIngest),
       handoffMaterialization: Boolean(this.handoffIngest),
@@ -112,19 +148,27 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
   }
 
   async reconcileRemote(runId: string) {
-    if (!this.remoteRender) throw new Error(this.gptGpuConfigError || 'GPT-GPU remote runner is not configured in Zero3 Desktop')
+    const service = this.remoteRenderForRun(runId)
+    if (!service) {
+      const resolved = this.resolveProjectRunner(this.projectRootForRun(runId))
+      throw new Error(resolved.error || 'GPT-GPU remote runner is not configured in Zero3 Desktop')
+    }
     const snapshot = this.runtime.getRun(runId)
     const candidates = snapshot.stages.filter(stage => stage.stageId === 'cloud-render' && ['READY', 'CLAIMED', 'RUNNING', 'FIX_REQUIRED', 'WAITING_HUMAN', 'BLOCKED'].includes(stage.status))
     const results = []
-    for (const stage of candidates) results.push(await this.remoteRender.dispatchOrReconcile(runId, stage.stageRunId))
+    for (const stage of candidates) results.push(await service.dispatchOrReconcile(runId, stage.stageRunId))
     return { snapshot: this.runtime.getRun(runId), results }
   }
   async pullbackVideos(runId: string) {
-    if (!this.videoPullback) throw new Error(this.gptGpuConfigError || 'GPT-GPU remote runner is not configured in Zero3 Desktop')
+    const service = this.videoPullbackForRun(runId)
+    if (!service) {
+      const resolved = this.resolveProjectRunner(this.projectRootForRun(runId))
+      throw new Error(resolved.error || 'GPT-GPU remote runner is not configured in Zero3 Desktop')
+    }
     const snapshot = this.runtime.getRun(runId)
     const candidates = snapshot.stages.filter(stage => stage.stageId === 'pullback' && ['READY', 'FIX_REQUIRED', 'BLOCKED', 'WAITING_HUMAN', 'VERIFYING'].includes(stage.status))
     const results = []
-    for (const stage of candidates) results.push(await this.videoPullback.pullback(runId, stage.stageRunId))
+    for (const stage of candidates) results.push(await service.pullback(runId, stage.stageRunId))
     return { snapshot: this.runtime.getRun(runId), results }
   }
 

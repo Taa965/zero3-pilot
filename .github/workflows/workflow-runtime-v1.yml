@@ -58,6 +58,7 @@ jobs:
           apps/zero3-desktop/workflow-runtime/video-pullback.test.ts
           apps/zero3-desktop/workflow-runtime/automation-controller.test.ts
           apps/zero3-desktop/workflow-runtime/worker-v2-adapter.test.ts
+          apps/zero3-desktop/workflow-runtime/workflow-worker-queue.test.ts
           apps/zero3-desktop/workflow-modules/cognitive-store-video/cognitive-store-video.test.ts
       - name: Task Center static UI contract
         run: node --test apps/zero3-desktop/tests/workflow-task-ui.test.cjs

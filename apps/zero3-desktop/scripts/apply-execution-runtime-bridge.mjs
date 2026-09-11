@@ -82,7 +82,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Execution
 })
 
 contextBridge.exposeInMainWorld('zero3Workflow', {
-  runtimeCapabilities: () => ipcRenderer.invoke('zero3:workflow:runtime-capabilities'),
+  runtimeCapabilities: projectRootPath => ipcRenderer.invoke('zero3:workflow:runtime-capabilities', projectRootPath),
   listModules: () => ipcRenderer.invoke('zero3:workflow:list-modules'),
   validateCreateInput: (moduleId, input, moduleVersion) => ipcRenderer.invoke('zero3:workflow:validate-create-input', moduleId, input, moduleVersion),
   listRuns: () => ipcRenderer.invoke('zero3:workflow:list-runs'),
@@ -122,7 +122,7 @@ const globalBridgeProperty = String.raw`    zero3Execution: {
       issueReporterTicket: (assignmentId: string, request?: Record<string, unknown>) => Promise<{ ticket: string; endpointFile: string; client: { kind: 'node' | 'powershell'; command: string; argsPrefix: string[] } }>
     }
     zero3Workflow: {
-      runtimeCapabilities: () => Promise<unknown>
+      runtimeCapabilities: (projectRootPath?: string | null) => Promise<unknown>
       listModules: () => Promise<unknown>
       validateCreateInput: (moduleId: string, input: unknown, moduleVersion?: string | null) => Promise<unknown>
       listRuns: () => Promise<unknown>

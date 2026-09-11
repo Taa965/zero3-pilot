@@ -257,6 +257,36 @@ export class Zero3WorkflowStore {
     return rows.map(row => this.stageView(row))
   }
 
+  claimNextStage(runIdValue: string, workerDefinitionIdValue: string, ownerValue: string): WorkflowStageRunRecord | null {
+    return this.transaction(() => {
+      const runId = id(runIdValue, 'workflowRunId')
+      const workerDefinitionId = id(workerDefinitionIdValue, 'workerDefinitionId')
+      const owner = id(ownerValue, 'claimOwnerId')
+      const active = this.db.prepare(`SELECT sr.* FROM stage_runs sr
+        JOIN work_items wi ON wi.workflow_run_id=sr.workflow_run_id AND wi.item_id=sr.item_id
+        WHERE sr.workflow_run_id=? AND sr.worker_definition_id=? AND sr.claim_owner_id=?
+          AND sr.status IN ('CLAIMED','RUNNING')
+        ORDER BY wi.ordinal,sr.stage_id LIMIT 1`).get(runId, workerDefinitionId, owner)
+      if (active) return this.stageView(active)
+
+      const row = this.db.prepare(`SELECT sr.* FROM stage_runs sr
+        JOIN work_items wi ON wi.workflow_run_id=sr.workflow_run_id AND wi.item_id=sr.item_id
+        WHERE sr.workflow_run_id=? AND sr.worker_definition_id=?
+          AND sr.status IN ('READY','FIX_REQUIRED')
+          AND sr.attempt < sr.max_attempts
+        ORDER BY wi.ordinal,sr.stage_id LIMIT 1`).get(runId, workerDefinitionId) as any
+      if (!row) return null
+      const at = now()
+      const changed = this.db.prepare(`UPDATE stage_runs
+        SET status='CLAIMED',claim_owner_id=?,attempt=attempt+1,current_activity=NULL,updated_at=?
+        WHERE stage_run_id=? AND status IN ('READY','FIX_REQUIRED') AND attempt < max_attempts`).run(owner, at, row.stage_run_id)
+      if (Number(changed.changes) !== 1) throw new Error(`stage ${row.stage_run_id} lost claim race`)
+      this.appendEventTx(runId, row.item_id, row.stage_run_id, 'stage.claimed', { owner, source: 'worker_queue' }, at)
+      this.recomputeTx(runId, at)
+      return this.stageView(this.requireStageRow(runId, row.stage_run_id))
+    })
+  }
+
   claimStage(runIdValue: string, stageRunIdValue: string, ownerValue: string): WorkflowStageRunRecord {
     return this.transaction(() => {
       const runId = id(runIdValue, 'workflowRunId')

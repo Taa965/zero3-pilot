@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { Zero3GptGpuRunnerPort } from './gpt-gpu-runner-port.ts'
+import { createZero3GptGpuRunnerPortFromProjectRoot, Zero3GptGpuRunnerPort } from './gpt-gpu-runner-port.ts'
 import type { WorkflowRemoteRenderRequest } from './remote-render.ts'
 
 function storedZip(name: string, content: Buffer): Buffer {
@@ -91,5 +91,22 @@ test('GPT-GPU runner rejects a persisted request key when package bytes changed 
     const key = await port.requestKeyFor(request)
     await writeFile(file, Buffer.concat([first, Buffer.from('changed')]))
     await assert.rejects(() => port.submitIdempotent({ ...request, requestKey: key }), /changed after request intent/u)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+
+test('GPT-GPU runner can be discovered from the selected Zero3 project without copying its secret into Pilot', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'zero3-gpt-gpu-project-'))
+  try {
+    await mkdir(join(dir, 'config'), { recursive: true })
+    await mkdir(join(dir, 'data', 'secrets'), { recursive: true })
+    await writeFile(join(dir, 'config', 'gpt_gpu_runner_remote.json'), JSON.stringify({
+      schema: 'zero3.gpt-gpu-runner-remote/1.0',
+      base_url: 'https://03.example.test',
+      max_download_bytes: 123456789
+    }))
+    await writeFile(join(dir, 'data', 'secrets', 'gpt-gpu-runner-token.txt'), 'y'.repeat(48))
+    const port = createZero3GptGpuRunnerPortFromProjectRoot(dir)
+    assert.ok(port instanceof Zero3GptGpuRunnerPort)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })

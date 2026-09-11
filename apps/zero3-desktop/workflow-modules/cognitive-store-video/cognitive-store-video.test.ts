@@ -13,6 +13,7 @@ test('chapter image batches never exceed ten images', () => {
 test('cognitive-store module freezes prompts, workers and pipeline into each run plan', () => {
   const plan = cognitiveStoreVideoModule.createRun({
     projectId: 'zero3',
+    projectRootPath: '/projects/zero3-media',
     scripts: [{ title: '资本论', driveFileId: 'drive-1' }]
   })
   assert.equal(plan.moduleId, 'cognitive-store-video')
@@ -22,6 +23,7 @@ test('cognitive-store module freezes prompts, workers and pipeline into each run
   ])
   assert.deepEqual(plan.workers.map(worker => worker.workerDefinitionId), ['script-worker', 'visual-worker', 'image-worker'])
   assert.equal(plan.workers.every(worker => typeof worker.metadata?.prompt === 'string' && String(worker.metadata.prompt).length > 20), true)
+  assert.equal(plan.metadata.projectRootPath, '/projects/zero3-media')
   assert.deepEqual(plan.items[0].completedStageIds, ['input-ingest'])
 })
 

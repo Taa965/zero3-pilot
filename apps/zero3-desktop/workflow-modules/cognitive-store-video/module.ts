@@ -28,6 +28,7 @@ export interface CognitiveStoreScriptInput {
 
 export interface CognitiveStoreVideoRunInput {
   projectId: string
+  projectRootPath?: string
   title?: string
   scripts: readonly CognitiveStoreScriptInput[]
   drive?: { rootFolderId?: string | null }
@@ -133,7 +134,7 @@ export const cognitiveStoreVideoModule: WorkflowModule = {
       stages,
       workers,
       items,
-      metadata: { driveRootFolderId, artifactTransport: 'GOOGLE_DRIVE', cloudExecutorId: input.cloud?.executorId ?? null },
+      metadata: { driveRootFolderId, artifactTransport: 'GOOGLE_DRIVE', cloudExecutorId: input.cloud?.executorId ?? null, projectRootPath: input.projectRootPath?.trim() || null },
       createdAt
     }
   }

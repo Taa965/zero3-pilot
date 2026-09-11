@@ -29,8 +29,9 @@ export function CognitiveStoreVideoCreateRun({ moduleVersion }: { moduleVersion:
   }, [])
 
   useEffect(() => {
-    void WorkflowAdapter.runtimeCapabilities().then(setCapabilities).catch(() => setCapabilities(null))
-  }, [])
+    const rootPath = projects.find(project => project.id === projectId)?.rootPath ?? null
+    void WorkflowAdapter.runtimeCapabilities(rootPath).then(setCapabilities).catch(() => setCapabilities(null))
+  }, [projects, projectId])
 
   const driveScripts = useMemo(() => driveRows.split(/\r?\n/u).map(line => line.trim()).filter(Boolean).map((line, index) => {
     const [name, fileId] = line.split('|').map(value => value.trim())
@@ -41,6 +42,8 @@ export function CognitiveStoreVideoCreateRun({ moduleVersion }: { moduleVersion:
     ...files.map(file => ({ title: stem(file.name), localPath: file.path })),
     ...driveScripts
   ], [files, driveScripts])
+
+  const selectedProject = useMemo(() => projects.find(project => project.id === projectId) ?? null, [projects, projectId])
 
   async function pickFiles() {
     try { setFiles(await WorkflowAdapter.pickInputFiles()); setError(null) }
@@ -55,6 +58,7 @@ export function CognitiveStoreVideoCreateRun({ moduleVersion }: { moduleVersion:
       }
       const input = {
         projectId,
+        projectRootPath: selectedProject?.rootPath,
         title: title.trim() || undefined,
         scripts,
         drive: { rootFolderId: driveFolderId.trim() || null },

@@ -2,7 +2,7 @@ import type { WorkflowArtifactSeed } from '../contracts.ts'
 import type { CreateWorkflowRunRequest } from '../runtime.ts'
 
 export interface WorkflowDesktopPort {
-  runtimeCapabilities(): Promise<unknown> | unknown
+  runtimeCapabilities(projectRootPath?: string | null): Promise<unknown> | unknown
   listModules(): Promise<unknown> | unknown
   validateCreateInput(moduleId: string, input: unknown, moduleVersion?: string | null): Promise<unknown> | unknown
   listRuns(): Promise<unknown> | unknown

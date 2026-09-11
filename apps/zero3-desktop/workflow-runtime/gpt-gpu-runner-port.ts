@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
+import { createWriteStream, existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, stat, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { Readable, Transform } from 'node:stream'
@@ -243,10 +243,37 @@ export class Zero3GptGpuRunnerPort implements WorkflowRemoteRenderPort {
   }
 }
 
+
+export const ZERO3_GPT_GPU_RUNNER_CONFIG_SCHEMA = 'zero3.gpt-gpu-runner-remote/1.0' as const
+
+export function createZero3GptGpuRunnerPortFromProjectRoot(projectRootValue: string): Zero3GptGpuRunnerPort | null {
+  const projectRoot = path.resolve(projectRootValue)
+  const configFile = path.join(projectRoot, 'config', 'gpt_gpu_runner_remote.json')
+  const tokenFile = path.join(projectRoot, 'data', 'secrets', 'gpt-gpu-runner-token.txt')
+  if (!existsSync(configFile) && !existsSync(tokenFile)) return null
+  if (!existsSync(configFile) || !existsSync(tokenFile)) throw new Error('GPT-GPU runner project configuration is incomplete')
+  let parsed: unknown
+  try { parsed = JSON.parse(readFileSync(configFile, 'utf8')) } catch { throw new Error('GPT-GPU runner project config is invalid JSON') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('GPT-GPU runner project config must be an object')
+  const config = parsed as Record<string, unknown>
+  if (config.schema !== ZERO3_GPT_GPU_RUNNER_CONFIG_SCHEMA) throw new Error('GPT-GPU runner project config schema is unsupported')
+  const baseUrl = String(config.base_url ?? '').trim()
+  if (!baseUrl) throw new Error('GPT-GPU runner project config is missing base_url')
+  const maxDownloadBytes = Number(config.max_download_bytes ?? DEFAULT_MAX_DOWNLOAD_BYTES)
+  return new Zero3GptGpuRunnerPort({
+    baseUrl,
+    tokenFile,
+    maxDownloadBytes: Number.isFinite(maxDownloadBytes) ? maxDownloadBytes : DEFAULT_MAX_DOWNLOAD_BYTES
+  })
+}
+
 export function createZero3GptGpuRunnerPortFromEnv(env: NodeJS.ProcessEnv = process.env): Zero3GptGpuRunnerPort | null {
   const baseUrl = env.ZERO3_GPT_GPU_RUNNER_BASE_URL?.trim()
   const tokenFile = env.ZERO3_GPT_GPU_RUNNER_TOKEN_FILE?.trim()
-  if (!baseUrl && !tokenFile) return null
-  if (!baseUrl || !tokenFile) throw new Error('ZERO3_GPT_GPU_RUNNER_BASE_URL and ZERO3_GPT_GPU_RUNNER_TOKEN_FILE must be configured together')
-  return new Zero3GptGpuRunnerPort({ baseUrl, tokenFile: path.resolve(tokenFile) })
+  if (baseUrl || tokenFile) {
+    if (!baseUrl || !tokenFile) throw new Error('ZERO3_GPT_GPU_RUNNER_BASE_URL and ZERO3_GPT_GPU_RUNNER_TOKEN_FILE must be configured together')
+    return new Zero3GptGpuRunnerPort({ baseUrl, tokenFile: path.resolve(tokenFile) })
+  }
+  const projectRoot = env.ZERO3_GPT_GPU_PROJECT_ROOT?.trim()
+  return projectRoot ? createZero3GptGpuRunnerPortFromProjectRoot(projectRoot) : null
 }

@@ -93,7 +93,7 @@ export type WorkflowSnapshot = {
 }
 
 type WorkflowBridge = {
-  runtimeCapabilities: () => Promise<WorkflowRuntimeCapabilities>
+  runtimeCapabilities: (projectRootPath?: string | null) => Promise<WorkflowRuntimeCapabilities>
   listModules: () => Promise<WorkflowModuleManifest[]>
   validateCreateInput: (moduleId: string, input: unknown, moduleVersion?: string | null) => Promise<{ valid: boolean; errors: string[]; warnings: string[] }>
   listRuns: () => Promise<WorkflowRunSummary[]>
@@ -112,7 +112,7 @@ function bridge(): WorkflowBridge | null {
 }
 
 export const WorkflowAdapter = {
-  runtimeCapabilities: async (): Promise<WorkflowRuntimeCapabilities | null> => bridge()?.runtimeCapabilities() ?? null,
+  runtimeCapabilities: async (projectRootPath?: string | null): Promise<WorkflowRuntimeCapabilities | null> => bridge()?.runtimeCapabilities(projectRootPath ?? null) ?? null,
   available: () => bridge() !== null,
   listModules: async () => bridge()?.listModules() ?? [],
   listRuns: async () => bridge()?.listRuns() ?? [],

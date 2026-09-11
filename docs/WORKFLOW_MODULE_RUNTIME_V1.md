@@ -43,6 +43,12 @@ The image rule (overview first, then per chapter with at most 10 images per batc
 
 The module declares logical WorkerDefinitions (`script-worker`, `visual-worker`, `image-worker`). `worker-v2-adapter.ts` projects those definitions and item-level READY/FIX_REQUIRED StageRuns into the shared Worker Protocol v2 `WorkflowWorkerBinding` and `WorkflowWorkUnit` contracts. The parallel GPT Worker Protocol v2 effort owns physical ChatGPT session binding, Claim/Lease, wakeup, and session rotation; the Task runtime remains authoritative for WorkflowRun/WorkItem/StageRun dependencies.
 
+## Worker queue authority
+
+`Zero3WorkflowWorkerQueueService` is the task-side bridge for Worker Protocol v2. It atomically claims the next per-item StageRun for a WorkerSlot, recovers an already-active claim after a transport retry, verifies producer scope and Artifact availability, passes the Completion Gate, and only then claims the next item for that logical workstation. This removes the unsafe `list READY -> claim later` race when multiple GPT workers share one stage queue.
+
+The GPT plugin remains responsible for Binding Ticket / generation fencing and physical ChatGPT session lifecycle. Workflow Runtime remains authoritative for which WorkItem/StageRun is claimable and whether a reported Artifact is enough to release downstream work.
+
 ## Artifact transport
 
 `Zero3ArtifactTransportRouter` provides environment-aware routing:
@@ -52,6 +58,10 @@ The module declares logical WorkerDefinitions (`script-worker`, `visual-worker`,
 - local/remote boundary -> remote-compute transport.
 
 Actual provider credentials remain outside Workflow definitions. `GoogleDriveArtifactProvider` remains an injected contract, while `GoogleDriveRestArtifactPort` now implements authenticated Drive v3 verify/download/folder creation/idempotent upload. The desktop runtime enables it only when credentials are supplied outside the renderer.
+
+## Project-scoped GPT-GPU runner discovery
+
+The selected Zero3 Project root is frozen into the cognitive-store run metadata. If no global `ZERO3_GPT_GPU_RUNNER_*` override is configured, Desktop resolves the existing project-local `config/gpt_gpu_runner_remote.json` plus `data/secrets/gpt-gpu-runner-token.txt`. The bearer token stays in the media project secret file; Pilot only opens it in Electron main when the cloud stage actually needs the runner. This lets an existing Zero3 media project reuse its already-provisioned `https://03.336r.com/api/handoff/v1/*` runner without duplicating credentials into Task Center.
 
 ## Task Center UI
 

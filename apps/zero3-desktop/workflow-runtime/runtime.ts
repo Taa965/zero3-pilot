@@ -27,6 +27,7 @@ export class Zero3WorkflowRuntime {
   getRun(runId: string) { return this.store.snapshot(runId) }
   startRun(runId: string) { return this.store.startRun(runId) }
   readyStages(runId: string, workerDefinitionId?: string | null) { return this.store.readyStages(runId, workerDefinitionId) }
+  claimNextStage(runId: string, workerDefinitionId: string, ownerId: string) { return this.store.claimNextStage(runId, workerDefinitionId, ownerId) }
   claimStage(runId: string, stageRunId: string, ownerId: string) { return this.store.claimStage(runId, stageRunId, ownerId) }
   startStage(runId: string, stageRunId: string, ownerId?: string | null) { return this.store.startStage(runId, stageRunId, ownerId) }
   reportProgress(runId: string, stageRunId: string, progress: number, currentActivity?: string | null) {

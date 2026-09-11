@@ -9,6 +9,8 @@ export interface WorkflowAutomationServices {
   handoffIngest?: Zero3LocalHandoffIngestService | null
   remoteRender?: Zero3WorkflowRemoteRenderService | null
   videoPullback?: Zero3WorkflowVideoPullbackService | null
+  remoteRenderForRun?: ((runId: string) => Zero3WorkflowRemoteRenderService | null) | null
+  videoPullbackForRun?: ((runId: string) => Zero3WorkflowVideoPullbackService | null) | null
 }
 
 export interface WorkflowAutomationTickResult {
@@ -67,19 +69,21 @@ export class Zero3WorkflowAutomationController {
           await attempt('local-ingest', () => this.services.handoffIngest!.ingestReady(runId))
           snapshot = this.runtime.getRun(runId)
         }
-        if (this.services.remoteRender) {
+        const remoteRender = this.services.remoteRenderForRun?.(runId) ?? this.services.remoteRender ?? null
+        if (remoteRender) {
           const candidates = snapshot.stages.filter(stage => {
             if (stage.stageId !== 'cloud-render') return false
             if (['READY', 'CLAIMED', 'RUNNING', 'FIX_REQUIRED'].includes(stage.status)) return true
             if (stage.status !== 'WAITING_HUMAN') return false
             return this.runtime.externalJob(runId, stage.stageRunId)?.state === 'OUTCOME_UNKNOWN'
           })
-          for (const stage of candidates) await attempt('cloud-render', () => this.services.remoteRender!.dispatchOrReconcile(runId, stage.stageRunId))
+          for (const stage of candidates) await attempt('cloud-render', () => remoteRender.dispatchOrReconcile(runId, stage.stageRunId))
           snapshot = this.runtime.getRun(runId)
         }
-        if (this.services.videoPullback) {
+        const videoPullback = this.services.videoPullbackForRun?.(runId) ?? this.services.videoPullback ?? null
+        if (videoPullback) {
           const candidates = snapshot.stages.filter(stage => stage.stageId === 'pullback' && ['READY', 'FIX_REQUIRED', 'VERIFYING'].includes(stage.status))
-          for (const stage of candidates) await attempt('pullback', () => this.services.videoPullback!.pullback(runId, stage.stageRunId))
+          for (const stage of candidates) await attempt('pullback', () => videoPullback.pullback(runId, stage.stageRunId))
         }
       }
       return { processedRuns, actions, errors }

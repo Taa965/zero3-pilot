@@ -26,7 +26,8 @@ function records(value: unknown, label: string): Record<string, unknown>[] {
 
 export function registerWorkflowDesktopIpc(port: WorkflowDesktopPort): () => void {
   const channels = Object.values(WORKFLOW_DESKTOP_CHANNELS)
-  ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.runtimeCapabilities, () => port.runtimeCapabilities())
+  ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.runtimeCapabilities, (_event, projectRootPath: unknown) =>
+    port.runtimeCapabilities(projectRootPath == null ? null : text(projectRootPath, 'projectRootPath', 8192)))
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.listModules, () => port.listModules())
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.validateCreateInput, (_event, moduleId: unknown, input: unknown, moduleVersion: unknown) =>
     port.validateCreateInput(id(moduleId, 'moduleId'), input, moduleVersion == null ? null : text(moduleVersion, 'moduleVersion', 128)))
