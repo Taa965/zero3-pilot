@@ -301,6 +301,10 @@ Important boundaries include:
 
 Older audit/POC PRs for R4B/R4C are historical exploration and must not be treated as the authoritative implementation when a formal merged path exists.
 
+### Intelligent Agent Task Router — merged
+
+The agent-routing layer now owns an importance-independent executor choice. `Zero3AgentRuntimeOrchestrator.dispatchAgentTask` is the unified business entry: it asks the `Zero3IntelligentTaskRouter` for a structured, auditable decision (capability/availability hard filters plus task-type, context-affinity, latency, cost and historical-success factors), dispatches through the executor's own reviewed adapter, records every attempt in the Task Ledger under an unchanged Task identity, and re-routes with exclusions under bounded failover (`maxAttempts`/`maxExecutorSwitches`) on retryable failures. Task importance maps to verification/review strength (`low`/`standard`/`high`/`critical` profiles), never to a specific executor; `AUTO`/`PINNED`/`PREFERRED` routing modes honor explicit user choice without silent switching. Historical executor performance is persisted per `(executor, taskClass)` by `Zero3RoutingMetricsStore`. See [`INTELLIGENT_AGENT_ROUTER.md`](INTELLIGENT_AGENT_ROUTER.md).
+
 ## 8. First-alpha closeout and remaining reliability work
 
 [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) is merged. Zero3 now explicitly launches pinned Codex with `--session-source app-server`, lists the matching `sourceKinds: ['appServer']` namespace, and carries a real first-Turn cold-restart persistence smoke for two durable Threads.

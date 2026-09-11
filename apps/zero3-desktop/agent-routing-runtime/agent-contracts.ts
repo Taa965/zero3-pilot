@@ -3,9 +3,14 @@ export const ZERO3_EXECUTION_RESULT_V2 = 'zero3.pilot.execution-result.v2' as co
 export const ZERO3_REVIEW_PACKET_V1 = 'zero3.pilot.review-packet.v1' as const
 export const ZERO3_REVIEW_DECISION_V1 = 'zero3.pilot.review-decision.v1' as const
 
-export type Zero3AgentTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'AUTO'
+export type Zero3AgentTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' | 'AUTO'
 export type Zero3ResolvedAgentTarget = Exclude<Zero3AgentTarget, 'AUTO'>
 export type Zero3TaskType = 'DESIGN' | 'IMPLEMENT' | 'VERIFY' | 'FIX' | 'REVIEW' | 'INTEGRATE' | 'RESEARCH'
+
+// Task importance drives verification/review strength and failure policy. It must
+// never bind a task to a specific executor; the Intelligent Agent Task Router
+// selects executors from capability/availability/history, not importance.
+export type Zero3TaskImportance = 'low' | 'normal' | 'high' | 'critical'
 export type Zero3ReviewDecisionKind = 'APPROVED' | 'CHANGES_REQUESTED' | 'BLOCKED' | 'ESCALATE_HUMAN'
 export type Zero3ReviewState = 'DRAFT' | 'DISPATCHED' | 'RUNNING' | 'RESULT_READY' | 'REVIEW_PENDING' | 'REVIEWING' | 'FIX_DISPATCHED' | 'COMPLETE' | 'BLOCKED' | 'ESCALATE_HUMAN'
 export type Zero3VerificationState = 'PASSED' | 'FAILED' | 'NOT_RUN' | 'BLOCKED'
@@ -38,6 +43,7 @@ export type Zero3TaskSpecV2 = {
   title: string
   goal: string
   contextVersion: number
+  importance?: Zero3TaskImportance
   repo?: string | null
   baseSha?: string | null
   branch?: string | null
@@ -66,7 +72,7 @@ export type Zero3ExecutionResultV2 = {
   executionId: string
   projectId: string
   provider: Zero3ResolvedAgentTarget
-  providerRuntime: 'CODEX_LOCAL' | 'GEMINI_AGENT' | 'CLAUDE_CODE'
+  providerRuntime: 'CODEX_LOCAL' | 'GEMINI_AGENT' | 'CLAUDE_CODE' | 'ZERO3_API_SESSION'
   status: 'COMPLETE' | 'PARTIAL' | 'BLOCKED' | 'FAILED' | 'OUTCOME_UNKNOWN'
   contextVersion: number
   conversationId?: string | null

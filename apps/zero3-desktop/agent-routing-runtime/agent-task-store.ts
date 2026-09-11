@@ -9,13 +9,42 @@ import type {
   Zero3ExecutionResultV2,
   Zero3ResolvedAgentTarget,
   Zero3ReviewState,
+  Zero3TaskImportance,
   Zero3TaskSpecV2
 } from './agent-contracts'
+import type {
+  Zero3IntelligentRouteDecision,
+  Zero3RoutingMode,
+  Zero3VerificationProfileName
+} from './intelligent-router-contracts'
 
 export type Zero3AgentTaskState =
   | Zero3ReviewState
   | 'OUTCOME_UNKNOWN'
   | 'FAILED'
+
+// One executor attempt under a stable Task identity. Executor switches append
+// attempts; they never create a new task or change taskId/executionId.
+export type Zero3TaskAttemptRecord = {
+  attemptId: string
+  attempt: number
+  executor: string
+  provider: Zero3ResolvedAgentTarget
+  routingMode: Zero3RoutingMode
+  importance: Zero3TaskImportance
+  verificationProfile: Zero3VerificationProfileName
+  startedAt: string
+  finishedAt: string | null
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'BLOCKED' | 'OUTCOME_UNKNOWN'
+  conversationId?: string | null
+  failureReason?: string | null
+  failoverReason?: string | null
+}
+
+export type Zero3RoutingMeta = {
+  importance: Zero3TaskImportance
+  verificationProfile: Zero3VerificationProfileName
+}
 
 export type Zero3AgentTaskRecord = {
   task: Zero3TaskSpecV2
@@ -28,9 +57,17 @@ export type Zero3AgentTaskRecord = {
   remoteExecutionId: string | null
   createdAt: string
   updatedAt: string
+  // Intelligent-routing observability. Optional so records written before the
+  // Intelligent Agent Task Router still load unchanged.
+  importance?: Zero3TaskImportance
+  verificationProfile?: Zero3VerificationProfileName
+  routingDecisions?: Zero3IntelligentRouteDecision[]
+  attempts?: Zero3TaskAttemptRecord[]
 }
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024
+const MAX_ROUTING_DECISIONS = 20
+const MAX_ATTEMPTS = 50
 
 function validId(value: unknown, label: string): string {
   const text = typeof value === 'string' ? value.trim() : ''
@@ -59,6 +96,8 @@ export class Zero3AgentTaskStore {
       const value = JSON.parse(buffer.toString('utf8')) as Zero3AgentTaskRecord
       if (value.task?.taskId !== taskId) throw new Error('agent task record identity mismatch')
       value.skillsUsed ??= []
+      value.routingDecisions ??= []
+      value.attempts ??= []
       return clone(value)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -86,7 +125,11 @@ export class Zero3AgentTaskStore {
         remoteTaskId: null,
         remoteExecutionId: null,
         createdAt: timestamp,
-        updatedAt: timestamp
+        updatedAt: timestamp,
+        importance: task.importance ?? 'normal',
+        verificationProfile: 'standard',
+        routingDecisions: [],
+        attempts: []
       }
       await this.write(record)
       return clone(record)
@@ -139,6 +182,50 @@ export class Zero3AgentTaskStore {
       remoteTaskId: validId(remoteTaskId, 'remoteTaskId'),
       remoteExecutionId: validId(remoteExecutionId, 'remoteExecutionId')
     }))
+  }
+
+  setRoutingMeta(taskId: string, meta: Zero3RoutingMeta): Promise<Zero3AgentTaskRecord> {    // Deliberately leaves current.task untouched: the TaskSpec must stay
+    // byte-identical for idempotent re-dispatch of the same taskId.
+    return this.update(taskId, current => ({
+      ...current,
+      importance: meta.importance,
+      verificationProfile: meta.verificationProfile
+    }))
+  }
+
+  appendRoutingDecision(taskId: string, decision: Zero3IntelligentRouteDecision): Promise<Zero3AgentTaskRecord> {
+    return this.update(taskId, current => ({
+      ...current,
+      routingDecisions: [...(current.routingDecisions ?? []), structuredClone(decision)].slice(-MAX_ROUTING_DECISIONS)
+    }))
+  }
+
+  appendAttempt(taskId: string, attempt: Zero3TaskAttemptRecord): Promise<Zero3AgentTaskRecord> {
+    return this.update(taskId, current => ({
+      ...current,
+      attempts: [...(current.attempts ?? []), structuredClone(attempt)].slice(-MAX_ATTEMPTS)
+    }))
+  }
+
+  updateAttempt(
+    taskId: string,
+    attemptId: string,
+    patch: Partial<Omit<Zero3TaskAttemptRecord, 'attemptId' | 'attempt'>>
+  ): Promise<Zero3AgentTaskRecord> {
+    return this.update(taskId, current => {
+      const attempts = current.attempts ?? []
+      const index = attempts.findIndex(entry => entry.attemptId === attemptId)
+      if (index < 0) throw new Error(`attempt ${attemptId} not found for task ${taskId}`)
+      const next = [...attempts]
+      next[index] = { ...next[index], ...structuredClone(patch) }
+      return { ...current, attempts: next }
+    })
+  }
+
+  // Updated when failover moves work authority to a different executor so the
+  // record always reflects the executor that owns (or last owned) the task.
+  setResolvedTarget(taskId: string, resolvedTarget: Zero3ResolvedAgentTarget): Promise<Zero3AgentTaskRecord> {
+    return this.update(taskId, current => ({ ...current, resolvedTarget }))
   }
 
   private file(taskId: string) {

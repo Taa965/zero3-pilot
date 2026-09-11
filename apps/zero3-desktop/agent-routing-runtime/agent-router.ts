@@ -8,6 +8,9 @@ export type Zero3ProviderAvailability = {
   codex: { available: boolean; authenticated: boolean | null }
   gemini: { available: boolean; authenticated: boolean | null }
   claude: { available: boolean; authenticated: boolean | null }
+  // Optional: only present when a Zero3 API (profile-based model session)
+  // availability probe is registered. Absent means unregistered, never eligible.
+  zero3Api?: { available: boolean; authenticated: boolean | null }
 }
 
 export type Zero3RouteDecision = {
@@ -22,6 +25,7 @@ const CODEX_PREFERRED = new Set<Zero3TaskType>(['IMPLEMENT', 'VERIFY', 'FIX', 'I
 function providerState(target: Zero3ResolvedAgentTarget, availability: Zero3ProviderAvailability) {
   if (target === 'CODEX') return availability.codex
   if (target === 'GEMINI') return availability.gemini
+  if (target === 'ZERO3_API') return availability.zero3Api ?? { available: false, authenticated: null }
   return availability.claude
 }
 
