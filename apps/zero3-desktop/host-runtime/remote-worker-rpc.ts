@@ -1,4 +1,4 @@
-import type { Zero3RemoteWorkerRpcLease, Zero3WorkerRpcTool } from './remote-types'
+import type { Zero3CapabilityRpcTool, Zero3RemoteWorkerRpcLease, Zero3WorkerRpcTool } from './remote-types'
 
 export type Zero3WorkerRuntimePort = {
   registerWorker(input: Record<string, unknown>): unknown
@@ -24,6 +24,11 @@ export type Zero3WorkerRuntimePort = {
   taskBootstrap(input: Record<string, unknown>): unknown
   dispatchCodexTask(input: Record<string, unknown>): unknown
   verifyCommit(input: Record<string, unknown>): unknown
+  listCapabilities(input: Record<string, unknown>): unknown
+  describeCapability(input: Record<string, unknown>): unknown
+  invokeCapability(input: Record<string, unknown>): unknown
+  getOperation(input: Record<string, unknown>): unknown
+  cancelOperation(input: Record<string, unknown>): unknown
 }
 
 const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
@@ -50,6 +55,14 @@ const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
   'verify_commit'
 ])
 
+const CAPABILITY_TOOLS = new Set<Zero3CapabilityRpcTool>([
+  'list_capabilities',
+  'describe_capability',
+  'invoke_capability',
+  'get_operation',
+  'cancel_operation'
+])
+
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
   return value as Record<string, unknown>
@@ -57,8 +70,14 @@ function record(value: unknown, label: string): Record<string, unknown> {
 
 export function assertZero3WorkerRpcLease(value: unknown): Zero3RemoteWorkerRpcLease {
   const lease = record(value, 'worker RPC lease')
-  const tool = String(lease.tool ?? '') as Zero3WorkerRpcTool
-  if (!WORKER_TOOLS.has(tool)) throw new Error('worker RPC tool is not allowed')
+  const capability = String(lease.capability ?? '')
+  const tool = String(lease.tool ?? '')
+  const allowed = capability === 'worker-protocol-v1'
+    ? WORKER_TOOLS.has(tool as Zero3WorkerRpcTool)
+    : capability === 'zero3-capability-v1'
+      ? CAPABILITY_TOOLS.has(tool as Zero3CapabilityRpcTool)
+      : false
+  if (!allowed) throw new Error('remote RPC tool is not allowed for this capability protocol')
   if (!lease.request_id || !lease.lease_id || !Number.isSafeInteger(lease.fencing_token)) throw new Error('worker RPC lease identity is invalid')
   return { ...lease, tool, arguments: record(lease.arguments, 'worker RPC arguments') } as Zero3RemoteWorkerRpcLease
 }
@@ -111,5 +130,15 @@ export async function executeZero3WorkerRpc(
       return runtime.dispatchCodexTask(input)
     case 'verify_commit':
       return runtime.verifyCommit(input)
+    case 'list_capabilities':
+      return runtime.listCapabilities(input)
+    case 'describe_capability':
+      return runtime.describeCapability(input)
+    case 'invoke_capability':
+      return runtime.invokeCapability(input)
+    case 'get_operation':
+      return runtime.getOperation(input)
+    case 'cancel_operation':
+      return runtime.cancelOperation(input)
   }
 }

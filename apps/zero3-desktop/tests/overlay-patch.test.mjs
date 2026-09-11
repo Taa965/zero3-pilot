@@ -144,6 +144,56 @@ test('an insert-after candidate keeps the renamed composition point intact', () 
   assert.ok(patched.includes('const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(store)\nconst next = 1'))
 })
 
+
+test('capability runtime repair upgrades an already-generated lifecycle tree idempotently', () => {
+  const source = [
+    "import { Zero3AgentLifecycleRuntime } from './zero3/worker-runtime/v2/index'",
+    'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
+    "const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))",
+    'async function zero3WorkerRpcRuntime() {',
+    '  return {',
+    '    claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),',
+    '  }',
+    '}',
+    "app.on('before-quit', () => { zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })",
+    ''
+  ].join('\n')
+  const replacements = [
+    {
+      label: 'Capability Runtime import',
+      appliedMarker: "from './zero3/capability-runtime/index'",
+      from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
+      to: "import { createZero3CapabilityRuntime } from './zero3/capability-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+    },
+    {
+      label: 'Capability Runtime composition',
+      appliedMarker: 'const zero3CapabilityRuntime = createZero3CapabilityRuntime(',
+      from: "const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))",
+      to: "const zero3CapabilityRuntime = createZero3CapabilityRuntime({ root: 'state', nodeId: 'zero3-desktop' })\nconst zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))"
+    },
+    {
+      label: 'Capability RPC methods',
+      appliedMarker: 'listCapabilities: input => zero3CapabilityRuntime.listCapabilities(input)',
+      from: '    claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),',
+      to: "    listCapabilities: input => zero3CapabilityRuntime.listCapabilities(input),\n    claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),"
+    },
+    {
+      label: 'Capability Runtime teardown',
+      appliedMarker: 'zero3CapabilityRuntime.close()',
+      fromAny: [/zero3WorkflowWorkerStore\.close\(\)(?= \}\))/],
+      to: match => `${match}; zero3CapabilityRuntime.close()`
+    }
+  ]
+  const invariants = [
+    { label: 'Capability Runtime import', text: "from './zero3/capability-runtime/index'", count: 1 },
+    { label: 'Capability Runtime composition', text: 'const zero3CapabilityRuntime = createZero3CapabilityRuntime(', count: 1 },
+    { label: 'Capability RPC surface', text: 'listCapabilities: input => zero3CapabilityRuntime.listCapabilities(input)', count: 1 },
+    { label: 'Capability teardown', text: 'zero3CapabilityRuntime.close()', count: 1 }
+  ]
+  const once = patchOverlaySource({ relativePath: 'electron/main.ts', source, replacements, invariants })
+  assert.equal(patchOverlaySource({ relativePath: 'electron/main.ts', source: once, replacements, invariants }), once)
+})
+
 test('the shipped overlays keep the repair candidates and post-condition invariants', () => {
   const remoteHost = read('scripts/apply-remote-host-runtime.mjs')
   assert.ok(remoteHost.includes('patchOverlaySource'), 'Remote Host overlay must use the shared patch engine.')
@@ -156,4 +206,7 @@ test('the shipped overlays keep the repair candidates and post-condition invaria
   assert.ok(lifecycle.includes('EXECUTION_RUNTIME_COMPOSITION'), 'Agent Lifecycle overlay must match the Execution Runtime composition statement.')
   assert.ok(lifecycle.includes('}, () => zero3WorkerRpcRuntime())'), 'Agent Lifecycle overlay must wire the composite runtime provider.')
   assert.ok(lifecycle.includes('Worker RPC composite runtime definition'), 'Agent Lifecycle overlay must assert a single runtime definition.')
+  assert.ok(lifecycle.includes('Capability Runtime composition'), 'Agent Lifecycle overlay must repair old generated trees with the local Capability Runtime.')
+  assert.ok(lifecycle.includes('Capability RPC methods'), 'Agent Lifecycle overlay must repair the composite RPC port with ZRCP methods.')
+  assert.ok(lifecycle.includes('zero3CapabilityRuntime.close()'), 'Agent Lifecycle overlay must tear down local Capability Runtime.')
 })
