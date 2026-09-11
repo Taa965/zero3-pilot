@@ -140,7 +140,7 @@ fn default_backend() -> String {
 fn print_usage() {
     println!(
         "Zero3 Pilot Weixin ClawBot\n\n\
-         Usage:\n  zero3-pilot-weixin status\n  zero3-pilot-weixin login\n  zero3-pilot-weixin run [zero3|codex|claude]\n  zero3-pilot-weixin disconnect\n\n\
+         Usage:\n  zero3-pilot-weixin status\n  zero3-pilot-weixin login\n  zero3-pilot-weixin run [zero3|codex|claude]\n  zero3-pilot-weixin notify [text]   (reads stdin when text is omitted)\n  zero3-pilot-weixin disconnect\n\n\
          Only messages from the WeChat account that scanned the QR code are accepted.\n\
          普通文本默认交给 Zero3；/pilot 可显式选择处理器。Examples:\n  /pilot summarize my current task\n  /pilot codex inspect the current project"
     );
@@ -169,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         "login" => login(&weixin, &mut authorization).await?,
+        "notify" => notify(&weixin).await?,
         "run" => {
             if !authorization.is_configured() {
                 return Err(anyhow!(
@@ -288,6 +289,32 @@ fn ensure_authorization_code(authorization: &mut AuthorizationStore) -> anyhow::
         println!("高风险操作授权码设置完成。");
         return Ok(());
     }
+}
+
+/// Pushes a one-off text to the bound owner, e.g. alerts relayed from ops
+/// watchdogs. There is no inbound message to echo a context token from;
+/// iLink accepts tokenless sends, same as the login confirmation above.
+async fn notify(weixin: &WeixinClawBotClient) -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let raw = if args.is_empty() {
+        io::read_to_string(io::stdin()).context("读取通知内容")?
+    } else {
+        args.join(" ")
+    };
+    let text = notify_text(&raw)?;
+    let owner = weixin
+        .owner_user_id()
+        .await
+        .ok_or_else(|| anyhow!("微信 ClawBot 尚未连接。先运行 zero3-pilot-weixin login"))?;
+    weixin.send_text(&owner, &text, None).await
+}
+
+fn notify_text(raw: &str) -> anyhow::Result<String> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return Err(anyhow!("通知内容不能为空"));
+    }
+    Ok(truncate_utf8(text, 3500))
 }
 
 async fn run_bridge(
@@ -881,5 +908,12 @@ mod tests {
         }
         assert!(session.register_failure());
         assert!(session.lockout_remaining().is_some());
+    }
+
+    #[test]
+    fn notify_text_rejects_blank_and_truncates() {
+        assert!(notify_text(" \n ").is_err());
+        assert_eq!(notify_text("  告警\n").unwrap(), "告警");
+        assert!(notify_text(&"零".repeat(5000)).unwrap().chars().count() <= 3500);
     }
 }
