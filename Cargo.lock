@@ -4171,12 +4171,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tower 0.4.13",
+ "urlencoding",
  "uuid",
  "zero3-core",
 ]

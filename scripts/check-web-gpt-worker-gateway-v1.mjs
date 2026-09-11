@@ -8,6 +8,7 @@ const requireText = (source, needle, message) => { if (!source.includes(needle))
 const forbidText = (source, needle, message) => { if (source.includes(needle)) throw new Error(message) }
 
 const gateway = read('apps/web/src/worker_gateway.rs')
+const oauth = read('apps/web/src/oauth.rs')
 const webMain = read('apps/web/src/main.rs')
 const remoteTypes = read('apps/zero3-desktop/host-runtime/remote-types.ts')
 const remoteConfig = read('apps/zero3-desktop/host-runtime/remote-config.ts')
@@ -33,6 +34,17 @@ requireText(gateway, 'validate_mcp_protocol_header(&headers)?', 'Streamable HTTP
 requireText(gateway, 'fencing_token', 'Cloud Worker RPC forwarding must preserve fencing generations.')
 requireText(gateway, 'idempotencyKey', 'Cloud Worker RPC forwarding must preserve Worker Protocol idempotency keys.')
 requireText(gateway, 'DEFAULT_REQUEST_TTL_SECONDS', 'Cloud Worker RPC forwarding must have a bounded request lifetime.')
+requireText(gateway, 'ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE', 'Worker OAuth must use a dedicated owner secret file.')
+requireText(gateway, 'oauth.validate_access_token', 'Worker MCP must accept scoped OAuth access tokens.')
+requireText(gateway, 'resource_metadata=', 'OAuth MCP challenges must advertise protected-resource metadata.')
+requireText(oauth, '/.well-known/oauth-protected-resource/mcp', 'OAuth must expose MCP protected-resource metadata.')
+requireText(oauth, '/.well-known/oauth-authorization-server', 'OAuth authorization-server discovery is missing.')
+requireText(oauth, '/oauth/register', 'OAuth dynamic client registration is missing.')
+requireText(oauth, 'code_challenge_method != "S256"', 'OAuth must require S256 PKCE.')
+requireText(oauth, 'offline_access', 'OAuth must advertise offline_access for refresh continuity.')
+requireText(oauth, 'grant_type.as_str()', 'OAuth token endpoint must implement grant dispatch.')
+requireText(oauth, 'record.revoked = true', 'OAuth refresh/revoke flow must revoke prior credentials.')
+requireText(oauth, 'sha256_hex', 'OAuth persisted credentials must be hashed.')
 
 requireText(remoteTypes, "| 'complete_and_claim_next'", 'Remote Worker RPC type union must include the atomic batch transition.')
 requireText(remoteConfig, 'ZERO3_WORKER_TUNNEL_ENABLED', 'Worker Tunnel must have an independent enable flag.')
@@ -50,6 +62,7 @@ for (const forbidden of [
   'command/exec', 'ipcRenderer', 'ZERO3_PILOT_NODE_PORT'
 ]) {
   forbidText(gateway, forbidden, `Public Worker Gateway must not gain execution authority: ${forbidden}`)
+  forbidText(oauth, forbidden, `OAuth adapter must not gain execution authority: ${forbidden}`)
 }
 
 for (const forbidden of ["runtime[lease.tool]", "runtime[tool]", 'dispatchCodex', 'runGpu', 'execCommand']) {

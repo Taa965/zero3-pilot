@@ -18,6 +18,9 @@ chrono.workspace = true
 uuid.workspace = true
 anyhow.workspace = true
 axum = "0.7"
+base64 = "0.22"
+sha2 = "0.10"
+urlencoding = "2"
 
 [build-dependencies]
 

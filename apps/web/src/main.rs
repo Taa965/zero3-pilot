@@ -8,6 +8,7 @@
 mod control_admission;
 mod control_extensions;
 mod control_plane;
+mod oauth;
 mod worker_gateway;
 
 use axum::extract::DefaultBodyLimit;

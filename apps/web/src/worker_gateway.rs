@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 use axum::extract::{DefaultBodyLimit, Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
+
+use crate::oauth::OAuthServer;
 
 const DEFAULT_LEASE_TTL_SECONDS: i64 = 30;
 const DEFAULT_REQUEST_TTL_SECONDS: i64 = 120;
@@ -56,6 +58,7 @@ pub struct WorkerGatewayRuntime {
     host_token: Option<Arc<String>>,
     mcp_token: Option<Arc<String>>,
     skill_mcp_token: Option<Arc<String>>,
+    oauth: Option<Arc<OAuthServer>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -150,6 +153,7 @@ struct WorkerGateway {
 struct ApiError {
     status: StatusCode,
     message: String,
+    headers: HeaderMap,
 }
 
 impl ApiError {
@@ -157,6 +161,7 @@ impl ApiError {
         Self {
             status,
             message: message.into(),
+            headers: HeaderMap::new(),
         }
     }
 
@@ -170,7 +175,12 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
+        (
+            self.status,
+            self.headers,
+            Json(json!({ "error": self.message })),
+        )
+            .into_response()
     }
 }
 
@@ -187,25 +197,40 @@ impl WorkerGatewayRuntime {
                 host_token: None,
                 mcp_token: None,
                 skill_mcp_token: None,
+                oauth: None,
             });
         }
         let host_file = required_env("ZERO3_HOST_TOKEN_FILE")?;
         let mcp_token = optional_secret_file("ZERO3_WORKER_MCP_TOKEN_FILE")?.map(Arc::new);
         let skill_mcp_token = optional_secret_file("ZERO3_SKILL_MCP_TOKEN_FILE")?.map(Arc::new);
-        if mcp_token.is_none() && skill_mcp_token.is_none() {
-            anyhow::bail!("ZERO3_WORKER_MCP_TOKEN_FILE or ZERO3_SKILL_MCP_TOKEN_FILE is required when Zero3 RPC Gateway is enabled");
-        }
+        let oauth_enabled = parse_bool(std::env::var("ZERO3_WORKER_OAUTH_ENABLED").ok().as_deref());
         let target_node_id = required_env("ZERO3_WORKER_GATEWAY_NODE_ID")?;
         validate_id("ZERO3_WORKER_GATEWAY_NODE_ID", &target_node_id)
             .map_err(|error| anyhow::anyhow!(error.message))?;
         let root = std::env::var("ZERO3_WORKER_GATEWAY_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/var/lib/zero3-pilot/worker-gateway"));
+        let oauth = if oauth_enabled {
+            let issuer = required_env("ZERO3_WORKER_OAUTH_ISSUER")?;
+            let owner_file = required_env("ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE")?;
+            let owner_secret = read_secret_file(&owner_file)?;
+            Some(Arc::new(OAuthServer::open(
+                root.join("oauth"),
+                issuer,
+                &owner_secret,
+            )?))
+        } else {
+            None
+        };
+        if mcp_token.is_none() && oauth.is_none() && skill_mcp_token.is_none() {
+            anyhow::bail!("Worker OAuth, ZERO3_WORKER_MCP_TOKEN_FILE, or ZERO3_SKILL_MCP_TOKEN_FILE is required when Zero3 RPC Gateway is enabled");
+        }
         Ok(Self {
             gateway: Some(Arc::new(WorkerGateway::open(root, target_node_id)?)),
             host_token: Some(Arc::new(read_secret_file(&host_file)?)),
             mcp_token,
             skill_mcp_token,
+            oauth,
         })
     }
 
@@ -220,6 +245,7 @@ impl WorkerGatewayRuntime {
 }
 
 pub fn router(runtime: WorkerGatewayRuntime) -> Router {
+    let oauth_router = crate::oauth::router(runtime.oauth.clone());
     Router::new()
         .route("/mcp", post(mcp_handler))
         .route("/mcp/skills", post(skill_mcp_handler))
@@ -234,6 +260,7 @@ pub fn router(runtime: WorkerGatewayRuntime) -> Router {
         )
         .layer(DefaultBodyLimit::max(MAX_WORKER_GATEWAY_BODY_BYTES))
         .with_state(runtime)
+        .merge(oauth_router)
 }
 
 impl WorkerGateway {
@@ -859,13 +886,37 @@ fn require_host(
 
 fn require_mcp(runtime: &WorkerGatewayRuntime, headers: &HeaderMap) -> Result<(), ApiError> {
     runtime.gateway()?;
-    let expected = runtime.mcp_token.as_ref().ok_or_else(|| {
-        ApiError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "worker MCP authentication is not configured",
-        )
-    })?;
-    require_bearer(headers, expected)
+    let supplied =
+        bearer_token(headers).ok_or_else(|| mcp_unauthorized(runtime, "missing bearer token"))?;
+    if runtime
+        .mcp_token
+        .as_ref()
+        .is_some_and(|expected| supplied == expected.as_str())
+    {
+        return Ok(());
+    }
+    if runtime
+        .oauth
+        .as_ref()
+        .is_some_and(|oauth| oauth.validate_access_token(supplied, "zero3.worker"))
+    {
+        return Ok(());
+    }
+    Err(mcp_unauthorized(runtime, "invalid bearer token"))
+}
+
+fn mcp_unauthorized(runtime: &WorkerGatewayRuntime, message: &str) -> ApiError {
+    let mut error = ApiError::new(StatusCode::UNAUTHORIZED, message);
+    if let Some(oauth) = &runtime.oauth {
+        let value = format!(
+            "Bearer resource_metadata=\"{}\", scope=\"zero3.worker\"",
+            oauth.protected_resource_url()
+        );
+        if let Ok(value) = HeaderValue::from_str(&value) {
+            error.headers.insert(header::WWW_AUTHENTICATE, value);
+        }
+    }
+    error
 }
 
 fn require_skill_mcp(runtime: &WorkerGatewayRuntime, headers: &HeaderMap) -> Result<(), ApiError> {
@@ -1610,5 +1661,55 @@ mod tests {
                 .status,
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[test]
+    fn oauth_enabled_mcp_challenge_advertises_protected_resource_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let gateway = Arc::new(
+            WorkerGateway::open(dir.path().join("gateway"), "node-worker".into()).unwrap(),
+        );
+        let oauth = Arc::new(
+            OAuthServer::open(
+                dir.path().join("oauth"),
+                "https://pilot.03.336r.com".into(),
+                "test-owner-secret-abcdefghijklmnopqrstuvwxyz",
+            )
+            .unwrap(),
+        );
+        let runtime = WorkerGatewayRuntime {
+            gateway: Some(gateway),
+            host_token: None,
+            mcp_token: None,
+            skill_mcp_token: None,
+            oauth: Some(oauth),
+        };
+        let error = require_mcp(&runtime, &HeaderMap::new()).unwrap_err();
+        assert_eq!(error.status, StatusCode::UNAUTHORIZED);
+        let challenge = error
+            .headers
+            .get(header::WWW_AUTHENTICATE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(challenge.contains("/.well-known/oauth-protected-resource/mcp"));
+        assert!(challenge.contains("zero3.worker"));
+    }
+
+    #[test]
+    fn static_worker_mcp_token_remains_compatible_when_oauth_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = WorkerGatewayRuntime {
+            gateway: Some(Arc::new(
+                WorkerGateway::open(dir.path().to_path_buf(), "node-worker".into()).unwrap(),
+            )),
+            host_token: None,
+            mcp_token: Some(Arc::new("test".into())),
+            skill_mcp_token: None,
+            oauth: None,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer test".parse().unwrap());
+        assert!(require_mcp(&runtime, &headers).is_ok());
     }
 }
