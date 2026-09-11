@@ -162,18 +162,6 @@ function zero3ApiAgentToolArguments(value: unknown): Record<string, unknown> {
     return {}
   }
 }
-function zero3ApiAgentCallNameMap(input: unknown) {
-  const names = new Map<string, string>()
-  if (!Array.isArray(input)) return names
-  for (const rawItem of input) {
-    const item = zero3SessionRecord(rawItem)
-    if ((item.type === 'function_call' || item.type === 'custom_tool_call') && typeof item.call_id === 'string' && typeof item.name === 'string') {
-      names.set(item.call_id, item.name)
-    }
-  }
-  return names
-}
-
 function zero3ApiAnthropicPayload(body: Record<string, unknown>, model: string) {
   const systemParts: string[] = []
   if (typeof body.instructions === 'string' && body.instructions.trim()) systemParts.push(body.instructions.trim())
@@ -183,6 +171,26 @@ function zero3ApiAnthropicPayload(body: Record<string, unknown>, model: string) 
     if (last?.role === role) last.content.push(block)
     else messages.push({ role, content: [block] })
   }
+  // Anthropic rejects a tool_use block whose tool_result does not follow in the
+  // very next message, and rejects a tool_result without its tool_use. Collect
+  // the calls of one response and answer every one of them together.
+  let pending: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
+  const results = new Map<string, string>()
+  const written = new Set<string>()
+  const flush = () => {
+    if (!pending.length) return
+    const calls = pending
+    pending = []
+    for (const call of calls) {
+      written.add(call.id)
+      push('assistant', { type: 'tool_use', id: call.id, name: call.name, input: call.input })
+    }
+    for (const call of calls) {
+      const result = results.get(call.id)
+      results.delete(call.id)
+      push('user', { type: 'tool_result', tool_use_id: call.id, content: result ?? ZERO3_TOOL_OUTPUT_UNRECORDED })
+    }
+  }
   const input = Array.isArray(body.input) ? body.input : []
   for (const rawItem of input) {
     const item = zero3SessionRecord(rawItem)
@@ -190,6 +198,7 @@ function zero3ApiAnthropicPayload(body: Record<string, unknown>, model: string) 
     if (type === 'message') {
       const text = zero3GlmText(item.content)
       if (!text) continue
+      flush()
       if (item.role === 'system' || item.role === 'developer') systemParts.push(text)
       else push(item.role === 'assistant' ? 'assistant' : 'user', { type: 'text', text })
       continue
@@ -197,14 +206,19 @@ function zero3ApiAnthropicPayload(body: Record<string, unknown>, model: string) 
     if (type === 'function_call' || type === 'custom_tool_call') {
       const id = typeof item.call_id === 'string' ? item.call_id : ''
       const name = typeof item.name === 'string' ? item.name : ''
-      if (id && name) push('assistant', { type: 'tool_use', id, name, input: zero3ApiAgentToolArguments(item.arguments ?? item.input) })
+      if (!id || !name || written.has(id) || pending.some(call => call.id === id)) continue
+      if (pending.length && pending.every(call => results.has(call.id))) flush()
+      pending.push({ id, name, input: zero3ApiAgentToolArguments(item.arguments ?? item.input) })
       continue
     }
     if (type === 'function_call_output' || type === 'custom_tool_call_output' || type === 'mcp_tool_call_output') {
       const id = typeof item.call_id === 'string' ? item.call_id : ''
-      if (id) push('user', { type: 'tool_result', tool_use_id: id, content: zero3GlmToolOutput(item.output) })
+      if (!id || written.has(id) || !pending.some(call => call.id === id)) continue
+      const text = zero3GlmToolOutput(item.output)
+      results.set(id, text.trim() ? text : ZERO3_TOOL_OUTPUT_EMPTY)
     }
   }
+  flush()
   const tools = zero3GlmTools(body.tools).map(raw => {
     const fn = zero3SessionRecord(raw.function)
     return {
@@ -245,12 +259,30 @@ function zero3ApiAnthropicResponse(body: Record<string, unknown>) {
 }
 
 function zero3ApiGeminiPayload(body: Record<string, unknown>) {
-  const callNames = zero3ApiAgentCallNameMap(body.input)
   const contents: Array<{ role: 'model' | 'user'; parts: Array<Record<string, unknown>> }> = []
   const push = (role: 'model' | 'user', part: Record<string, unknown>) => {
     const last = contents.at(-1)
     if (last?.role === role) last.parts.push(part)
     else contents.push({ role, parts: [part] })
+  }
+  // Gemini rejects a functionResponse whose functionCall is not in the turn it
+  // answers, and rejects a call turn whose responses do not cover every call.
+  let pending: Array<{ id: string; name: string; args: Record<string, unknown> }> = []
+  const results = new Map<string, string>()
+  const written = new Set<string>()
+  const flush = () => {
+    if (!pending.length) return
+    const calls = pending
+    pending = []
+    for (const call of calls) {
+      written.add(call.id)
+      push('model', { functionCall: { name: call.name, args: call.args } })
+    }
+    for (const call of calls) {
+      const result = results.get(call.id)
+      results.delete(call.id)
+      push('user', { functionResponse: { name: call.name, response: { result: result ?? ZERO3_TOOL_OUTPUT_UNRECORDED } } })
+    }
   }
   const systemParts: string[] = []
   if (typeof body.instructions === 'string' && body.instructions.trim()) systemParts.push(body.instructions.trim())
@@ -261,21 +293,27 @@ function zero3ApiGeminiPayload(body: Record<string, unknown>) {
     if (type === 'message') {
       const text = zero3GlmText(item.content)
       if (!text) continue
+      flush()
       if (item.role === 'system' || item.role === 'developer') systemParts.push(text)
       else push(item.role === 'assistant' ? 'model' : 'user', { text })
       continue
     }
     if (type === 'function_call' || type === 'custom_tool_call') {
       const name = typeof item.name === 'string' ? item.name : ''
-      if (name) push('model', { functionCall: { name, args: zero3ApiAgentToolArguments(item.arguments ?? item.input) } })
+      const id = typeof item.call_id === 'string' ? item.call_id : ''
+      if (!name || !id || written.has(id) || pending.some(call => call.id === id)) continue
+      if (pending.length && pending.every(call => results.has(call.id))) flush()
+      pending.push({ id, name, args: zero3ApiAgentToolArguments(item.arguments ?? item.input) })
       continue
     }
     if (type === 'function_call_output' || type === 'custom_tool_call_output' || type === 'mcp_tool_call_output') {
       const id = typeof item.call_id === 'string' ? item.call_id : ''
-      const name = callNames.get(id) ?? 'tool'
-      push('user', { functionResponse: { name, response: { result: zero3GlmToolOutput(item.output) } } })
+      if (!id || written.has(id) || !pending.some(call => call.id === id)) continue
+      const text = zero3GlmToolOutput(item.output)
+      results.set(id, text.trim() ? text : ZERO3_TOOL_OUTPUT_EMPTY)
     }
   }
+  flush()
   const declarations = zero3GlmTools(body.tools).map(raw => {
     const fn = zero3SessionRecord(raw.function)
     return {

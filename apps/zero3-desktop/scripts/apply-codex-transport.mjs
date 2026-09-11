@@ -230,14 +230,47 @@ function zero3GlmRole(value: unknown): 'assistant' | 'system' | 'tool' | 'user' 
   return value === 'developer' ? 'system' : 'user'
 }
 
+// Chat-completions APIs (DeepSeek, GLM, ...) reject a payload whose assistant
+// message carries tool_calls that the messages right after it do not answer:
+// "An assistant message with 'tool_calls' must be followed by tool messages
+// responding to each 'tool_call_id'." Two shapes of Codex history break that
+// rule, and both used to end as an upstream HTTP 400 on the second request of a
+// turn: the calls of one parallel response arrive as one item each (so they
+// became several assistant messages), and an interrupted, aborted, or otherwise
+// unrecorded call leaves a call without a result. The bridge therefore writes
+// the calls of a response out as one assistant message together with one reply
+// per call id, and states the missing result instead of dropping the reply.
+const ZERO3_TOOL_OUTPUT_UNRECORDED = 'Zero3 bridge: the result of this tool call was not recorded in the conversation history.'
+const ZERO3_TOOL_OUTPUT_EMPTY = 'Zero3 bridge: the tool returned no output.'
+
 function zero3GlmMessages(input: unknown, instructions: unknown): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = []
   if (typeof instructions === 'string' && instructions.trim()) messages.push({ role: 'system', content: instructions })
   const items = Array.isArray(input) ? input : typeof input === 'string' ? [{ type: 'message', role: 'user', content: input }] : []
+  let pending: Array<{ id: string; name: string; arguments: string }> = []
+  const results = new Map<string, string>()
+  const written = new Set<string>()
+  const flush = () => {
+    if (!pending.length) return
+    const calls = pending
+    pending = []
+    messages.push({
+      role: 'assistant',
+      content: null,
+      tool_calls: calls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } }))
+    })
+    for (const call of calls) {
+      const result = results.get(call.id)
+      results.delete(call.id)
+      written.add(call.id)
+      messages.push({ role: 'tool', tool_call_id: call.id, content: result ?? ZERO3_TOOL_OUTPUT_UNRECORDED })
+    }
+  }
   for (const rawItem of items) {
     const item = zero3CodexRecord(rawItem)
     const type = typeof item.type === 'string' ? item.type : 'message'
     if (type === 'message') {
+      flush()
       const content = zero3GlmMessageContent(item.content)
       if (content.length) messages.push({ role: zero3GlmRole(item.role), content })
       continue
@@ -246,20 +279,23 @@ function zero3GlmMessages(input: unknown, instructions: unknown): Array<Record<s
       const name = typeof item.name === 'string' ? item.name : ''
       const callId = typeof item.call_id === 'string' ? item.call_id : ''
       const argumentsText = typeof item.arguments === 'string' ? item.arguments : typeof item.input === 'string' ? item.input : '{}'
-      if (name && callId) {
-        messages.push({
-          role: 'assistant',
-          content: null,
-          tool_calls: [{ id: callId, type: 'function', function: { name, arguments: argumentsText } }]
-        })
-      }
+      if (!name || !callId || written.has(callId) || pending.some(call => call.id === callId)) continue
+      // Every call of the pending group already has its result, so this call
+      // belongs to the next assistant response, not to the one in flight.
+      if (pending.length && pending.every(call => results.has(call.id))) flush()
+      pending.push({ id: callId, name, arguments: argumentsText })
       continue
     }
     if (type === 'function_call_output' || type === 'custom_tool_call_output' || type === 'mcp_tool_call_output') {
       const callId = typeof item.call_id === 'string' ? item.call_id : ''
-      if (callId) messages.push({ role: 'tool', tool_call_id: callId, content: zero3GlmToolOutput(item.output) })
+      // A reply whose call is not in flight has nothing to attach to: sending
+      // it as a standalone tool message is rejected too.
+      if (!callId || written.has(callId) || !pending.some(call => call.id === callId)) continue
+      const result = zero3GlmToolOutput(item.output)
+      results.set(callId, result.trim() ? result : ZERO3_TOOL_OUTPUT_EMPTY)
     }
   }
+  flush()
   return messages
 }
 
@@ -453,6 +489,24 @@ function broadcastZero3CodexEvent(event: Zero3CodexEvent) {
   }
 }
 
+// The kernel reaches its model through a loopback bridge this process owns, and
+// it picks its proxy up from the Windows registry when no proxy variable is set.
+// A desktop VPN client (Clash and friends) writes a WinINET bypass list there --
+// 127.* and <local> -- but those are WinINET wildcards, not the host/suffix/CIDR
+// syntax a NO_PROXY matcher understands, so the loopback call is handed to the
+// proxy instead of being made directly. The proxy answers 502 with an empty
+// body, the bridge never sees the request, and the turn fails with a gateway
+// error that no log on this machine can explain. Name the loopback hosts in the
+// syntax the kernel actually parses. An explicit NO_PROXY from the environment
+// is the user's own choice and is left alone.
+const ZERO3_CODEX_LOOPBACK_NO_PROXY = 'localhost,127.0.0.1,::1'
+
+function zero3CodexLaunchEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const configured = Object.keys(env).find(key => key.toLowerCase() === 'no_proxy')
+  if (configured && env[configured]?.trim()) return env
+  return { ...env, NO_PROXY: ZERO3_CODEX_LOOPBACK_NO_PROXY, no_proxy: ZERO3_CODEX_LOOPBACK_NO_PROXY }
+}
+
 class Zero3CodexAppServer {
   private child: ReturnType<typeof spawn> | null = null
   private initialization: Record<string, unknown> | null = null
@@ -467,7 +521,7 @@ class Zero3CodexAppServer {
   private readonly launchCwd?: string
 
   constructor(options: Zero3CodexAppServerOptions = {}) {
-    this.launchEnv = options.env ?? process.env
+    this.launchEnv = zero3CodexLaunchEnvironment(options.env ?? process.env)
     this.launchCwd = options.cwd?.trim() || undefined
   }
 
