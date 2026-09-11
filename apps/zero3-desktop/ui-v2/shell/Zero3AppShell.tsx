@@ -18,6 +18,7 @@ import { ContextPane } from './ContextPane'
 import { WorkspaceRouter } from './WorkspaceRouter'
 import { InspectorDrawer } from './InspectorDrawer'
 import type { RuntimeTarget } from '../runtime/runtime-types'
+import { TaskProvider } from '../tasks/TaskContext'
 
 export type ActiveModule = 'conversations' | 'tasks' | 'groups' | 'projects' | 'skills' | 'runtime'
 
@@ -419,6 +420,7 @@ export function Zero3AppShell() {
   }, [activeSession])
 
   return (
+    <TaskProvider active={activeModule === 'tasks'}>
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <AppTitleBar />
       <div className="flex min-h-0 flex-1">
@@ -490,5 +492,6 @@ export function Zero3AppShell() {
         />
       )}
     </div>
+    </TaskProvider>
   )
 }

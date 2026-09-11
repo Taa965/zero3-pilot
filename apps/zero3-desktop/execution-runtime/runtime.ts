@@ -283,8 +283,13 @@ export class Zero3ExecutionRuntime {
       const definition = snapshot.definition.steps.find(step => step.stepId === stepId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!definition || !current) throw new Error(`execution step not found: ${stepId}`)
+      if (['completed', 'cancelled', 'failed'].includes(snapshot.runtime.task.status)) throw new Error('cannot assign a terminal task')
       if (current.status !== 'ready' && current.status !== 'fix_required') throw new Error(`step ${stepId} is not assignable while ${current.status}`)
       if (current.attempt >= definition.maxAttempts) throw new Error(`step ${stepId} attempt budget exhausted`)
+      if (!dependencyReady(definition, stepMap(snapshot.runtime))) throw new Error('step dependencies are not completed')
+      if (snapshot.runtime.steps.filter(step => ACTIVE_STEPS.has(step.status)).length >= snapshot.definition.task.maxParallelSteps) throw new Error('task parallel step capacity exhausted')
+      if (!['GPT_WEB', 'GEMINI_WEB', 'CODEX', 'CLAUDE', 'ANTIGRAVITY', 'ZERO3', 'REMOTE_COMPUTE', 'HUMAN'].includes(executor)) throw new Error('invalid assignment executor')
+      if (definition.executor !== 'AUTO' && definition.executor !== executor) throw new Error('assignment executor does not match step')
       const assignment: ExecutionAssignment = {
         contract: ZERO3_EXECUTION_ASSIGNMENT,
         assignmentId: `asg-${randomUUID()}`,
@@ -387,22 +392,35 @@ export class Zero3ExecutionRuntime {
   }
 
   async transitionStep(taskId: string, stepId: string, status: ExecutionStepStatus, reason?: string, identity?: ExecutionEventIdentity): Promise<ExecutionTaskSnapshot> {
+    if (status === 'completed') throw new Error('step completion requires gatePassed')
+    if (status === 'verifying') return this.requestCompletion(taskId, stepId, { ...identity, payload: { ...identity?.payload, ...(reason ? { reason } : {}) } })
     return this.mutate(taskId, async () => {
       const snapshot = await this.store.loadSnapshot(taskId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!current) throw new Error(`execution step not found: ${stepId}`)
       assertStepTransition(current.status, status)
+      if (status === 'ready' && !dependencyReady(snapshot.definition.steps.find(step => step.stepId === stepId)!, stepMap(snapshot.runtime))) throw new Error('step dependencies are not completed')
+      if (ACTIVE_STEPS.has(status) && !ACTIVE_STEPS.has(current.status)) {
+        if (!current.assignmentId) throw new Error('active step requires an assignment')
+        if (snapshot.runtime.steps.filter(step => ACTIVE_STEPS.has(step.status)).length >= snapshot.definition.task.maxParallelSteps) throw new Error('task parallel step capacity exhausted')
+      }
       let runtime: ExecutionRuntimeState = {
         ...snapshot.runtime,
         steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? {
           ...step,
           status,
-          blocker: ['blocked', 'outcome_unknown', 'failed'].includes(status) ? (reason ?? step.blocker) : null
+          blocker: ['blocked', 'outcome_unknown', 'failed', 'waiting_human'].includes(status) ? (reason ?? step.blocker) : null
         } : step)
       }
       const type: ExecutionEventType = status === 'waiting_human' ? 'waiting_human' : status === 'blocked' ? 'blocked' : status === 'outcome_unknown' ? 'outcome_unknown' : 'step.state_changed'
       const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type, eventId: identity?.eventId, payload: eventPayload({ from: current.status, to: status, ...(reason ? { reason } : {}) }, identity) })
       runtime = refreshDerived(recorded.runtime)
+      if (runtime.task.status !== 'cancelled' && runtime.steps.some(step => step.status === 'cancelled') && runtime.steps.every(step => ['completed', 'cancelled'].includes(step.status))) {
+        assertTaskTransition(runtime.task.status, 'cancelled')
+        const from = runtime.task.status
+        runtime = { ...runtime, task: { ...runtime.task, status: 'cancelled' } }
+        runtime = (await this.appendEvent(runtime, { taskId, type: 'task.state_changed', payload: { from, to: 'cancelled', reason: 'all_steps_terminal' } })).runtime
+      }
       await this.store.writeSnapshot(snapshot.definition, runtime)
       return this.snapshot(taskId)
     })
@@ -445,6 +463,8 @@ export class Zero3ExecutionRuntime {
       const snapshot = await this.store.loadSnapshot(taskId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!current) throw new Error(`execution step not found: ${stepId}`)
+      if (!current.assignmentId) throw new Error('completion request requires an assignment')
+      if (!ACTIVE_STEPS.has(current.status) && snapshot.runtime.steps.filter(step => ACTIVE_STEPS.has(step.status)).length >= snapshot.definition.task.maxParallelSteps) throw new Error('task parallel step capacity exhausted')
       assertStepTransition(current.status, 'verifying')
       let runtime: ExecutionRuntimeState = { ...snapshot.runtime, steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? { ...step, status: 'verifying', progress: Math.max(step.progress, 0.95) } : step) }
       const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'completion.requested', eventId: identity?.eventId, payload: eventPayload({ from: current.status, to: 'verifying' }, identity) })
@@ -459,6 +479,17 @@ export class Zero3ExecutionRuntime {
       const snapshot = await this.store.loadSnapshot(taskId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!current) throw new Error(`execution step not found: ${stepId}`)
+      if (current.status !== 'verifying') throw new Error('completion gate requires a verifying step')
+      if (evidence.source === 'human_task_review') {
+        if (evidence.assignmentId !== current.assignmentId) throw new Error('review assignment is stale; refresh the task')
+        if (typeof evidence.note !== 'string' || !evidence.note.trim()) throw new Error('human review requires evidence')
+        const definition = snapshot.definition.steps.find(step => step.stepId === stepId)!
+        const artifacts = (await this.store.readEvents(taskId)).filter(event => event.type === 'artifact.produced' && event.stepId === stepId && event.assignmentId === current.assignmentId)
+        for (const output of definition.expectedOutputs.filter(output => output.required)) {
+          const ids = new Set(artifacts.filter(event => event.payload?.logicalName === output.logicalName).map(event => event.payload?.artifactId ?? event.eventId))
+          if (ids.size < (output.minCount ?? 1)) throw new Error(`missing required output: ${output.logicalName}`)
+        }
+      }
       assertStepTransition(current.status, 'completed')
       let runtime: ExecutionRuntimeState = { ...snapshot.runtime, steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? { ...step, status: 'completed', progress: 1, currentActivity: null, blocker: null } : step) }
       let recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'gate.passed', payload: evidence })
@@ -477,6 +508,11 @@ export class Zero3ExecutionRuntime {
         runtime = { ...runtime, task: { ...runtime.task, status: 'completed' } }
         recorded = await this.appendEvent(runtime, { taskId, type: 'task.completed', payload: { completedStepIds: runtime.steps.map(step => step.stepId) } })
         runtime = recorded.runtime
+      } else if (runtime.steps.every(step => ['completed', 'cancelled'].includes(step.status))) {
+        assertTaskTransition(runtime.task.status, 'cancelled')
+        const from = runtime.task.status
+        runtime = { ...runtime, task: { ...runtime.task, status: 'cancelled' } }
+        runtime = (await this.appendEvent(runtime, { taskId, type: 'task.state_changed', payload: { from, to: 'cancelled', reason: 'all_steps_terminal' } })).runtime
       }
       runtime = refreshDerived(runtime)
       await this.store.writeSnapshot(snapshot.definition, runtime)
@@ -489,6 +525,7 @@ export class Zero3ExecutionRuntime {
       const snapshot = await this.store.loadSnapshot(taskId)
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!current) throw new Error(`execution step not found: ${stepId}`)
+      if (current.status !== 'verifying') throw new Error('completion gate requires a verifying step')
       assertStepTransition(current.status, 'fix_required')
       let runtime: ExecutionRuntimeState = { ...snapshot.runtime, steps: snapshot.runtime.steps.map(step => step.stepId === stepId ? { ...step, status: 'fix_required', blocker: reason.trim() || 'completion gate failed' } : step) }
       const recorded = await this.appendEvent(runtime, { taskId, stepId, assignmentId: current.assignmentId ?? undefined, type: 'gate.failed', payload: { reason: reason.trim() || 'completion gate failed' } })

@@ -57,4 +57,8 @@ Implemented in `apps/zero3-desktop/execution-runtime/`:
 - DC-callable `zero3-exec.mjs` client plus packaged Windows `zero3-exec.ps1`;
 - Electron main/preload bridge for real Execution Runtime state and reporter-ticket issuance.
 
-The existing Task UI remains a demo until the later UI phase is wired to this authority. Physical Web Artifact collection is also intentionally deferred; Phase 2 records authoritative logical Artifact events but does not claim that a ChatGPT-hosted binary has already entered the shared Artifact Store.
+The Task UI now reads this authority through `window.zero3Execution`. It supports persistent task creation, sequential initial steps, dynamic step expansion, selection/search/project/status filters, assignment creation, session binding, reasoned state changes, human gate review and all seven detail tabs. It refreshes while the task module is visible and retains the last snapshot with an explicit error when disconnected. Review evidence and required current-assignment output records are checked before a human gate pass. Generic step transitions cannot bypass the completion gate, and assignment creation enforces dependencies and concurrency capacity.
+
+Creating an assignment records dispatch intent; it does not itself launch an AI application. Existing executor/worker integrations still own launch, progress and completion reporting. Physical Web Artifact collection is also intentionally deferred; the UI displays authoritative logical Artifact events and never claims that a ChatGPT-hosted binary has already entered the shared Artifact Store. Code changes are shown when an artifact report contains `kind: diff/patch/code_change`, `diff`, or `changedFiles`.
+
+See [Task workspace acceptance](TASK_WORKSPACE_ACCEPTANCE_20260911.md) for verification and remaining integration boundaries.

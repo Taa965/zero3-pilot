@@ -27,6 +27,12 @@ export function applyZero3UiV2() {
   }
   
   copyDirRecursive(uiV2Dir, targetDir)
+  // Share browser-safe contracts and transition rules with the authoritative runtime.
+  // Never copy the Node runtime/store into the renderer bundle.
+  for (const file of ['contracts.ts', 'state-machine.ts']) {
+    const source = read(path.join(repoRoot, 'apps', 'zero3-desktop', 'execution-runtime', file))
+    write(path.join(hermesDesktopDir, 'src', 'execution-runtime', file), source.replace(/(from ['"]\.[^'"]+)\.ts(['"])/g, '$1$2'))
+  }
   
   // Create an index file to export the shell
   write(path.join(targetDir, 'index.ts'), "export { Zero3AppShell } from './shell/Zero3AppShell'")
