@@ -58,6 +58,14 @@ export type Zero3WorkerRpcTool =
   | 'complete_and_claim_next'
   | 'report_failure'
   | 'get_task_context'
+  | 'session_start'
+  | 'context_resolve'
+  | 'task_claim'
+  | 'event_record'
+  | 'artifact_register'
+  | 'task_complete'
+  | 'memory_commit'
+  | 'handoff_create'
 
 export type Zero3RemoteWorkerRpcLease = {
   request_id: string

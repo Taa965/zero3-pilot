@@ -6,6 +6,10 @@ on:
     paths:
       - 'apps/zero3-desktop/execution-runtime/**'
       - 'apps/zero3-desktop/worker-runtime/**'
+      - 'apps/zero3-desktop/artifact-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-artifact-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-shared-memory.mjs'
       - 'apps/zero3-desktop/mcp-runtime/worker-tools.mjs'
       - 'apps/zero3-desktop/mcp-runtime/project-context-http.mjs'
       - 'apps/zero3-desktop/mcp-runtime/project-context-http-policy.mjs'
@@ -21,6 +25,8 @@ on:
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V1.md'
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V2.md'
       - 'scripts/check-worker-protocol-v2-p1.mjs'
+      - 'scripts/check-agent-shared-state-mvp.mjs'
+      - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
       - 'skills/zero3-web-worker/**'
       - 'skills/README.md'
       - '.github/workflows/execution-system-v1.yml'
@@ -29,6 +35,10 @@ on:
     paths:
       - 'apps/zero3-desktop/execution-runtime/**'
       - 'apps/zero3-desktop/worker-runtime/**'
+      - 'apps/zero3-desktop/artifact-runtime/**'
+      - 'apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-artifact-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-shared-memory.mjs'
       - 'apps/zero3-desktop/mcp-runtime/worker-tools.mjs'
       - 'apps/zero3-desktop/mcp-runtime/project-context-http.mjs'
       - 'apps/zero3-desktop/mcp-runtime/project-context-http-policy.mjs'
@@ -44,6 +54,8 @@ on:
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V1.md'
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V2.md'
       - 'scripts/check-worker-protocol-v2-p1.mjs'
+      - 'scripts/check-agent-shared-state-mvp.mjs'
+      - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
       - 'skills/zero3-web-worker/**'
       - 'skills/README.md'
       - '.github/workflows/execution-system-v1.yml'
@@ -80,5 +92,9 @@ jobs:
         run: node scripts/check-worker-protocol-v2-p1.mjs
       - name: Worker Protocol v2 P1 contracts
         run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/p1-contracts.test.ts
+      - name: Shared organizational state architecture guard
+        run: node scripts/check-agent-shared-state-mvp.mjs
+      - name: Shared organizational state lifecycle tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/lifecycle-runtime.test.ts
       - name: Web MCP access policy tests
         run: node --test apps/zero3-desktop/mcp-runtime/project-context-http-policy.test.mjs

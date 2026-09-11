@@ -26,13 +26,21 @@ const MAX_WORKER_GATEWAY_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] = ["2025-03-26", "2025-06-18", "2025-11-25"];
 const WORKER_CAPABILITY: &str = "worker-protocol-v1";
-const WORKER_TOOLS: [&str; 6] = [
+const WORKER_TOOLS: [&str; 14] = [
     "register_worker",
     "claim_work",
     "report_progress",
     "complete_and_claim_next",
     "report_failure",
     "get_task_context",
+    "session_start",
+    "context_resolve",
+    "task_claim",
+    "event_record",
+    "artifact_register",
+    "task_complete",
+    "memory_commit",
+    "handoff_create",
 ];
 #[derive(Clone)]
 pub struct WorkerGatewayRuntime {
@@ -891,6 +899,93 @@ fn worker_tool_catalog() -> Vec<Value> {
                 "workerId": id_schema(), "sessionId": id_schema()
             }),
             &["taskId","stepId","assignmentId","workerId","sessionId"], true,
+        ),
+        tool_definition(
+            "session_start", "Start Zero3 Agent Session",
+            "Start or resume a shared organizational agent session and bind it to an authoritative Zero3 Task.",
+            json!({
+                "agentType": {"type":"string","enum":["web_gpt","codex","claude","hermes","zero3","antigravity","other"]},
+                "agentId": id_schema(), "sessionId": id_schema(), "projectId": id_schema(), "taskId": id_schema(), "idempotencyKey": id_schema()
+            }),
+            &["agentType","sessionId","projectId","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "context_resolve", "Resolve Zero3 Shared Context",
+            "Resolve filtered Task State, Shared Memory, Decisions, Artifacts, Worklog, Handoff and next actions for this session.",
+            json!({"sessionId": id_schema()}), &["sessionId"], true,
+        ),
+        tool_definition(
+            "task_claim", "Claim Zero3 Task",
+            "Bind the current agent session to available GPT_WEB work in the authoritative Task Runtime with duplicate-execution protection.",
+            json!({
+                "sessionId": id_schema(), "taskId": id_schema(),
+                "conversationId": {"type":"string","maxLength":512}, "conversationUrl": {"type":"string","maxLength":4096},
+                "idempotencyKey": id_schema()
+            }), &["sessionId","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "event_record", "Record Zero3 Agent Event",
+            "Record an important decision, progress, warning, error, discovery, user instruction or dependency into Worklog and Shared Memory policy hooks.",
+            json!({
+                "sessionId": id_schema(),
+                "eventType": {"type":"string","enum":["decision","progress","warning","error","discovery","user_instruction","dependency"]},
+                "content": {"anyOf":[{"type":"string","minLength":1,"maxLength":4096},{"type":"object"}]},
+                "importance": {"type":"string","enum":["low","normal","high","critical"]},
+                "scope": {"type":"string","enum":["project","task"]}, "progress": {"type":"number","minimum":0,"maximum":1},
+                "idempotencyKey": id_schema()
+            }), &["sessionId","eventType","content","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "artifact_register", "Register Zero3 Artifact",
+            "Register structured artifact metadata produced by this agent. Google Drive credentials never pass through this tool.",
+            json!({
+                "sessionId": id_schema(), "artifactId": id_schema(), "name": {"type":"string","minLength":1,"maxLength":1024},
+                "kind": id_schema(), "type": id_schema(), "mimeType": {"type":"string","maxLength":256},
+                "storage": {"type":"object","properties":{
+                    "provider":{"type":"string","enum":["GOOGLE_DRIVE","google_drive","LOCAL","local","REMOTE_COMPUTE","remote_compute","URL","url"]},
+                    "fileId":{"type":"string","maxLength":2048},"path":{"type":"string","maxLength":8192},
+                    "uri":{"type":"string","maxLength":8192},"webUrl":{"type":"string","maxLength":8192}
+                },"required":["provider"],"additionalProperties":false},
+                "description":{"type":"string","maxLength":8192},"version":{"type":"integer","minimum":1},
+                "status":{"type":"string","enum":["draft","produced","approved","rejected","superseded"]},
+                "sha256":{"type":"string","pattern":"^[a-fA-F0-9]{64}$"},"sizeBytes":{"type":"integer","minimum":0},
+                "idempotencyKey": id_schema()
+            }), &["sessionId","name","storage","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "task_complete", "Complete Zero3 Agent Work",
+            "Submit completion through the authoritative Task Runtime while atomically producing Worklog, Memory and Handoff records; Completion Gate remains authoritative.",
+            json!({
+                "sessionId": id_schema(), "summary":{"type":"string","maxLength":64000},
+                "artifacts":{"type":"array","maxItems":100,"items":{"type":"object"}},
+                "decisions":{"type":"array","maxItems":100,"items":{"anyOf":[{"type":"string"},{"type":"object"}]}},
+                "warnings":{"type":"array","maxItems":100,"items":{"anyOf":[{"type":"string"},{"type":"object"}]}},
+                "recommendedNextActions":{"type":"array","maxItems":100,"items":{"anyOf":[{"type":"string"},{"type":"object"}]}},
+                "idempotencyKey": id_schema()
+            }), &["sessionId","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "memory_commit", "Commit Zero3 Shared Memory",
+            "Submit semantic summary candidates to Zero3 Memory routing. Runtime persists a compensation outbox before remote publication.",
+            json!({
+                "sessionId": id_schema(), "summary":{"type":"string","maxLength":64000},
+                "projectMemory":{"type":"array","maxItems":100,"items":{"anyOf":[{"type":"string"},{"type":"object"}]}},
+                "decisions":{"type":"array","maxItems":100,"items":{"anyOf":[{"type":"string"},{"type":"object"}]}},
+                "discoveries":{"type":"array","maxItems":100,"items":{"anyOf":[{"type":"string"},{"type":"object"}]}},
+                "warnings":{"type":"array","maxItems":100,"items":{"anyOf":[{"type":"string"},{"type":"object"}]}},
+                "recommendedNextActions":{"type":"array","maxItems":100,"items":{"anyOf":[{"type":"string"},{"type":"object"}]}},
+                "idempotencyKey": id_schema()
+            }), &["sessionId","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "handoff_create", "Create Zero3 Agent Handoff",
+            "Create a structured task handoff so another agent session can continue without reading prior chat history.",
+            json!({
+                "sessionId": id_schema(), "summary":{"type":"string","maxLength":64000},
+                "completedItems":{"type":"array","maxItems":1000},"remainingItems":{"type":"array","maxItems":1000},
+                "decisions":{"type":"array","maxItems":100},"warnings":{"type":"array","maxItems":100},
+                "nextAction":{"type":"string","maxLength":4096},"idempotencyKey":id_schema()
+            }), &["sessionId","idempotencyKey"], false,
         ),
     ]
 }

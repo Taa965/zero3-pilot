@@ -10,11 +10,12 @@ const mcpTarget = path.join(hermesDesktopDir, 'electron', 'zero3', 'mcp', 'task-
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
 function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
+function normalizeRelativeTypeScriptSpecifiers(source) { return source.replace(/(['"])(\.\.?\/[^'"\r\n]+)\.(?:ts|tsx)\1/gu, '$1$2$1') }
 function patchFile(relativePath, replacements) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
   let source = read(file)
   for (const replacement of replacements) {
-    if (source.includes(replacement.to)) continue
+    if (source.includes(replacement.appliedMarker ?? replacement.to)) continue
     if (!source.includes(replacement.from)) throw new Error(`Zero3 artifact overlay drift in ${relativePath}: missing ${replacement.label}`)
     source = source.replace(replacement.from, replacement.to)
   }
@@ -22,10 +23,10 @@ function patchFile(relativePath, replacements) {
 }
 function copySources() {
   fs.mkdirSync(artifactTargetDir, { recursive: true })
-  for (const file of ['artifact-store.ts', 'antigravity-mcp-lease.ts', 'verification.ts', 'index.ts']) {
+  for (const file of ['artifact-store.ts', 'artifact-reference-store.ts', 'antigravity-mcp-lease.ts', 'verification.ts', 'index.ts']) {
     const source = path.join(artifactSourceDir, file)
     if (!fs.statSync(source).isFile()) throw new Error(`Zero3 artifact runtime source missing: ${source}`)
-    write(path.join(artifactTargetDir, file), overlayRuntimeSource(read(source)))
+    write(path.join(artifactTargetDir, file), overlayRuntimeSource(normalizeRelativeTypeScriptSpecifiers(read(source))))
   }
   if (!fs.statSync(mcpSource).isFile()) throw new Error(`Zero3 task MCP server missing: ${mcpSource}`)
   write(mcpTarget, read(mcpSource))
@@ -38,6 +39,7 @@ const zero3AgentTaskStateRoot = path.join(app.getPath('userData'), 'zero3', 'age
 const zero3ProjectContextRoot = path.join(app.getPath('userData'), 'zero3', 'project-context')
 const zero3TaskMcpServerPath = path.join(app.getAppPath(), 'electron', 'zero3', 'mcp', 'task-mcp-server.mjs')
 const zero3ArtifactStore = new Zero3ArtifactStore(zero3ArtifactRoot)
+const zero3ArtifactReferenceStore = new Zero3ArtifactReferenceStore(path.join(zero3ArtifactRoot, 'references'))
 
 function zero3ArtifactRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -71,7 +73,7 @@ const windowSurface = String.raw`    zero3Artifacts: {
 export function applyZero3ArtifactRuntime() {
   copySources()
   patchFile('electron/main.ts', [
-    { label: 'artifact runtime import', from: "import { Zero3ReviewLoopStore } from './zero3/agent-routing/index'", to: "import { Zero3ReviewLoopStore } from './zero3/agent-routing/index'\nimport { Zero3ArtifactStore, Zero3AntigravityMcpLease } from './zero3/artifacts/index'" },
+    { label: 'artifact runtime import', appliedMarker: "import { Zero3ArtifactReferenceStore } from './zero3/artifacts/artifact-reference-store'", from: "import { Zero3ReviewLoopStore } from './zero3/agent-routing/index'", to: "import { Zero3ReviewLoopStore } from './zero3/agent-routing/index'\nimport { Zero3ArtifactStore, Zero3AntigravityMcpLease } from './zero3/artifacts/index'\nimport { Zero3ArtifactReferenceStore } from './zero3/artifacts/artifact-reference-store'" },
     { label: 'artifact IPC', from: 'const zero3CodexAppServer = createZero3CodexAppServer()', to: main + '\nconst zero3CodexAppServer = createZero3CodexAppServer()' }
   ])
   patchFile('electron/preload.ts', [{ label: 'artifact preload', from: "contextBridge.exposeInMainWorld('zero3Review', {", to: preload }])

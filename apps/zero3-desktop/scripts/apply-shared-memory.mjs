@@ -10,18 +10,23 @@ async function zero3SharedModule() {
   const { pathToFileURL } = await import('node:url')
   return import(pathToFileURL(path.join(app.getAppPath(), 'electron', 'zero3', 'memory-sync-runtime', 'shared-memory-runtime.mjs')).href)
 }
-ipcMain.handle('zero3:shared-memory:read', async (_event, request: unknown) => {
-  const input = request as { projectId?: string }
-  const projectId = input?.projectId
-  if (!projectId || !zero3Projects.get(projectId)) throw new Error('请选择已登记的项目')
+async function zero3SharedMemoryForProject(projectId: string) {
+  if (!/^[A-Za-z0-9._:-]{1,256}$/.test(projectId) || !zero3Projects.get(projectId)) throw new Error('请选择已登记的项目')
   const configPath = process.env.ZERO3_SHARED_MEMORY_CONFIG
-  if (!configPath) return { mode: 'unconfigured' }
+  if (!configPath) return null
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
-  if (!Array.isArray(config.projects) || (!config.projects.includes(projectId) && !config.projects.includes('*'))) return { mode: 'unconfigured' }
+  if (!Array.isArray(config.projects) || (!config.projects.includes(projectId) && !config.projects.includes('*'))) return null
   if (!zero3SharedReaders.has(projectId)) {
     zero3SharedReaders.set(projectId, zero3SharedModule().then(m => m.openSharedMemory({ configPath, projectId })).catch(error => { zero3SharedReaders.delete(projectId); throw error }))
   }
-  const memory = await zero3SharedReaders.get(projectId)!
+  return zero3SharedReaders.get(projectId)!
+}
+ipcMain.handle('zero3:shared-memory:read', async (_event, request: unknown) => {
+  const input = request as { projectId?: string }
+  const projectId = input?.projectId
+  if (!projectId) throw new Error('请选择已登记的项目')
+  const memory = await zero3SharedMemoryForProject(projectId)
+  if (!memory) return { mode: 'unconfigured' }
   try { return { mode: 'shared', context: await memory.getProject(projectId), status: memory.status() } }
   catch { return { mode: 'shared', context: null, status: memory.status(), error: '共享记忆服务暂时不可用；已保留待同步内容。' } }
 })

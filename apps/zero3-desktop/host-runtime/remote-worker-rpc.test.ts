@@ -21,12 +21,20 @@ function fakeRuntime(calls: string[]): Zero3WorkerRuntimePort {
     reportProgress(input) { calls.push('report_progress'); return { input } },
     completeAndClaimNext(input) { calls.push('complete_and_claim_next'); return { input } },
     reportFailure(input) { calls.push('report_failure'); return { input } },
-    getTaskContext(input) { calls.push('get_task_context'); return { input } }
+    getTaskContext(input) { calls.push('get_task_context'); return { input } },
+    sessionStart(input) { calls.push('session_start'); return { input } },
+    contextResolve(input) { calls.push('context_resolve'); return { input } },
+    taskClaim(input) { calls.push('task_claim'); return { input } },
+    eventRecord(input) { calls.push('event_record'); return { input } },
+    artifactRegister(input) { calls.push('artifact_register'); return { input } },
+    taskComplete(input) { calls.push('task_complete'); return { input } },
+    memoryCommit(input) { calls.push('memory_commit'); return { input } },
+    handoffCreate(input) { calls.push('handoff_create'); return { input } }
   }
 }
 
-test('worker RPC executor exposes exactly the six bounded Worker Protocol actions', async () => {
-  const expected = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context']
+test('worker RPC executor exposes the bounded Worker Protocol and shared lifecycle actions', async () => {
+  const expected = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context','session_start','context_resolve','task_claim','event_record','artifact_register','task_complete','memory_commit','handoff_create']
   const calls: string[] = []
   const runtime = fakeRuntime(calls)
   for (const tool of expected) await executeZero3WorkerRpc(runtime, lease(tool, { tool }))
