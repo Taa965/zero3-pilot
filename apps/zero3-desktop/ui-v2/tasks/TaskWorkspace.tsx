@@ -42,7 +42,7 @@ function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
   const [title, setTitle] = useState('')
   const [goal, setGoal] = useState('')
   const [stepText, setStepText] = useState('')
-  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('AUTO')
+  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('CODEX')
   const [requiredSkills, setRequiredSkills] = useState('')
   const [optionalSkills, setOptionalSkills] = useState('')
   const submit = async (event: FormEvent) => {
@@ -75,7 +75,7 @@ function AddStep({ snapshot }: { snapshot: ExecutionTaskSnapshot }) {
   const { busy, mutate } = useTasks()
   const [title, setTitle] = useState('')
   const [dependency, setDependency] = useState('')
-  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('AUTO')
+  const [executor, setExecutor] = useState<ExecutionExecutorTarget>('CODEX')
   const [requiredSkills, setRequiredSkills] = useState('')
   const [optionalSkills, setOptionalSkills] = useState('')
   return <form className="space-y-2 rounded border border-(--ui-border) p-3" onSubmit={event => {
@@ -100,6 +100,7 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
   const [reason, setReason] = useState('')
   const [sessionId, setSessionId] = useState('')
   const routedExecutor = state.skillPreflight?.executor ?? null
+  const needsSkillRouting = step.executor === 'AUTO' || Boolean(step.requiredSkills?.length || step.optionalSkills?.length)
   const transitions = allowedStepTransitions(state.status)
   const terminal = ['completed', 'cancelled'].includes(snapshot.runtime.task.status)
   const gaps = requiredOutputGaps(snapshot, stepId)
@@ -109,6 +110,7 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
   const run =(operation: () => Promise<unknown>) => { void mutate(operation).then(ok => { if (ok) setReason('') }) }
   const assign = async () => {
     const bridge = taskBridge()
+    if (!needsSkillRouting) return bridge.createAssignment(snapshot.definition.task.taskId, stepId, step.executor)
     await bridge.refreshSkillPreflight(snapshot.definition.task.taskId)
     if (step.executor === 'AUTO') return bridge.createRoutedAssignment(snapshot.definition.task.taskId, stepId)
     return bridge.createAssignment(snapshot.definition.task.taskId, stepId, step.executor)
@@ -134,10 +136,10 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
       {bindings.map(binding => <p key={binding.bindingId} className="break-all text-xs">会话：{binding.logicalSessionId} · {binding.state}</p>)}
       {!terminal && ['ready', 'fix_required'].includes(state.status) && <div className="space-y-2">
         <div className="flex flex-wrap gap-2">
-          <button type="button" disabled={busy} className={buttonClass} onClick={() => run(() => taskBridge().refreshSkillPreflight(snapshot.definition.task.taskId))}>重新预检 Skill</button>
-          <button type="button" disabled={busy || state.attempt >= step.maxAttempts} className={buttonClass} onClick={() => run(assign)}>{step.executor === 'AUTO' ? `自动路由并分配${routedExecutor ? ` · ${routedExecutor}` : ''}` : `预检并分配 · ${step.executor}`}</button>
+          {needsSkillRouting && <button type="button" disabled={busy} className={buttonClass} onClick={() => run(() => taskBridge().refreshSkillPreflight(snapshot.definition.task.taskId))}>重新预检 Skill</button>}
+          <button type="button" disabled={busy || state.attempt >= step.maxAttempts} className={buttonClass} onClick={() => run(assign)}>{!needsSkillRouting ? '分配执行' : step.executor === 'AUTO' ? `自动路由并分配${routedExecutor ? ` · ${routedExecutor}` : ''}` : `预检并分配 · ${step.executor}`}</button>
         </div>
-        <p className="text-xs text-(--ui-text-secondary)">Required Skills 未通过预检时禁止分配；AUTO 只使用能力预检推荐的 Agent。</p>
+        {needsSkillRouting && <p className="text-xs text-(--ui-text-secondary)">Required Skills 未通过预检时禁止分配；AUTO 只使用能力预检推荐的 Agent。</p>}
       </div>}
       {!terminal && assignment && !['completed', 'cancelled', 'failed'].includes(state.status) && !bindings.some(binding => binding.state !== 'closed') && <form className="flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); run(() => taskBridge().bindSession(assignment.assignmentId, { logicalSessionId: sessionId.trim() })) }}>
         <input required aria-label={`${step.title}会话编号`} value={sessionId} onChange={event => setSessionId(event.target.value)} placeholder="执行方的真实会话编号" className={inputClass} />
