@@ -327,6 +327,7 @@ export class Zero3ExecutionReporter {
     const expected = createHmac('sha256', this.#secret).update(parts[1]).digest()
     let observed: Buffer
     try { observed = Buffer.from(parts[2], 'base64url') } catch { throw new Error('execution reporter ticket signature is malformed') }
+    if (observed.toString('base64url') !== parts[2]) throw new Error('execution reporter ticket signature is invalid')
     if (observed.byteLength !== expected.byteLength || !timingSafeEqual(observed, expected)) throw new Error('execution reporter ticket signature is invalid')
     let payload: ExecutionAssignmentTicketPayload
     try { payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as ExecutionAssignmentTicketPayload }
