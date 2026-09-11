@@ -30,12 +30,19 @@ export type Zero3GptWebState =
   | 'suspended'
   | 'error'
 
-export type Zero3GptWebExecutionHealth = 'active' | 'idle' | 'stalled'
+export type Zero3GptWebExecutionHealth =
+  | 'active'
+  | 'idle'
+  | 'stalled'
+  | 'timeout_error'
+  | 'recovering'
+  | 'recovery_failed'
 export type Zero3GptWebExecutionStatus = {
   executing: boolean
   health: Zero3GptWebExecutionHealth | null
   lastProgressAt: number | null
   idleForMs: number
+  recoveryAttempt: 0 | 1
 }
 
 export type Zero3GptWebEvent =

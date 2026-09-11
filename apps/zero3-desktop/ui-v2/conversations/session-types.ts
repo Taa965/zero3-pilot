@@ -1,5 +1,11 @@
 export type WorkspaceProvider = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'zero3'
-export type WorkspaceExecutionHealth = 'active' | 'idle' | 'stalled'
+export type WorkspaceExecutionHealth =
+  | 'active'
+  | 'idle'
+  | 'stalled'
+  | 'timeout_error'
+  | 'recovering'
+  | 'recovery_failed'
 
 export type WorkspaceSession = {
   id: string
@@ -14,6 +20,7 @@ export type WorkspaceSession = {
   executionHealth?: WorkspaceExecutionHealth | null
   lastProgressAt?: number | null
   executionIdleForMs?: number
+  recoveryAttempt?: 0 | 1
   completionUnread?: boolean
 }
 

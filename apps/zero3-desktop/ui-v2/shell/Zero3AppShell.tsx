@@ -5,7 +5,7 @@ import { ProjectAdapter, type Zero3ProjectRecord } from '../adapters/ProjectAdap
 import { ProjectLinkAdapter } from '../adapters/ProjectLinkAdapter'
 import { ProjectLinkDialog } from '../projects/ProjectLinkDialog'
 import { SessionArchiveAdapter } from '../adapters/SessionArchiveAdapter'
-import { WebWorkspaceAdapter } from '../adapters/WebWorkspaceAdapter'
+import { WebWorkspaceAdapter, type WebSessionExecutionStatus } from '../adapters/WebWorkspaceAdapter'
 import { ChatGptProjectBindingDialog } from '../conversations/ChatGptProjectBindingDialog'
 import { hideNativeWebSession } from '../conversations/native-overlay-visibility'
 import { RenameSessionDialog } from '../conversations/RenameSessionDialog'
@@ -101,7 +101,7 @@ export function Zero3AppShell() {
 
   const setWebSessionExecution = useCallback((
     sessionId: string,
-    status: Awaited<ReturnType<Window['zero3GptWeb']['executionStatus']>>
+    status: WebSessionExecutionStatus
   ) => {
     const previous = webExecutionStatesRef.current.get(sessionId)
     webExecutionStatesRef.current.set(sessionId, status.executing)
@@ -110,9 +110,12 @@ export function Zero3AppShell() {
       executing: status.executing,
       executionHealth: status.health,
       lastProgressAt: status.lastProgressAt,
-      executionIdleForMs: status.idleForMs
+      executionIdleForMs: status.idleForMs,
+      recoveryAttempt: status.recoveryAttempt
     } : session))
-    if (previous === true && !status.executing) {
+    if (status.health === 'timeout_error' || status.health === 'recovering' || status.health === 'recovery_failed') {
+      setSessionCompletionUnread(sessionId, false)
+    } else if (previous === true && !status.executing && status.health === null) {
       setSessionCompletionUnread(sessionId, viewedSessionIdRef.current !== sessionId)
     }
   }, [setSessionCompletionUnread])

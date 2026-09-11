@@ -63,6 +63,24 @@ test('P5 repeatedly stalled GPT session is fenced into physical-session rotation
   assert.match(events[0], /^rotate:wake-1:/)
 })
 
+test('P5 timeout recovery state defers worker wakeup to avoid duplicate continuation', async () => {
+  const { runtime, events } = runtimePort()
+  const { gpt, sent } = gptPort({ executing: false, health: 'recovering' })
+  const controller = new Zero3WorkerWakeupController(runtime, gpt)
+  await controller.tick()
+  assert.equal(sent.length, 0)
+  assert.match(events[0], /^deferred:wake-1:/)
+})
+
+test('P5 repeated timeout recovery failure rotates the physical session', async () => {
+  const { runtime, events } = runtimePort(wakeup(3))
+  const { gpt, sent } = gptPort({ executing: false, health: 'recovery_failed' })
+  const controller = new Zero3WorkerWakeupController(runtime, gpt, { stalledAttemptsBeforeRotate: 3 })
+  await controller.tick()
+  assert.equal(sent.length, 0)
+  assert.match(events[0], /^rotate:wake-1:/)
+})
+
 test('P5 page/composer readiness failures are deferred and never treated as delivered', async () => {
   const { runtime, events } = runtimePort()
   const { gpt, sent } = gptPort({ executing: false, health: null }, true)

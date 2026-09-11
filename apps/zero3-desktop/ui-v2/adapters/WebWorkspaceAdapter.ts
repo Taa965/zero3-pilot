@@ -1,9 +1,17 @@
 import { webSessionTitle } from './web-session-title'
-import type { WorkspaceSession } from '../conversations/session-types'
+import type { WorkspaceExecutionHealth, WorkspaceSession } from '../conversations/session-types'
 
 // global.d.ts declares the entry union in module scope, so it is not visible by
 // name here; deriving it from the bridge keeps this in step with that contract.
 type WorkspaceEntry = Awaited<ReturnType<Window['zero3Workspace']['list']>>[number]
+
+export type WebSessionExecutionStatus = {
+  executing: boolean
+  health: WorkspaceExecutionHealth | null
+  lastProgressAt: number | null
+  idleForMs: number
+  recoveryAttempt: 0 | 1
+}
 
 /** A project as it exists on chatgpt.com, offered when binding a Zero3 project. */
 export type ChatGptRemoteProject = Awaited<ReturnType<Window['zero3GptWeb']['listRemoteProjects']>>[number]
@@ -39,7 +47,7 @@ function relativeTime(iso: string): string {
   return then.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
 }
 
-function toSession(entry: WorkspaceEntry, execution: Awaited<ReturnType<Window['zero3GptWeb']['executionStatus']>>): WorkspaceSession {
+function toSession(entry: WorkspaceEntry, execution: WebSessionExecutionStatus): WorkspaceSession {
   return {
     id: entry.id,
     provider: entry.kind === 'gpt_web' ? 'gpt' : 'gemini',
@@ -52,16 +60,17 @@ function toSession(entry: WorkspaceEntry, execution: Awaited<ReturnType<Window['
     executing: execution.executing === true,
     executionHealth: execution.health,
     lastProgressAt: execution.lastProgressAt,
-    executionIdleForMs: execution.idleForMs
+    executionIdleForMs: execution.idleForMs,
+    recoveryAttempt: execution.recoveryAttempt
   }
 }
 
-async function executionState(entry: WorkspaceEntry): Promise<Awaited<ReturnType<Window['zero3GptWeb']['executionStatus']>>> {
-  const bridge = entry.kind === 'gpt_web' ? window.zero3GptWeb : window.zero3GeminiWeb
-  const probe = bridge.executionStatus
-  const stopped = { executing: false, health: null, lastProgressAt: null, idleForMs: 0 } as const
-  if (typeof probe !== 'function') return stopped
-  return probe({ id: entry.id }).catch(() => stopped)
+async function executionState(entry: WorkspaceEntry): Promise<WebSessionExecutionStatus> {
+  const stopped: WebSessionExecutionStatus = { executing: false, health: null, lastProgressAt: null, idleForMs: 0, recoveryAttempt: 0 }
+  if (entry.kind === 'gpt_web') {
+    return window.zero3GptWeb.executionStatus({ id: entry.id }).then(result => ({ ...result })).catch(() => stopped)
+  }
+  return window.zero3GeminiWeb.executionStatus({ id: entry.id }).then(result => ({ ...result, recoveryAttempt: 0 as const })).catch(() => stopped)
 }
 
 export const WebWorkspaceAdapter = {
@@ -121,15 +130,15 @@ export const WebWorkspaceAdapter = {
 
   subscribe(
     onChange: () => void,
-    onExecutionChange?: (sessionId: string, status: Awaited<ReturnType<Window['zero3GptWeb']['executionStatus']>>) => void
+    onExecutionChange?: (sessionId: string, status: WebSessionExecutionStatus) => void
   ): () => void {
     if (!bridgeAvailable()) return () => {}
     const gpt = window.zero3GptWeb.onEvent(event => {
-      if (event.kind === 'execution') onExecutionChange?.(event.entryId, { executing: event.executing, health: event.health, lastProgressAt: event.lastProgressAt, idleForMs: event.idleForMs })
+      if (event.kind === 'execution') onExecutionChange?.(event.entryId, { executing: event.executing, health: event.health, lastProgressAt: event.lastProgressAt, idleForMs: event.idleForMs, recoveryAttempt: event.recoveryAttempt })
       else if (event.kind === 'navigation') onChange()
     })
     const gemini = window.zero3GeminiWeb.onEvent(event => {
-      if (event.kind === 'execution') onExecutionChange?.(event.entryId, { executing: event.executing, health: event.health, lastProgressAt: event.lastProgressAt, idleForMs: event.idleForMs })
+      if (event.kind === 'execution') onExecutionChange?.(event.entryId, { executing: event.executing, health: event.health, lastProgressAt: event.lastProgressAt, idleForMs: event.idleForMs, recoveryAttempt: 0 })
       else if (event.kind === 'navigation') onChange()
     })
     return () => {

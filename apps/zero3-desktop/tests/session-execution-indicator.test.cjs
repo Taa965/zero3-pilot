@@ -6,9 +6,9 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '..')
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8')
 
-test('session list distinguishes active, idle, stalled, and unread-complete states', () => {
+test('session list distinguishes active, idle, stalled, timeout recovery, and unread-complete states', () => {
   const list = read('ui-v2/conversations/UnifiedSessionList.tsx')
-  assert.match(list, /session\.executionHealth \?\? 'active'/)
+  assert.match(list, /session\.executionHealth \?\? \(executing \? 'active' : null\)/)
   assert.match(list, /data-session-health/)
   assert.match(list, /border-emerald-500/)
   assert.match(list, /border-amber-500/)
@@ -16,6 +16,9 @@ test('session list distinguishes active, idle, stalled, and unread-complete stat
   assert.match(list, /motion-safe:animate-ping/)
   assert.match(list, /等待进展/)
   assert.match(list, /疑似卡住/)
+  assert.match(list, /发送超时/)
+  assert.match(list, /自动恢复 1\/1/)
+  assert.match(list, /恢复失败/)
   assert.match(list, /completionUnread && !executing/)
   assert.match(list, /bg-red-500/)
 })
@@ -55,7 +58,9 @@ test('web execution health is carried through the renderer adapter', () => {
   const adapter = read('ui-v2/adapters/WebWorkspaceAdapter.ts')
   const types = read('ui-v2/conversations/session-types.ts')
   const shell = read('ui-v2/shell/Zero3AppShell.tsx')
-  assert.match(types, /WorkspaceExecutionHealth = 'active' \| 'idle' \| 'stalled'/)
+  assert.match(types, /'timeout_error'/)
+  assert.match(types, /'recovering'/)
+  assert.match(types, /'recovery_failed'/)
   assert.match(types, /executionHealth\?: WorkspaceExecutionHealth \| null/)
   assert.match(adapter, /executionHealth: execution\.health/)
   assert.match(adapter, /lastProgressAt: execution\.lastProgressAt/)
@@ -64,11 +69,25 @@ test('web execution health is carried through the renderer adapter', () => {
   assert.match(shell, /executionIdleForMs: status\.idleForMs/)
 })
 
-test('generated preload type overlays expose the richer health contract', () => {
+test('GPT timeout recovery classifies the error locally and never opens Ctrl+F', () => {
+  const gpt = read('gpt-web-runtime/gpt-web-provider.ts')
+  assert.match(gpt, /消息发送超时/)
+  assert.match(gpt, /TIMEOUT_RECOVERY_PROMPT = '现在完成到哪一步了？如果还没完成，请继续执行'/)
+  assert.match(gpt, /TIMEOUT_RECOVERY_DELAY_MS = 3_000/)
+  assert.match(gpt, /timeoutRecoveryStates/)
+  assert.match(gpt, /phase: 'scheduled' \| 'recovering' \| 'failed'/)
+  assert.match(gpt, /composerText\(composer\)\.trim\(\)/)
+  assert.match(gpt, /data-testid=\"send-button\"/)
+  assert.doesNotMatch(gpt, /findInPage|window\.find|execCommand\(['"]find/i)
+})
+
+test('generated preload type overlays expose provider-specific health contracts', () => {
   const gpt = read('scripts/apply-gpt-web-provider.mjs')
   const gemini = read('scripts/apply-gemini-web-provider.mjs')
+  assert.match(gpt, /'timeout_error' \| 'recovering' \| 'recovery_failed'/)
+  assert.match(gpt, /recoveryAttempt: 0 \| 1/)
+  assert.match(gemini, /health: 'active' \| 'idle' \| 'stalled' \| null/)
   for (const source of [gpt, gemini]) {
-    assert.match(source, /health: 'active' \| 'idle' \| 'stalled' \| null/)
     assert.match(source, /lastProgressAt: number \| null/)
     assert.match(source, /idleForMs: number/)
   }

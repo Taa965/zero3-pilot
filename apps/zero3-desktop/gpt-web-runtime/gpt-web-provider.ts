@@ -62,6 +62,9 @@ const MAINTENANCE_INTERVAL_MS = 15_000
 const EXECUTION_PROBE_INTERVAL_MS = 800
 const EXECUTION_IDLE_AFTER_MS = 90_000
 const EXECUTION_STALLED_AFTER_MS = 5 * 60_000
+const TIMEOUT_RECOVERY_DELAY_MS = 3_000
+const TIMEOUT_RECOVERY_START_TIMEOUT_MS = 15_000
+const TIMEOUT_RECOVERY_PROMPT = '现在完成到哪一步了？如果还没完成，请继续执行'
 const RENDER_WAIT_TIMEOUT_MS = 8_000
 const SNAPSHOT_MAX_COUNT = 30
 const SNAPSHOT_MAX_WIDTH = 1_280
@@ -86,7 +89,25 @@ const CHATGPT_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
     const style = getComputedStyle(element)
     return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0
   }
+  const visibleInViewport = element => {
+    if (!visible(element)) return false
+    const rect = element.getBoundingClientRect()
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth
+  }
   const executing = selectors.some(selector => Array.from(document.querySelectorAll(selector)).some(visible))
+  const retryLabels = new Set(['重试', 'Retry', 'Try again'])
+  const timeoutPatterns = [/消息发送超时/, /message(?: sending)? timed out/i, /request timed out/i, /timed out.*try again/i]
+  const timeoutError = Array.from(document.querySelectorAll('button')).some(button => {
+    if (!(button instanceof HTMLElement) || !visibleInViewport(button)) return false
+    const label = [button.getAttribute('aria-label') || '', button.innerText || ''].join(' ').trim()
+    if (![...retryLabels].some(candidate => label === candidate || label.includes(candidate))) return false
+    let node = button
+    for (let depth = 0; depth < 5 && node; depth += 1, node = node.parentElement) {
+      const text = (node.innerText || '').slice(0, 512)
+      if (timeoutPatterns.some(pattern => pattern.test(text))) return true
+    }
+    return false
+  })
   const turns = document.querySelectorAll('article[data-testid^="conversation-turn-"]')
   const root = turns.item(turns.length - 1)?.parentElement || document.querySelector('main') || document.body
   const key = '__zero3ExecutionWatchdogV1'
@@ -106,7 +127,69 @@ const CHATGPT_EXECUTION_STATUS_SCRIPT = String.raw`(() => {
   if (executing && !watchdog.executing) watchdog.lastProgressAt = Date.now()
   watchdog.executing = executing
   if (!executing) watchdog.lastProgressAt = Date.now()
-  return { executing, lastProgressAt: watchdog.lastProgressAt }
+  return { executing, lastProgressAt: watchdog.lastProgressAt, timeoutError }
+})()`
+const CHATGPT_TIMEOUT_RECOVERY_SCRIPT = String.raw`(async () => {
+  const prompt = ${JSON.stringify(TIMEOUT_RECOVERY_PROMPT)}
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+  const visible = element => {
+    if (!(element instanceof HTMLElement)) return false
+    const style = getComputedStyle(element)
+    if (style.display === 'none' || style.visibility === 'hidden' || element.getClientRects().length === 0) return false
+    const rect = element.getBoundingClientRect()
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth
+  }
+  const timeoutVisible = () => {
+    const retryLabels = new Set(['重试', 'Retry', 'Try again'])
+    const patterns = [/消息发送超时/, /message(?: sending)? timed out/i, /request timed out/i, /timed out.*try again/i]
+    return Array.from(document.querySelectorAll('button')).some(button => {
+      if (!(button instanceof HTMLElement) || !visible(button)) return false
+      const label = [button.getAttribute('aria-label') || '', button.innerText || ''].join(' ').trim()
+      if (![...retryLabels].some(candidate => label === candidate || label.includes(candidate))) return false
+      let node = button
+      for (let depth = 0; depth < 5 && node; depth += 1, node = node.parentElement) {
+        if (patterns.some(pattern => pattern.test((node.innerText || '').slice(0, 512)))) return true
+      }
+      return false
+    })
+  }
+  const composerText = composer => composer instanceof HTMLTextAreaElement ? composer.value : (composer.innerText || composer.textContent || '')
+  const fillComposer = composer => {
+    composer.focus()
+    if (composer instanceof HTMLTextAreaElement) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+      if (!setter) return false
+      setter.call(composer, prompt)
+      composer.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    }
+    if (!composer.isContentEditable) return false
+    const selection = window.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(composer)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    const inserted = document.execCommand('insertText', false, prompt)
+    if (!inserted) composer.textContent = prompt
+    composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: prompt }))
+    return true
+  }
+  const deadline = Date.now() + 8000
+  while (Date.now() < deadline) {
+    if (!timeoutVisible()) return 'resolved'
+    const composer = document.querySelector('#prompt-textarea')
+    if (!(composer instanceof HTMLElement) || !visible(composer)) { await sleep(250); continue }
+    if (composerText(composer).trim()) return 'blocked'
+    if (!fillComposer(composer)) return 'unavailable'
+    const sendDeadline = Date.now() + 2000
+    while (Date.now() < sendDeadline) {
+      const send = document.querySelector('[data-testid="send-button"], button[aria-label="Send prompt"], button[aria-label="发送提示"], button[aria-label="发送"]')
+      if (send instanceof HTMLButtonElement && visible(send) && !send.disabled) { send.click(); return 'sent' }
+      await sleep(100)
+    }
+    return 'unavailable'
+  }
+  return 'unavailable'
 })()`
 
 // Zero3 owns the outer navigation and toolbar. Keep ChatGPT's own conversation
@@ -289,25 +372,31 @@ function windowZoomFactor(window: BrowserWindow | null): number {
 }
 
 function stoppedExecutionStatus(): Zero3GptWebExecutionStatus {
-  return { executing: false, health: null, lastProgressAt: null, idleForMs: 0 }
+  return { executing: false, health: null, lastProgressAt: null, idleForMs: 0, recoveryAttempt: 0 }
 }
 
 function executionStatusFromProbe(value: unknown, now = Date.now()): Zero3GptWebExecutionStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return stoppedExecutionStatus()
   const raw = value as Record<string, unknown>
-  if (raw.executing !== true) return stoppedExecutionStatus()
+  const executing = raw.executing === true
   const observed = typeof raw.lastProgressAt === 'number' && Number.isFinite(raw.lastProgressAt)
     ? Math.min(now, Math.max(0, raw.lastProgressAt)) : now
   const idleForMs = Math.max(0, now - observed)
+  if (raw.timeoutError === true) {
+    return { executing, health: 'timeout_error', lastProgressAt: observed, idleForMs, recoveryAttempt: 0 }
+  }
+  if (!executing) return stoppedExecutionStatus()
   const health = idleForMs >= EXECUTION_STALLED_AFTER_MS ? 'stalled'
     : idleForMs >= EXECUTION_IDLE_AFTER_MS ? 'idle' : 'active'
-  return { executing: true, health, lastProgressAt: observed, idleForMs }
+  return { executing: true, health, lastProgressAt: observed, idleForMs, recoveryAttempt: 0 }
 }
 
 export class Zero3GptWebProvider {
   private readonly live = new Map<string, LiveGptWebView>()
   private readonly snapshots = new Map<string, SnapshotRecord>()
   private readonly executionStates = new Map<string, Zero3GptWebExecutionStatus>()
+  private readonly timeoutRecoveryStates = new Map<string, { phase: 'scheduled' | 'recovering' | 'failed'; sentAt: number | null; sawExecutionAfterSend: boolean }>()
+  private readonly timeoutRecoveryTimers = new Map<string, NodeJS.Timeout>()
   private profileSession: Session | null = null
   private loginWindow: BrowserWindow | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
@@ -615,8 +704,12 @@ export class Zero3GptWebProvider {
     const live = this.live.get(id)
     if (!live || live.view.webContents.isDestroyed()) return stoppedExecutionStatus()
     const detected = await this.readExecutionState(live)
-    if (detected !== null) this.publishExecutionState(live.entryId, detected)
-    return detected ?? this.executionStates.get(live.entryId) ?? stoppedExecutionStatus()
+    if (detected !== null) {
+      const effective = this.withTimeoutRecoveryState(live.entryId, detected)
+      this.publishExecutionState(live.entryId, effective)
+      return effective
+    }
+    return this.executionStates.get(live.entryId) ?? stoppedExecutionStatus()
   }
 
   async sendWakeup(idValue: unknown, messageValue: unknown): Promise<{ sent: true }> {
@@ -839,18 +932,132 @@ export class Zero3GptWebProvider {
     }
   }
 
+
+  private withTimeoutRecoveryState(entryId: string, status: Zero3GptWebExecutionStatus): Zero3GptWebExecutionStatus {
+    const state = this.timeoutRecoveryStates.get(entryId)
+    if (state?.phase === 'recovering') return { ...status, health: 'recovering', recoveryAttempt: 1 }
+    if (state?.phase === 'failed') return { ...status, health: 'recovery_failed', recoveryAttempt: 1 }
+    return { ...status, recoveryAttempt: 0 }
+  }
+
+  private clearTimeoutRecovery(entryId: string): void {
+    const timer = this.timeoutRecoveryTimers.get(entryId)
+    if (timer) clearTimeout(timer)
+    this.timeoutRecoveryTimers.delete(entryId)
+    this.timeoutRecoveryStates.delete(entryId)
+  }
+
+  private scheduleTimeoutRecovery(live: LiveGptWebView): void {
+    if (this.timeoutRecoveryStates.has(live.entryId) || this.timeoutRecoveryTimers.has(live.entryId)) return
+    this.timeoutRecoveryStates.set(live.entryId, { phase: 'scheduled', sentAt: null, sawExecutionAfterSend: false })
+    const timer = setTimeout(() => void this.attemptTimeoutRecovery(live.entryId), TIMEOUT_RECOVERY_DELAY_MS)
+    timer.unref?.()
+    this.timeoutRecoveryTimers.set(live.entryId, timer)
+  }
+
+  private async sendTimeoutRecoveryPrompt(live: LiveGptWebView): Promise<'sent' | 'resolved' | 'blocked' | 'unavailable'> {
+    const contents = live.view.webContents
+    if (contents.isDestroyed()) return 'unavailable'
+    try {
+      const result = await contents.executeJavaScript(CHATGPT_TIMEOUT_RECOVERY_SCRIPT, false)
+      return result === 'sent' || result === 'resolved' || result === 'blocked' ? result : 'unavailable'
+    } catch {
+      return 'unavailable'
+    }
+  }
+
+
+  private async attemptTimeoutRecovery(entryId: string): Promise<void> {
+    const timer = this.timeoutRecoveryTimers.get(entryId)
+    if (timer) clearTimeout(timer)
+    this.timeoutRecoveryTimers.delete(entryId)
+    const state = this.timeoutRecoveryStates.get(entryId)
+    if (!state || state.phase !== 'scheduled') return
+    const live = this.live.get(entryId)
+    if (!live || live.view.webContents.isDestroyed()) { this.clearTimeoutRecovery(entryId); return }
+    const detected = await this.readExecutionState(live)
+    if (!detected) { this.clearTimeoutRecovery(entryId); return }
+    if (detected.health !== 'timeout_error' || detected.executing) {
+      this.clearTimeoutRecovery(entryId)
+      this.publishExecutionState(entryId, detected)
+      return
+    }
+    state.phase = 'recovering'
+    state.sentAt = Date.now()
+    state.sawExecutionAfterSend = false
+    this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, detected))
+    const outcome = await this.sendTimeoutRecoveryPrompt(live)
+    if (outcome === 'sent') return
+    if (outcome === 'resolved') {
+      this.clearTimeoutRecovery(entryId)
+      const current = await this.readExecutionState(live)
+      if (current) this.publishExecutionState(entryId, current)
+      return
+    }
+    state.phase = 'failed'
+    const current = await this.readExecutionState(live) ?? detected
+    this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, current))
+  }
+
+  private async handleExecutionProbe(live: LiveGptWebView, status: Zero3GptWebExecutionStatus): Promise<void> {
+    const entryId = live.entryId
+    const state = this.timeoutRecoveryStates.get(entryId)
+    if (state?.phase === 'failed') {
+      if (status.executing && status.health !== 'timeout_error') {
+        this.clearTimeoutRecovery(entryId)
+        this.publishExecutionState(entryId, status)
+      } else this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, status))
+      return
+    }
+    if (state?.phase === 'recovering') {
+      if (status.executing) {
+        state.sawExecutionAfterSend = true
+        this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, status))
+        return
+      }
+      const elapsed = state.sentAt ? Date.now() - state.sentAt : TIMEOUT_RECOVERY_START_TIMEOUT_MS
+      if (status.health === 'timeout_error') {
+        if (state.sawExecutionAfterSend || elapsed >= TIMEOUT_RECOVERY_START_TIMEOUT_MS) state.phase = 'failed'
+        this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, status))
+        return
+      }
+      if (state.sawExecutionAfterSend) {
+        this.clearTimeoutRecovery(entryId)
+        this.publishExecutionState(entryId, status)
+        return
+      }
+      if (elapsed >= TIMEOUT_RECOVERY_START_TIMEOUT_MS) state.phase = 'failed'
+      this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, status))
+      return
+    }
+    if (state?.phase === 'scheduled') {
+      if (status.health !== 'timeout_error' || status.executing) {
+        this.clearTimeoutRecovery(entryId)
+        this.publishExecutionState(entryId, status)
+      } else this.publishExecutionState(entryId, status)
+      return
+    }
+    if (status.health === 'timeout_error') {
+      this.publishExecutionState(entryId, status)
+      if (!status.executing) this.scheduleTimeoutRecovery(live)
+      return
+    }
+    this.publishExecutionState(entryId, status)
+  }
+
   private publishExecutionState(entryId: string, status: Zero3GptWebExecutionStatus): void {
     const previous = this.executionStates.get(entryId)
     this.executionStates.set(entryId, status)
-    const unchanged = previous?.executing === status.executing && previous?.health === status.health
-    if (unchanged || (previous === undefined && !status.executing)) return
+    const unchanged = previous?.executing === status.executing && previous?.health === status.health && previous?.recoveryAttempt === status.recoveryAttempt
+    if (unchanged || (previous === undefined && !status.executing && status.health === null)) return
     this.emitEvent({ kind: 'execution', entryId, ...status })
   }
 
   private clearExecutionState(entryId: string): void {
     const previous = this.executionStates.get(entryId)
     this.executionStates.delete(entryId)
-    if (previous?.executing) this.emitEvent({ kind: 'execution', entryId, ...stoppedExecutionStatus() })
+    this.clearTimeoutRecovery(entryId)
+    if (previous?.executing || previous?.health) this.emitEvent({ kind: 'execution', entryId, ...stoppedExecutionStatus() })
   }
 
   private async probeExecutionStates(): Promise<void> {
@@ -859,7 +1066,7 @@ export class Zero3GptWebProvider {
     try {
       await Promise.all([...this.live.values()].map(async live => {
         const detected = await this.readExecutionState(live)
-        if (detected !== null) this.publishExecutionState(live.entryId, detected)
+        if (detected !== null) await this.handleExecutionProbe(live, detected)
       }))
     } finally {
       this.executionProbeInFlight = false
@@ -1112,6 +1319,12 @@ export class Zero3GptWebProvider {
           const sourceExecution = this.executionStates.get(sourceEntryId)
           this.executionStates.delete(sourceEntryId)
           if (sourceExecution !== undefined) this.executionStates.set(live.entryId, sourceExecution)
+          const sourceRecovery = this.timeoutRecoveryStates.get(sourceEntryId)
+          const sourceRecoveryTimer = this.timeoutRecoveryTimers.get(sourceEntryId)
+          if (sourceRecoveryTimer) clearTimeout(sourceRecoveryTimer)
+          this.timeoutRecoveryTimers.delete(sourceEntryId)
+          this.timeoutRecoveryStates.delete(sourceEntryId)
+          if (sourceRecovery && sourceRecovery.phase !== 'scheduled') this.timeoutRecoveryStates.set(live.entryId, sourceRecovery)
 
           const sourceSnapshot = this.snapshots.get(sourceEntryId)
           if (sourceSnapshot) {

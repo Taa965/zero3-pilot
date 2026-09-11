@@ -151,10 +151,13 @@ export function UnifiedSessionList({
     const archived = session.archived === true
     const executing = session.executing === true
     const completionUnread = session.completionUnread === true
-    const health = executing ? (session.executionHealth ?? 'active') : null
+    const health = session.executionHealth ?? (executing ? 'active' : null)
     const idle = health === 'idle'
     const stalled = health === 'stalled'
-    const attentionRing = executing || completionUnread
+    const timeoutError = health === 'timeout_error'
+    const recovering = health === 'recovering'
+    const recoveryFailed = health === 'recovery_failed'
+    const attentionRing = executing || completionUnread || timeoutError || recovering || recoveryFailed
     const mark = PROVIDER_MARKS[session.provider]
     return (
       <button
@@ -180,15 +183,15 @@ export function UnifiedSessionList({
           <div className="flex min-w-0 items-center gap-1.5 font-medium">
             <span
               className="relative grid size-4 shrink-0 place-items-center"
-              title={stalled ? '疑似卡住：已超过 5 分钟没有可见进展' : idle ? '执行中：已超过 90 秒没有可见进展' : executing ? '正在执行' : completionUnread ? '执行完成，尚未查看' : undefined}
+              title={recoveryFailed ? '自动恢复失败，需要人工处理' : recovering ? '检测到发送超时，正在自动继续（1/1）' : timeoutError ? '检测到消息发送超时，准备自动恢复' : stalled ? '疑似卡住：已超过 5 分钟没有可见进展' : idle ? '执行中：已超过 90 秒没有可见进展' : executing ? '正在执行' : completionUnread ? '执行完成，尚未查看' : undefined}
             >
               {attentionRing && (
                 <span className={cn(
                   'pointer-events-none absolute inset-[-2px] rounded-full border',
-                  stalled ? 'border-red-500' : idle ? 'border-amber-500' : 'border-emerald-500'
+                  recoveryFailed || timeoutError || stalled ? 'border-red-500' : recovering || idle ? 'border-amber-500' : 'border-emerald-500'
                 )} />
               )}
-              {executing && !idle && !stalled && (
+              {executing && health === 'active' && (
                 <span className="pointer-events-none absolute inset-[-2px] rounded-full border border-emerald-400/80 motion-safe:animate-ping" />
               )}
               {idle && (
@@ -197,7 +200,13 @@ export function UnifiedSessionList({
               {stalled && (
                 <span className="pointer-events-none absolute inset-[-3px] rounded-full border border-red-400/80 motion-safe:animate-pulse" />
               )}
-              {completionUnread && !executing && (
+              {timeoutError && (
+                <span className="pointer-events-none absolute inset-[-3px] rounded-full border border-red-400/80 motion-safe:animate-pulse" />
+              )}
+              {recovering && (
+                <span className="pointer-events-none absolute inset-[-3px] rounded-full border border-amber-400/80 motion-safe:animate-pulse" />
+              )}
+              {completionUnread && !executing && health === null && (
                 <span className="pointer-events-none absolute -right-1 -top-1 z-20 size-2 rounded-full bg-red-500" />
               )}
               <span className={cn('relative z-10 text-xs', mark.color)}>{mark.symbol}</span>
@@ -205,6 +214,9 @@ export function UnifiedSessionList({
             <span className="truncate">{session.title}</span>
             {idle && <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-normal text-amber-600">等待进展</span>}
             {stalled && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">疑似卡住</span>}
+            {timeoutError && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">发送超时</span>}
+            {recovering && <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-normal text-amber-600">自动恢复 1/1</span>}
+            {recoveryFailed && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">恢复失败</span>}
             {archived && <Codicon name="archive" className="size-3.5 shrink-0 text-(--ui-text-tertiary)" />}
           </div>
           <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>
