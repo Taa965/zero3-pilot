@@ -1,5 +1,6 @@
 export * from './skill-types'
 export * from './skill-binding-store'
+export * from './skill-install-jobs'
 export * from './skill-router'
 export * from './skill-catalog'
 export * from './skill-usage-ledger'

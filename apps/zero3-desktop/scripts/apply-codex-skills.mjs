@@ -6,7 +6,7 @@ import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const skillRuntimeSourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'skill-runtime')
 const skillRuntimeTargetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'skills')
-const skillRuntimeFiles = ['skill-types.ts', 'skill-binding-store.ts', 'skill-router.ts', 'skill-catalog.ts', 'skill-usage-ledger.ts', 'index.ts']
+const skillRuntimeFiles = ['skill-types.ts', 'skill-binding-store.ts', 'skill-install-jobs.ts', 'skill-router.ts', 'skill-catalog.ts', 'skill-usage-ledger.ts', 'index.ts']
 
 function stageSkillRuntime() {
   fs.mkdirSync(skillRuntimeTargetDir, { recursive: true })
@@ -96,6 +96,64 @@ function zero3CodexSkillRows(value: unknown): Array<Record<string, unknown>> {
   return rows
 }
 
+// Installer task tracking. The Codex Turn owns the actual approvals; Zero3
+// keeps only the install task envelope on disk and mirrors the live approval
+// requests so a renderer reload can re-attach and an app restart can surface
+// the interrupted install. No Skill files or bodies are copied or stored here.
+const zero3SkillInstallJobStore = new Zero3SkillInstallJobStore(path.join(app.getPath('userData'), 'zero3', 'skill-installer-jobs.json'))
+void zero3SkillInstallJobStore.recoverInterrupted().catch(() => undefined)
+const zero3SkillInstallApprovals = new Map<string, { id: Zero3CodexRpcId; method: string; params: unknown }>()
+let zero3SkillInstallThreadId: string | null = null
+function zero3SkillInstallForget() {
+  zero3SkillInstallThreadId = null
+  zero3SkillInstallApprovals.clear()
+}
+function zero3SkillInstallRecordEvent(event: Zero3CodexEvent) {
+  if (event.kind === 'lifecycle') {
+    if ((event.state === 'stopped' || event.state === 'error') && zero3SkillInstallThreadId) {
+      const threadId = zero3SkillInstallThreadId
+      zero3SkillInstallForget()
+      void zero3SkillInstallJobStore.update(threadId, { status: 'needs_recovery', error: 'Codex app-server 已停止，安装任务无法继续。' }).catch(() => undefined)
+    }
+    return
+  }
+  if (!zero3SkillInstallThreadId) return
+  const params = event.params && typeof event.params === 'object' && !Array.isArray(event.params) ? event.params as Record<string, unknown> : null
+  if (event.kind === 'request') {
+    if (typeof params?.threadId !== 'string' || params.threadId !== zero3SkillInstallThreadId) return
+    zero3SkillInstallApprovals.set(zero3CodexIdKey(event.id), { id: event.id, method: event.method, params: event.params })
+    return
+  }
+  if (event.method === 'serverRequest/resolved') {
+    const requestId = params?.requestId
+    if (typeof requestId === 'string' || typeof requestId === 'number') zero3SkillInstallApprovals.delete(zero3CodexIdKey(requestId))
+    return
+  }
+  if (event.method === 'turn/completed' && params?.threadId === zero3SkillInstallThreadId) {
+    const threadId = zero3SkillInstallThreadId
+    zero3SkillInstallForget()
+    const turn = zero3CodexRecord(params?.turn)
+    const error = zero3CodexRecord(turn.error).message
+    void zero3SkillInstallJobStore.update(threadId, {
+      status: turn.status === 'completed' ? 'completed' : turn.status === 'interrupted' ? 'interrupted' : 'failed',
+      error: typeof error === 'string' ? error : null
+    }).catch(() => undefined)
+  }
+}
+async function zero3PendingSkillInstallState() {
+  const jobs = await zero3SkillInstallJobStore.list()
+  const activeJob = zero3SkillInstallThreadId ? jobs.find(job => job.threadId === zero3SkillInstallThreadId) ?? null : null
+  return {
+    activeJob,
+    recoverableJobs: jobs.filter(job => job.status === 'needs_recovery'),
+    approvals: activeJob ? [...zero3SkillInstallApprovals.values()] : []
+  }
+}
+async function zero3DismissSkillInstallJob(value: unknown) {
+  const threadId = zero3CodexRequiredString(zero3CodexRecord(value).threadId, 'threadId', 256)
+  return { removed: await zero3SkillInstallJobStore.remove(threadId) }
+}
+
 async function zero3InstallNativeSkill(value: unknown) {
   const request = zero3CodexSkillInstallParams(value)
   const listing = await zero3CodexAppServer.request('skills/list', { cwds: request.cwd ? [request.cwd] : [], forceReload: true })
@@ -110,15 +168,29 @@ async function zero3InstallNativeSkill(value: unknown) {
   const thread = zero3CodexRecord(threadResponse.thread)
   const threadId = zero3CodexRequiredString(thread.id, 'skill installer thread id', 256)
   const destination = zero3CodexSharedSkillRoot() ?? path.join(os.homedir(), '.codex', 'skills')
+  zero3SkillInstallThreadId = threadId
+  zero3SkillInstallApprovals.clear()
+  await zero3SkillInstallJobStore.record({ threadId, source: request.source, cwd: request.cwd ?? null, destination })
   const prompt = 'Install the Codex Skill using the native skill-installer workflow. Pass --dest ' + JSON.stringify(destination) + ' explicitly to its install script; CODEX_HOME belongs to the isolated Zero3 kernel and is not the installation destination. Do not create a Zero3-specific copy or registry. Report the installed Skill path or the concrete failure. Source: ' + request.source
-  const turn = await zero3CodexAppServer.request('turn/start', {
-    threadId,
-    input: [
-      { type: 'skill', name: 'skill-installer', path: installer.path },
-      { type: 'text', text: prompt, text_elements: [] }
-    ]
-  }, ZERO3_CODEX_TURN_TIMEOUT_MS)
-  return { threadId, source: request.source, destination, turn }
+  try {
+    const turn = await zero3CodexAppServer.request('turn/start', {
+      threadId,
+      input: [
+        { type: 'skill', name: 'skill-installer', path: installer.path },
+        { type: 'text', text: prompt, text_elements: [] }
+      ]
+    }, ZERO3_CODEX_TURN_TIMEOUT_MS)
+    const status = zero3CodexRecord(zero3CodexRecord(turn).turn).status
+    if (status === 'completed' || status === 'interrupted' || status === 'failed') {
+      zero3SkillInstallForget()
+      await zero3SkillInstallJobStore.update(threadId, { status }).catch(() => undefined)
+    }
+    return { threadId, source: request.source, destination, turn }
+  } catch (error) {
+    zero3SkillInstallForget()
+    await zero3SkillInstallJobStore.update(threadId, { status: 'failed', error: error instanceof Error ? error.message : String(error) }).catch(() => undefined)
+    throw error
+  }
 }
 `
 
@@ -192,8 +264,24 @@ export function applyZero3CodexSkills() {
   patchFile('electron/main.ts', [
     {
       label: 'Skill runtime import',
+      appliedMarkers: ["renderZero3SkillContext } from './zero3/skills/index'"],
       from: "import { classifyActiveRuntime } from './active-runtime-state'",
-      to: "import { Zero3SkillBindingStore, Zero3SkillRouter, Zero3SkillUsageLedger, zero3NativeSkillCatalog, renderZero3SkillContext } from './zero3/skills/index'\nimport { classifyActiveRuntime } from './active-runtime-state'"
+      to: "import { Zero3SkillBindingStore, Zero3SkillRouter, Zero3SkillUsageLedger, zero3NativeSkillCatalog, renderZero3SkillContext, Zero3SkillInstallJobStore } from './zero3/skills/index'\nimport { classifyActiveRuntime } from './active-runtime-state'"
+    },
+    {
+      label: 'Skill install job store import on prepared desktops',
+      from: "renderZero3SkillContext } from './zero3/skills/index'",
+      to: "renderZero3SkillContext, Zero3SkillInstallJobStore } from './zero3/skills/index'"
+    },
+    {
+      label: 'skill install approval tracking hook',
+      from: '  private emit(event: Zero3CodexEvent) {\n    for (const listener of this.listeners) {',
+      to: '  private emit(event: Zero3CodexEvent) {\n    zero3SkillInstallRecordEvent(event)\n    for (const listener of this.listeners) {'
+    },
+    {
+      label: 'skill install approval response hook',
+      from: '    this.serverRequests.delete(key)\n    this.writeLine(response)',
+      to: '    this.serverRequests.delete(key)\n    zero3SkillInstallApprovals.delete(key)\n    this.writeLine(response)'
     },
     {
       label: 'native Skill helpers before thread params',
@@ -214,6 +302,11 @@ export function applyZero3CodexSkills() {
       label: 'native Skill IPC handlers',
       from: "ipcMain.handle('zero3:ollama:list-models', () => zero3ListOllamaModels())",
       to: "ipcMain.handle('zero3:ollama:list-models', () => zero3ListOllamaModels())\nipcMain.handle('zero3:codex:skills:list', (_event, request: unknown) => zero3CodexAppServer.request('skills/list', zero3CodexSkillsListParams(request)))\nipcMain.handle('zero3:codex:skills:set-enabled', (_event, request: unknown) => zero3CodexAppServer.request('skills/config/write', zero3CodexSkillsConfigWriteParams(request)))\nipcMain.handle('zero3:codex:skills:install', (_event, request: unknown) => zero3InstallNativeSkill(request))\nipcMain.handle('zero3:codex:skills:read', (_event, request: unknown) => zero3ReadNativeSkill(request))\nipcMain.handle('zero3:codex:skills:bindings:list', () => zero3SkillBindingStore.list())\nipcMain.handle('zero3:codex:skills:bindings:upsert', (_event, request: never) => zero3SkillBindingStore.upsert(request))\nipcMain.handle('zero3:codex:skills:bindings:remove', async (_event, request: unknown) => { const input = zero3CodexRecord(request); return { removed: await zero3SkillBindingStore.remove(input.bindingId) } })"
+    },
+    {
+      label: 'skill install pending IPC handlers',
+      from: "ipcMain.handle('zero3:codex:skills:install', (_event, request: unknown) => zero3InstallNativeSkill(request))",
+      to: "ipcMain.handle('zero3:codex:skills:install', (_event, request: unknown) => zero3InstallNativeSkill(request))\nipcMain.handle('zero3:codex:skills:install:pending', () => zero3PendingSkillInstallState())\nipcMain.handle('zero3:codex:skills:install:dismiss', (_event, request: unknown) => zero3DismissSkillInstallJob(request))"
     }
   ])
 
@@ -253,6 +346,11 @@ export function applyZero3CodexSkills() {
       label: 'native Skills preload surface',
       from: '  ollama: {',
       to: preloadSkills
+    },
+    {
+      label: 'skill install recovery preload surface',
+      from: "    install: request => ipcRenderer.invoke('zero3:codex:skills:install', request),",
+      to: "    install: request => ipcRenderer.invoke('zero3:codex:skills:install', request),\n    pending: () => ipcRenderer.invoke('zero3:codex:skills:install:pending'),\n    dismissInstallJob: request => ipcRenderer.invoke('zero3:codex:skills:install:dismiss', request),"
     }
   ])
 
@@ -292,9 +390,38 @@ type Zero3OllamaModel = {`
   | { type: 'text'; text: string }
   | { type: 'skill'; name: string; path: string }
   | { type: 'localImage'; path: string }`
+    },
+    {
+      label: 'skill install recovery renderer surface',
+      from: '        install: (request: Zero3CodexSkillInstallRequest) => Promise<Zero3CodexSkillInstallResponse>',
+      to: '        install: (request: Zero3CodexSkillInstallRequest) => Promise<Zero3CodexSkillInstallResponse>\n        pending: () => Promise<Zero3SkillInstallPendingState>\n        dismissInstallJob: (request: { threadId: string }) => Promise<{ removed: boolean }>'
+    },
+    {
+      label: 'skill install recovery type declarations',
+      from: 'type Zero3CodexSkillInstallResponse = { threadId: string; source: string; destination: string; turn: unknown }',
+      to: String.raw`type Zero3CodexSkillInstallResponse = { threadId: string; source: string; destination: string; turn: unknown }
+
+type Zero3SkillInstallJobStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'needs_recovery'
+type Zero3SkillInstallJob = {
+  threadId: string
+  source: string
+  cwd: string | null
+  destination: string
+  status: Zero3SkillInstallJobStatus
+  startedAt: string
+  updatedAt: string
+  endedAt: string | null
+  error: string | null
+}
+type Zero3SkillInstallPendingState = {
+  activeJob: Zero3SkillInstallJob | null
+  recoverableJobs: Zero3SkillInstallJob[]
+  approvals: Array<{ id: string | number; method: string; params: unknown }>
+}`
     }
   ])
 
   console.log('Codex native Skills: shared ~/.codex/skills mounted via skills/extraRoots/set; list/config/install stay app-server authoritative.')
   console.log('Codex native Skills: Turn input accepts the upstream skill item; Zero3 maintains no parallel Skill registry or installer.')
+  console.log('Codex native Skills: installer tasks persist across renderer reloads; interrupted installs surface a recovery prompt after restart.')
 }
