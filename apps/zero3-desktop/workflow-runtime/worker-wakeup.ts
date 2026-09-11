@@ -16,6 +16,7 @@ export type WorkerWakeupRuntimePort = {
   deferWakeup(wakeupId: string, reason: string): void
   suppressWakeup(wakeupId: string, reason: string): void
   requireRotationForWakeup(wakeupId: string, reason: string): void
+  issueBindingTicket?(workerSlotId: string, expiresInSeconds?: number): Record<string, unknown>
 }
 
 export type GptWebWakeupPort = {
@@ -123,7 +124,14 @@ export class Zero3WorkerWakeupController {
       return
     }
     try {
-      await this.gpt.sendWakeup(item.logicalSessionId, item.message)
+      let message = item.message
+      if (this.runtime.issueBindingTicket) {
+        const issued = this.runtime.issueBindingTicket(item.workerSlotId, 86_400)
+        const ticket = typeof issued.ticket === 'string' ? issued.ticket.trim() : ''
+        if (!ticket) throw new Error('fresh Worker Binding Ticket is unavailable')
+        message += `\nBindingTicket: ${ticket}`
+      }
+      await this.gpt.sendWakeup(item.logicalSessionId, message)
       this.runtime.markWakeupDelivered(item.wakeupId)
     } catch (error) {
       this.runtime.deferWakeup(item.wakeupId, `GPT Web wakeup delivery failed: ${error instanceof Error ? error.message : String(error)}`)
