@@ -34,6 +34,37 @@ Feature extension sources use `codex-overlays/ext/zero3-<feature>/` and install 
 
 Patch files use `<NNN>-<feature>-<slug>.patch`, for example `010-foundation-extension-registry.patch`. Patch ordering is declared by `manifest.json`; directory iteration order is never authoritative.
 
+## Patch hunk discipline
+
+The apply engine is deliberately fail-closed: a patch must either apply
+cleanly to the current tree or reverse cleanly, which is how the engine proves
+that an already-prepared tree is still the reviewed one. That contract breaks
+when a later feature edits or abuts an earlier feature's added lines, because
+the earlier patch can then no longer reverse:
+
+```text
+patch 010-output-retention-tool-result-projection
+neither applies nor reverses cleanly
+```
+
+Every patch must therefore satisfy one rule: **an added line may never fall
+inside another patch's context window.** Concretely:
+
+- a later feature anchors on pinned Codex source, never on an earlier Zero3
+  patch's added lines; keep at least four lines of distance when a later hunk
+  has to sit near an earlier one;
+- shared integration lists (workspace `members`, dependency tables) are
+  appended by the later feature instead of being interleaved into the earlier
+  feature's entry;
+- when two features genuinely need adjacent code, the earlier patch owns the
+  final spelling of the shared line (for example the `output_retention`
+  binding that D2 consumes) rather than the later patch rewriting it.
+
+`codex-overlays/tests/foundation/reviewed-stack-replay.test.mjs` enforces the
+contract against a detached worktree of the pinned Codex commit: the reviewed
+stack must apply once and report every patch as `already-applied` on the next
+prepare.
+
 ## Ownership
 
 - S0/S1 own `manifest.json`, both schemas, patch ordering, the public apply engine, base-SHA guard, common architecture guard, CI and `patches/foundation/**`.

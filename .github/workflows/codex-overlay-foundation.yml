@@ -37,7 +37,10 @@ jobs:
           components: rustfmt
 
       - name: Overlay engine unit tests
-        run: node --test codex-overlays/tests/foundation/overlay-engine.test.mjs
+        run: |
+          node --test \
+            codex-overlays/tests/foundation/overlay-engine.test.mjs \
+            codex-overlays/tests/foundation/reviewed-stack-replay.test.mjs
 
       - name: Overlay architecture guard
         run: node scripts/check-codex-overlay.mjs

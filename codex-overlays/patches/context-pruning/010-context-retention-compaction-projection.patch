@@ -1,21 +1,13 @@
 diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/extension-api/src/contributors.rs
 --- a/codex-rs/ext/extension-api/src/contributors.rs
 +++ b/codex-rs/ext/extension-api/src/contributors.rs
-@@ -5,6 +5,7 @@ use codex_context_fragments::ContextualUserFragment;
- use codex_context_fragments::ContextualUserFragment;
- use codex_protocol::items::TurnItem;
- use codex_protocol::models::ResponseInputItem;
-+use codex_protocol::models::ResponseItem;
- use codex_protocol::protocol::ReviewDecision;
- use codex_protocol::protocol::TokenUsageInfo;
- use codex_tools::ToolCall;
-@@ -75,6 +76,20 @@ pub struct ToolResultInput<'a> {
-     pub complete_text: Option<&'a str>,
- }
- 
+@@ -67,3 +67,16 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+-
++
 +/// Future returned by the cloned compaction-history projection seam.
 +pub type CompactionHistoryItemFuture<'a> =
-+    ExtensionFuture<'a, Result<Option<ResponseItem>, String>>;
++    ExtensionFuture<'a, Result<Option<codex_protocol::models::ResponseItem>, String>>;
 +
 +/// One item from a private cloned history that is about to become compaction
 +/// model input. Replacements affect only that clone, never authoritative history.
@@ -24,15 +16,12 @@ diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/exten
 +    /// History-envelope turn id when one exists.
 +    pub turn_id: Option<&'a str>,
 +    /// Current model-visible item after earlier contributors in registration order.
-+    pub item: &'a ResponseItem,
++    pub item: &'a codex_protocol::models::ResponseItem,
 +}
-+
- /// Extension contribution that resolves runtime MCP servers from host config.
- ///
- /// Contributors run in registration order. Later contributions for the same
-@@ -360,6 +375,20 @@ pub trait ToolLifecycleContributor: Send + Sync {
-     fn on_tool_result<'a>(&'a self, _input: ToolResultInput<'a>) -> ToolResultFuture<'a> {
-         Box::pin(std::future::ready(Ok(None)))
+ /// Future returned by the post-execution model-projection seam.
+@@ -374,4 +387,18 @@ pub trait ToolLifecycleContributor: Send + Sync {
+     fn on_tool_finish<'a>(&'a self, _input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+         Box::pin(std::future::ready(()))
      }
 +
 +    /// Optionally replaces one item only in the private history clone used to
@@ -48,9 +37,7 @@ diff --git a/codex-rs/ext/extension-api/src/contributors.rs b/codex-rs/ext/exten
 +    ) -> CompactionHistoryItemFuture<'a> {
 +        Box::pin(std::future::ready(Ok(None)))
 +    }
- 
-     /// Called after the tool call returns, is blocked, fails, or is cancelled.
-     ///
+ }
 diff --git a/codex-rs/ext/extension-api/src/lib.rs b/codex-rs/ext/extension-api/src/lib.rs
 --- a/codex-rs/ext/extension-api/src/lib.rs
 +++ b/codex-rs/ext/extension-api/src/lib.rs

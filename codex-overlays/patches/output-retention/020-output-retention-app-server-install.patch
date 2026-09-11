@@ -58,7 +58,7 @@ diff --git a/codex-rs/app-server/src/extensions.rs b/codex-rs/app-server/src/ext
 +    let spill_store = Arc::new(codex_zero3_output_retention::LocalSpillStore::new(
 +        codex_home.join("zero3").join("spills"),
 +    ));
-+    let _output_retention = codex_zero3_output_retention::install(
++    let output_retention = codex_zero3_output_retention::install(
 +        &mut builder,
 +        spill_store,
 +        codex_zero3_output_retention::OutputRetentionConfig::default(),
