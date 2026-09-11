@@ -43,7 +43,12 @@ test('Task Workflow Runtime projects READY GPT stages to Worker v2 and reconcile
     assert.equal(firstSync.seededStageRunIds.length, 2)
 
     snapshot = task.getRun(snapshot.run.workflowRunId)
-    const scriptBinding = buildWorkflowWorkerBindings(snapshot).find(value => value.workerDefinitionId === 'script-worker')!
+    const bindings = buildWorkflowWorkerBindings(snapshot)
+    const scriptBinding = bindings.find(value => value.workerDefinitionId === 'script-worker')!
+    const visualBinding = bindings.find(value => value.workerDefinitionId === 'visual-worker')!
+    const visualSession = worker.openPhysicalSession({ workerSlotId: visualBinding.workerSlotId, logicalSessionId: 'gpt-visual-worker' }) as any
+    const visualIdle = worker.claimWorkV2({ bindingTicket: visualSession.ticket, idempotencyKey: 'claim-visual-before-ready', maxItems: 1 }) as any
+    assert.equal(visualIdle.state, 'NO_WORK_AVAILABLE')
     const opened = worker.openPhysicalSession({ workerSlotId: scriptBinding.workerSlotId, logicalSessionId: 'gpt-script-worker' }) as any
     const claimResult = worker.claimWorkV2({
       bindingTicket: opened.ticket,
@@ -94,6 +99,8 @@ test('Task Workflow Runtime projects READY GPT stages to Worker v2 and reconcile
     const visualMirror = mirrored.stages.find((value: any) => value.metadata?.authoritativeStageRunId === snapshot.stages.find(stage => stage.itemId === taskStage.itemId && stage.stageId === 'visual-plan')?.stageRunId)
     assert.ok(visualMirror)
     assert.equal(visualMirror.inputs.some((value: any) => value.logicalName === '重构脚本.md' && value.storage.fileId === 'rewritten-drive-1'), true)
+    const wakeups = worker.pendingWakeups()
+    assert.equal(wakeups.some(value => value.workerDefinitionId === 'visual-worker' && value.logicalSessionId === 'gpt-visual-worker'), true)
   } finally {
     workerStore.close()
     taskStore.close()

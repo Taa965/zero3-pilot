@@ -47,7 +47,8 @@ The module declares logical WorkerDefinitions (`script-worker`, `visual-worker`,
 
 The long-lived Web-GPT Worker Runtime is treated as a lease/session execution mirror, not as the business Workflow authority. `Zero3WorkflowWorkerProjectionService` publishes only Task-side `READY` / `FIX_REQUIRED` GPT StageRuns into the Worker Runtime. Each mirror StageRun carries `authoritativeStageRunId` and `authoritativeAttempt`. When the plugin commits structured Artifacts, the projection translates them back to the authoritative WorkItem/StageRun, verifies storage, and passes the Task Completion Gate before downstream work is released.
 
-This also solves dynamic Artifact inputs. Downstream visual/image work is not pre-seeded with stale inputs: the Task Runtime first records and verifies the upstream Artifact, then creates a fresh Worker mirror unit whose inputs contain the actual Drive `fileId`. A failed verification increments the authoritative retry attempt and therefore creates a new mirror identity instead of pretending a completed plugin mirror can be reused.
+This also solves dynamic Artifact inputs. Downstream visual/image work is not pre-seeded with stale inputs: the Task Runtime first records and verifies the upstream Artifact, then creates a fresh Worker mirror unit whose inputs contain the actual Drive `fileId`. A failed verification increments the authoritative retry attempt and therefore creates a new mirror identity instead of pretending a completed plugin mirror can be reused. When a newly projected stage changes a Worker Runtime queue from empty to READY, the shared P5 wakeup controller can wake the bound idle GPT Web physical session; Task Center does not need to push a full per-item prompt for every script.
+
 
 ## Worker queue authority
 
