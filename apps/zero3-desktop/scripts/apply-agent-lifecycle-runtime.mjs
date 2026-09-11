@@ -126,7 +126,8 @@ const zero3AutonomousTaskLoop = new Zero3AutonomousTaskLoop(
       createTask: input => zero3ExecutionRuntime.createTask(input as any) as any,
       refreshSkillPreflight: taskId => zero3ExecutionRuntime.refreshSkillPreflight(taskId),
       reconcileReadiness: taskId => zero3ExecutionRuntime.reconcileReadiness(taskId) as any,
-      transitionStep: (taskId, stepId, status, reason) => zero3ExecutionRuntime.transitionStep(taskId, stepId, status as any, reason) as any
+      transitionStep: (taskId, stepId, status, reason) => zero3ExecutionRuntime.transitionStep(taskId, stepId, status as any, reason) as any,
+      transitionTask: (taskId, status, reason) => zero3ExecutionRuntime.runtime.transitionTask(taskId, status as any, reason) as any
     },
     lifecycle: {
       sessionStart: input => zero3AgentLifecycleRuntime.sessionStart(input) as any,
@@ -144,6 +145,8 @@ const zero3AutonomousTaskLoop = new Zero3AutonomousTaskLoop(
   }
 )
 void app.whenReady().then(() => zero3AutonomousTaskLoop.start())
+ipcMain.handle('zero3:autonomous:status', () => zero3AutonomousTaskLoop.status())
+ipcMain.handle('zero3:autonomous:reconcile-project', (_event, projectId: unknown) => zero3AutonomousTaskLoop.reconcileProjectNow(String(projectId)))
 function zero3WorkflowWorkerInput(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('workflow worker request must be an object')
   return value as Record<string, unknown>

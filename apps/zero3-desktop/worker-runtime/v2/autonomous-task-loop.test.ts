@@ -134,7 +134,8 @@ async function makeHarness(entities: MemoryEntity[] = [], options: { autoDispatc
       createTask: async (input: Record<string, unknown>) => await execution.createTask(input as any) as any,
       refreshSkillPreflight: (taskId: string) => execution.refreshSkillPreflight(taskId),
       reconcileReadiness: async (taskId: string) => await execution.reconcileReadiness(taskId) as any,
-      transitionStep: async (taskId: string, stepId: string, status: string, reason?: string) => await execution.transitionStep(taskId, stepId, status as any, reason) as any
+      transitionStep: async (taskId: string, stepId: string, status: string, reason?: string) => await execution.transitionStep(taskId, stepId, status as any, reason) as any,
+      transitionTask: async (taskId: string, status: string, reason?: string) => await execution.runtime.transitionTask(taskId, status as any, reason) as any
     },
     lifecycle: {
       sessionStart: (input: Record<string, unknown>) => lifecycle.sessionStart(input) as any,
@@ -154,12 +155,13 @@ async function makeHarness(entities: MemoryEntity[] = [], options: { autoDispatc
 async function cleanup(h: Harness, closeStore = true): Promise<void> {
   h.loop.stop()
   if (closeStore) h.store.close()
-  await rm(h.root, { recursive: true, force: true })
+  await new Promise(resolve => setTimeout(resolve, 25))
+  await rm(h.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 })
 }
 
 test('task-worthy memory intake is durable and duplicate/restart replay creates only one task', async () => {
   const h = await makeHarness([
-    memoryEntity('warning', { title: '输入框锁死', message: 'GPT 执行时输入框长期锁死', executor: 'GPT_WEB' }),
+    memoryEntity('problem', { title: '输入框锁死', message: 'GPT 执行时输入框长期锁死', executor: 'GPT_WEB' }),
     memoryEntity('decision', { text: 'This is context, not work.' }),
     memoryEntity('task_outcome', { origin: ZERO3_AUTONOMOUS_TASK_LOOP, state: 'blocked' }, 'loop-outcome')
   ])
@@ -294,7 +296,7 @@ test('autonomous loop self-generated memory can never re-enter intake', async ()
 
 test('GPT_WEB autonomous dispatch uses lifecycle claim once and never double-assigns on repeated ticks', async () => {
   const h = await makeHarness([
-    memoryEntity('warning', { title: 'Recover timeout session', message: 'Rotate a stuck GPT conversation', executor: 'GPT_WEB' })
+    memoryEntity('problem', { title: 'Recover timeout session', message: 'Rotate a stuck GPT conversation', executor: 'GPT_WEB' })
   ], { autoDispatch: true })
   try {
     await h.loop.tick()
@@ -361,7 +363,8 @@ test('unsupported executor fails closed, writes one outcome, and outcome memory 
     assert.equal(tasks.length, 1)
     assert.equal(tasks[0].runtime.assignments.length, 0)
     assert.equal(tasks[0].runtime.steps[0].status, 'waiting_human')
-    assert.match(tasks[0].runtime.steps[0].blocker, /launcher for CODEX/)
+    assert.match(tasks[0].runtime.steps[0].blocker, /Post-plugin capability gate/)
+    assert.match(h.store.listAutonomousIntakes(PROJECT_ID)[0].humanAttentionReason ?? '', /Post-plugin capability gate/)
     assert.equal(h.gpt.created.length, 0)
     assert.equal(h.memory.published.length, 1)
     const payload = h.memory.published[0].payload as Record<string, unknown>
@@ -389,5 +392,106 @@ test('terminal completion outcome writeback is idempotent across ticks', async (
     const completedEvents = h.memory.published.filter(event => event.event_type === 'task.completed')
     assert.equal(completedEvents.length, 1)
     assert.equal((completedEvents[0].payload as Record<string, unknown>).origin, ZERO3_AUTONOMOUS_TASK_LOOP)
+  } finally { await cleanup(h) }
+})
+
+
+test('v1.3 warning governance defers without creating an Execution Task', async () => {
+  const h = await makeHarness([
+    memoryEntity('warning', { title: 'Minor layout warning', message: 'Button spacing is slightly off.' }, 'warning-defer')
+  ])
+  try {
+    await h.loop.tick()
+    assert.equal((await h.execution.listTasks() as any[]).length, 0)
+    const intake = h.store.listAutonomousIntakes(PROJECT_ID)[0]
+    assert.equal(intake.disposition, 'DEFER')
+    assert.equal(intake.taskId, null)
+  } finally { await cleanup(h) }
+})
+
+test('v1.3 blocking issue interrupts parent and creates one lineage-linked child task', async () => {
+  const h = await makeHarness([])
+  try {
+    await h.execution.createTask({
+      task: { taskId: 'root-task', projectId: PROJECT_ID, workspace: h.root, title: 'Root', goal: 'Finish root', workflowId: null,
+        maxParallelSteps: 1, createdBySessionId: null, metadata: {} },
+      steps: [{ stepId: 'root-step', title: 'Root step', objective: 'Continue root', executor: 'GPT_WEB', dependsOn: [],
+        inputArtifacts: [], expectedOutputs: [], completionGate: ['human_review'], maxAttempts: 3, metadata: {} }]
+    } as any)
+    h.memory.context.entities.push({ memory_class: 'task', task_id: 'root-task', entity_type: 'blocker', entity_id: 'push-denied', version: 1,
+      content: { title: 'Git push denied', message: 'origin/main permission denied', blocking: true, executor: 'GPT_WEB', affectedResources: ['repo:zero3-pilot'] } })
+    await h.loop.tick()
+    const tasks = await h.execution.listTasks() as any[]
+    assert.equal(tasks.length, 2)
+    const child = tasks.find(task => task.definition.task.taskId !== 'root-task')
+    assert.equal(child.definition.task.metadata.autonomousLineage.rootTaskId, 'root-task')
+    assert.equal(child.definition.task.metadata.autonomousLineage.parentTaskId, 'root-task')
+    assert.equal(child.definition.task.metadata.autonomousLineage.resumeParentOnComplete, true)
+    const parent = await h.execution.getTask('root-task') as any
+    assert.equal(parent.runtime.task.status, 'blocked')
+    assert.equal(parent.runtime.steps[0].status, 'blocked')
+  } finally { await cleanup(h) }
+})
+
+test('v1.3 attention budget prevents recursive autonomous spawn', async () => {
+  const h = await makeHarness([])
+  try {
+    await h.execution.createTask({
+      task: { taskId: 'budget-parent', projectId: PROJECT_ID, workspace: h.root, title: 'Budget parent', goal: 'Do not recurse forever',
+        workflowId: 'autonomous-task-loop', maxParallelSteps: 1, createdBySessionId: null,
+        metadata: { autonomousTaskLoop: ZERO3_AUTONOMOUS_TASK_LOOP, autonomousLineage: { rootTaskId: 'budget-root', childDepth: 4 } } },
+      steps: [{ stepId: 'parent-step', title: 'Parent', objective: 'Parent', executor: 'GPT_WEB', dependsOn: [], inputArtifacts: [],
+        expectedOutputs: [], completionGate: ['human_review'], maxAttempts: 3, metadata: {} }]
+    } as any)
+    h.memory.context.entities.push({ memory_class: 'task', task_id: 'budget-parent', entity_type: 'problem', entity_id: 'recursive-problem', version: 1,
+      content: { title: 'Nested issue', message: 'Would exceed child depth', requires_action: true, executor: 'GPT_WEB' } })
+    await h.loop.tick()
+    const tasks = await h.execution.listTasks() as any[]
+    assert.equal(tasks.length, 1)
+    const intake = h.store.listAutonomousIntakes(PROJECT_ID)[0]
+    assert.equal(intake.disposition, 'DEFER')
+    assert.match(intake.humanAttentionReason ?? '', /maxChildDepth/)
+  } finally { await cleanup(h) }
+})
+
+test('v1.3 completed repair resumes blocked parent exactly once', async () => {
+  const h = await makeHarness([])
+  try {
+    await h.execution.createTask({
+      task: { taskId: 'resume-root', projectId: PROJECT_ID, workspace: h.root, title: 'Resume root', goal: 'Resume me', workflowId: null,
+        maxParallelSteps: 1, createdBySessionId: null, metadata: {} },
+      steps: [{ stepId: 'resume-step', title: 'Resume step', objective: 'Continue after repair', executor: 'GPT_WEB', dependsOn: [],
+        inputArtifacts: [], expectedOutputs: [], completionGate: ['human_review'], maxAttempts: 3, metadata: {} }]
+    } as any)
+    h.memory.context.entities.push({ memory_class: 'task', task_id: 'resume-root', entity_type: 'blocker', entity_id: 'resume-blocker', version: 1,
+      content: { title: 'Repair me', message: 'Blocking repair', blocking: true, executor: 'GPT_WEB' } })
+    await h.loop.tick()
+    const child = (await h.execution.listTasks() as any[]).find(task => task.definition.task.taskId !== 'resume-root')
+    await h.execution.createAssignment(child.definition.task.taskId, 'auto-work', 'GPT_WEB', 'test-worker')
+    await h.execution.runtime.requestCompletion(child.definition.task.taskId, 'auto-work')
+    await h.execution.runtime.gatePassed(child.definition.task.taskId, 'auto-work', { source: 'test' })
+    await h.loop.tick()
+    await h.loop.tick()
+    const parent = await h.execution.getTask('resume-root') as any
+    assert.equal(parent.runtime.task.status, 'ready')
+    assert.equal(parent.runtime.steps[0].status, 'ready')
+    assert.equal(h.store.getParentResumeReceipt(child.definition.task.taskId)?.state, 'RESUMED')
+    const readyEvents = parent.events.filter((event: any) => event.type === 'task.state_changed' && event.payload?.to === 'ready')
+    assert.equal(readyEvents.length, 1)
+  } finally { await cleanup(h) }
+})
+
+test('v1.3 guard event trigger and periodic reconciliation remain idempotent', async () => {
+  const h = await makeHarness([])
+  try {
+    await h.loop.ingestGuardEvent({
+      source: 'git', projectId: PROJECT_ID, eventRef: 'git-event-1', kind: 'push_failed',
+      message: 'origin/main permission denied', blocking: true, affectedResources: ['repo:zero3-pilot']
+    })
+    await h.loop.tick()
+    await h.loop.reconcileProjectNow(PROJECT_ID)
+    const tasks = await h.execution.listTasks() as any[]
+    assert.equal(tasks.length, 1)
+    assert.equal(h.store.listAutonomousIntakes(PROJECT_ID).length, 1)
   } finally { await cleanup(h) }
 })

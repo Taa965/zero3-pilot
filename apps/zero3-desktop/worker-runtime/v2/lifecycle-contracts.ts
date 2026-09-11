@@ -8,6 +8,22 @@ export type LifecycleCompletionState = 'COMPLETION_REQUESTED' | 'COMPLETED_WITH_
 export type LifecycleEventType = 'decision' | 'progress' | 'warning' | 'error' | 'discovery' | 'user_instruction' | 'dependency'
 export type LifecycleImportance = 'low' | 'normal' | 'high' | 'critical'
 
+export type AutonomousDisposition = 'IGNORE' | 'OBSERVE' | 'DEFER' | 'PARALLEL' | 'INTERRUPT'
+export type AutonomousSeverity = 'low' | 'normal' | 'high' | 'blocking'
+export type AutonomousMainlineImpact = 'none' | 'defer' | 'parallel' | 'interrupt'
+export type AutonomousAttentionCost = 'low' | 'medium' | 'high'
+export type AutonomousParentResumeState = 'PENDING' | 'RESUMED' | 'WAITING_HUMAN'
+
+export type AutonomousParentResumeReceipt = {
+  childTaskId: string
+  parentTaskId: string
+  parentStepId: string | null
+  state: AutonomousParentResumeState
+  reason: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export type AgentLifecycleSession = {
   sessionId: string
   agentId: string
@@ -89,6 +105,19 @@ export type AutonomousTaskIntakeRecord = {
   fingerprint: string
   taskId: string | null
   detail: Record<string, unknown>
+  category?: string | null
+  severity?: AutonomousSeverity | null
+  confidence?: number | null
+  affectedResources?: readonly string[]
+  mainlineImpact?: AutonomousMainlineImpact | null
+  disposition?: AutonomousDisposition | null
+  decisionReason?: string | null
+  rootTaskId?: string | null
+  parentTaskId?: string | null
+  attentionCost?: AutonomousAttentionCost | null
+  sourceRefs?: readonly string[]
+  resolvedAt?: string | null
+  humanAttentionReason?: string | null
   firstSeenAt: string
   lastSeenAt: string
 }

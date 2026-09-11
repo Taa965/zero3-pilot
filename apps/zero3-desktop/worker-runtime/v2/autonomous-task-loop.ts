@@ -2,6 +2,17 @@ import { createHash } from 'node:crypto'
 
 import type { ExecutionExecutorTarget, ExecutionTaskSnapshot } from '../../execution-runtime/contracts.ts'
 import { Zero3AgentLifecycleStore } from './lifecycle-store.ts'
+import {
+  DEFAULT_AUTONOMOUS_ATTENTION_BUDGET,
+  decideAutonomousCandidate,
+  evaluateAttentionBudget,
+  evaluatePluginCapabilityBaseline,
+  guardEventToCandidate,
+  routeAutonomousCapabilities,
+  type AutonomousAttentionBudget,
+  type AutonomousCapabilityProvider,
+  type AutonomousGuardEvent
+} from './autonomous-orchestrator.ts'
 
 export const ZERO3_AUTONOMOUS_TASK_LOOP = 'zero3.pilot.autonomous-task-loop.v1' as const
 
@@ -37,6 +48,7 @@ export type AutonomousTaskExecutionPort = {
     recommendedExecutorByStep: Readonly<Record<string, string>>
   }>
   transitionStep(taskId: string, stepId: string, status: string, reason?: string): Promise<ExecutionTaskSnapshot>
+  transitionTask?(taskId: string, status: string, reason?: string): Promise<ExecutionTaskSnapshot>
 }
 
 export type AutonomousTaskLifecyclePort = {
@@ -54,7 +66,14 @@ export type AutonomousTaskLoopOptions = {
   autoDispatch?: boolean
   intervalMs?: number
   maxCreatesPerProjectTick?: number
+  attentionBudget?: Partial<AutonomousAttentionBudget>
+  advertisedPluginCapabilities?: readonly string[]
   clock?: () => Date
+}
+
+export type AutonomousAgentDispatchPort = {
+  listProviders(): Promise<AutonomousCapabilityProvider[]>
+  dispatch(input: { task: ExecutionTaskSnapshot; stepId: string; provider: AutonomousCapabilityProvider }): Promise<{ dispatched: boolean; reason?: string | null }>
 }
 
 type Candidate = {
@@ -234,6 +253,8 @@ export class Zero3AutonomousTaskLoop {
   private readonly clock: () => Date
   private readonly intervalMs: number
   private readonly maxCreates: number
+  private readonly attentionBudget: AutonomousAttentionBudget
+  private readonly projectTails = new Map<string, Promise<void>>()
   private timer: NodeJS.Timeout | null = null
   private ticking = false
   private lastError: string | null = null
@@ -246,12 +267,14 @@ export class Zero3AutonomousTaskLoop {
       execution: AutonomousTaskExecutionPort
       lifecycle: AutonomousTaskLifecyclePort
       gpt: AutonomousTaskGptPort
+      agentDispatch?: AutonomousAgentDispatchPort
     },
     readonly options: AutonomousTaskLoopOptions = {}
   ) {
     this.clock = options.clock ?? (() => new Date())
     this.intervalMs = Math.max(5_000, Math.min(options.intervalMs ?? 30_000, 300_000))
     this.maxCreates = Math.max(1, Math.min(options.maxCreatesPerProjectTick ?? 20, 100))
+    this.attentionBudget = { ...DEFAULT_AUTONOMOUS_ATTENTION_BUDGET, ...(options.attentionBudget ?? {}) }
   }
 
   start(): void {
@@ -266,8 +289,15 @@ export class Zero3AutonomousTaskLoop {
     this.timer = null
   }
 
-  status(): { enabled: boolean; autoDispatch: boolean; ticking: boolean; intervalMs: number; lastError: string | null } {
-    return { enabled: this.options.enabled === true, autoDispatch: this.options.autoDispatch === true, ticking: this.ticking, intervalMs: this.intervalMs, lastError: this.lastError }
+  status(): { enabled: boolean; autoDispatch: boolean; ticking: boolean; intervalMs: number; lastError: string | null; pluginBaseline: ReturnType<typeof evaluatePluginCapabilityBaseline> } {
+    return {
+      enabled: this.options.enabled === true,
+      autoDispatch: this.options.autoDispatch === true,
+      ticking: this.ticking,
+      intervalMs: this.intervalMs,
+      lastError: this.lastError,
+      pluginBaseline: evaluatePluginCapabilityBaseline(this.options.advertisedPluginCapabilities ?? [])
+    }
   }
 
   // An unattended loop must never reject: an unhandled rejection in the Electron main process
@@ -283,11 +313,54 @@ export class Zero3AutonomousTaskLoop {
       let projects: ProjectRecord[]
       try { projects = await this.ports.projects.list() } catch (error) { this.noteError(error); return }
       for (const project of projects) {
-        try { await this.reconcileProject(project) } catch (error) { this.noteError(error) }
+        try { await this.enqueueProject(project) } catch (error) { this.noteError(error) }
       }
     } finally {
       this.ticking = false
     }
+  }
+
+  async reconcileProjectNow(projectId: string): Promise<void> {
+    const project = (await this.ports.projects.list()).find(item => item.id === projectId)
+    if (!project) throw new Error(`autonomous project not found: ${projectId}`)
+    await this.enqueueProject(project)
+  }
+
+  async ingestGuardEvent(event: AutonomousGuardEvent): Promise<void> {
+    const project = (await this.ports.projects.list()).find(item => item.id === event.projectId)
+    if (!project) throw new Error(`autonomous project not found: ${event.projectId}`)
+    const guard = guardEventToCandidate(event)
+    const detail: JsonObject = { ...guard.detail, source_refs: guard.sourceRefs }
+    const semantic = semanticKey(detail)
+    const semanticDedupe = semantic !== null && SEMANTIC_DEDUPE_TYPES.has(guard.entityType)
+    const fingerprint = semanticDedupe
+      ? hash({ version: SEMANTIC_FINGERPRINT_VERSION, kind: 'semantic', entityType: guard.entityType, semantic })
+      : hash({ version: SEMANTIC_FINGERPRINT_VERSION, kind: 'guard', entityType: guard.entityType, eventRef: event.eventRef, detail })
+    const candidate: Candidate = {
+      sourceKey: `ati-guard-${hash(`${event.projectId}|${event.eventRef}`).slice(0, 42)}`,
+      fingerprint,
+      entityType: guard.entityType,
+      entityId: event.eventRef.slice(0, 512),
+      sourceTaskId: guard.sourceTaskId,
+      sourceVersion: 1,
+      detail,
+      title: candidateTitle(guard.entityType, detail),
+      goal: candidateGoal(guard.entityType, detail),
+      executor: executor(detail.executor ?? detail.target),
+      requiredSkills: listOfStrings(detail.requiredSkills ?? detail.required_skills),
+      optionalSkills: listOfStrings(detail.optionalSkills ?? detail.optional_skills),
+      semanticDedupe
+    }
+    await this.ingest(project, candidate)
+    await this.enqueueProject(project)
+  }
+
+  private enqueueProject(project: ProjectRecord): Promise<void> {
+    const previous = this.projectTails.get(project.id) ?? Promise.resolve()
+    const current = previous.then(() => this.reconcileProject(project)).catch(error => { this.noteError(error) })
+    this.projectTails.set(project.id, current)
+    void current.finally(() => { if (this.projectTails.get(project.id) === current) this.projectTails.delete(project.id) })
+    return current
   }
 
   private async reconcileProject(project: ProjectRecord): Promise<void> {
@@ -319,6 +392,7 @@ export class Zero3AutonomousTaskLoop {
       try {
         await this.reconcileTask(snapshot)
         const latest = await this.ports.execution.getTask(taskId)
+        await this.reconcileParentResume(latest)
         await this.publishOutcome(memory, context, latest)
       } catch (error) {
         this.noteError(error)
@@ -329,73 +403,109 @@ export class Zero3AutonomousTaskLoop {
   private async ingest(project: ProjectRecord, candidate: Candidate): Promise<boolean> {
     const at = nowIso(this.clock)
     const existing = this.store.getAutonomousIntake(candidate.sourceKey)
-    // A stale entity version (older cache/offline replay) must never rewrite newer intake state.
     if (existing && candidate.sourceVersion < existing.sourceVersion) return false
-    // Source identity dedupe first: the same canonical entity always resolves to the same Task.
-    // Semantic dedupe second: a different entity/source reporting the same structured problem on
-    // the same project reuses that Task instead of opening a duplicate one.
+
+    const decision = decideAutonomousCandidate({ entityType: candidate.entityType, detail: candidate.detail, sourceTaskId: candidate.sourceTaskId })
+    const tasks = await this.ports.execution.listTasks()
+    let parent: ExecutionTaskSnapshot | null = null
+    if (candidate.sourceTaskId) {
+      try { parent = await this.ports.execution.getTask(candidate.sourceTaskId) } catch {}
+    }
+    const parentMeta = record(parent?.definition.task.metadata)
+    const parentAuto = record(parentMeta.autonomousLineage)
+    const detailRoot = typeof candidate.detail.rootTaskId === 'string' ? candidate.detail.rootTaskId
+      : typeof candidate.detail.root_task_id === 'string' ? candidate.detail.root_task_id : null
+    const detailParent = typeof candidate.detail.parentTaskId === 'string' ? candidate.detail.parentTaskId
+      : typeof candidate.detail.parent_task_id === 'string' ? candidate.detail.parent_task_id : null
+    const rootTaskId = detailRoot ?? (typeof parentAuto.rootTaskId === 'string' ? parentAuto.rootTaskId : candidate.sourceTaskId)
+    const parentTaskId = detailParent ?? candidate.sourceTaskId
+    const requestedParentStep = typeof candidate.detail.parentStepId === 'string' ? candidate.detail.parentStepId
+      : typeof candidate.detail.parent_step_id === 'string' ? candidate.detail.parent_step_id : null
+    const parentStep = parent?.runtime.steps.find(step => step.stepId === requestedParentStep)
+      ?? parent?.runtime.steps.find(step => ['running','dispatching','waiting_report','verifying','fix_required','ready','blocked','waiting_human'].includes(step.status))
+      ?? null
+    const parentDepth = Number.isSafeInteger(Number(parentAuto.childDepth)) ? Number(parentAuto.childDepth) : 0
+    const childDepth = parentTaskId ? parentDepth + 1 : 0
+    const sourceRefs = [...new Set([
+      ...listOfStrings(candidate.detail.sourceRefs ?? candidate.detail.source_refs),
+      `memory://${candidate.entityType}/${candidate.entityId}`
+    ])]
+    const governedFingerprint = candidate.semanticDedupe
+      ? hash({ base: candidate.fingerprint, category: decision.category, resources: [...decision.affectedResources].sort(), rootTaskId })
+      : candidate.fingerprint
     const linked = existing?.taskId ? null : candidate.semanticDedupe
-      ? this.store.findAutonomousIntakeByFingerprint(project.id, candidate.entityType, candidate.fingerprint)
+      ? this.store.findAutonomousIntakeByFingerprint(project.id, candidate.entityType, governedFingerprint)
+        ?? this.store.findAutonomousIntakeByFingerprint(project.id, candidate.entityType, candidate.fingerprint)
       : null
     const semanticTaskId = linked ? linked.taskId ?? taskIdFor(linked.sourceKey) : null
-    const taskId = existing?.taskId ?? semanticTaskId ?? taskIdFor(candidate.sourceKey)
-    this.store.upsertAutonomousIntake({
-      sourceKey: candidate.sourceKey,
-      projectId: project.id,
-      entityType: candidate.entityType,
-      entityId: candidate.entityId,
-      sourceTaskId: candidate.sourceTaskId,
-      sourceVersion: candidate.sourceVersion,
-      fingerprint: candidate.fingerprint,
-      taskId: existing?.taskId ?? semanticTaskId ?? null,
-      detail: candidate.detail,
-      at
-    })
-    let snapshot: ExecutionTaskSnapshot | null = null
-    try { snapshot = await this.ports.execution.getTask(taskId) } catch {}
-    if (!snapshot) {
-      const completionGate = listOfStrings(candidate.detail.completionGate ?? candidate.detail.completion_gate)
-      snapshot = await this.ports.execution.createTask({
-        task: {
-          taskId,
-          projectId: project.id,
-          workspace: project.rootPath?.trim() || null,
-          title: candidate.title,
-          goal: candidate.goal,
-          workflowId: 'autonomous-task-loop',
-          maxParallelSteps: 1,
-          createdBySessionId: null,
-          metadata: {
-            autonomous: true,
-            autonomousTaskLoop: ZERO3_AUTONOMOUS_TASK_LOOP,
-            sourceKey: candidate.sourceKey,
-            sourceEntityType: candidate.entityType,
-            sourceEntityId: candidate.entityId,
-            sourceTaskId: candidate.sourceTaskId,
-            sourceVersion: candidate.sourceVersion,
-            sourceFingerprint: candidate.fingerprint
-          }
-        },
-        steps: [{
-          stepId: 'auto-work',
-          title: candidate.title,
-          objective: candidate.goal,
-          executor: candidate.executor,
-          dependsOn: [],
-          requiredSkills: candidate.requiredSkills,
-          optionalSkills: candidate.optionalSkills,
-          inputArtifacts: [],
-          expectedOutputs: [],
-          completionGate: completionGate.length ? completionGate : ['human_review'],
-          maxAttempts: 3,
-          metadata: { autonomousTaskLoop: ZERO3_AUTONOMOUS_TASK_LOOP, sourceKey: candidate.sourceKey }
-        }]
-      })
-      this.store.bindAutonomousTask(candidate.sourceKey, taskId, at)
-      return true
+    let disposition = decision.disposition
+    let humanAttentionReason: string | null = null
+    const activeAutoTasks = tasks.filter(snapshot => snapshot.definition.task.metadata?.autonomousTaskLoop === ZERO3_AUTONOMOUS_TASK_LOOP
+      && !['completed','cancelled','failed'].includes(snapshot.runtime.task.status))
+    const spawnedForRoot = tasks.filter(snapshot => snapshot.definition.task.metadata?.autonomousTaskLoop === ZERO3_AUTONOMOUS_TASK_LOOP
+      && record(snapshot.definition.task.metadata?.autonomousLineage).rootTaskId === rootTaskId).length
+    const autonomousSessions = activeAutoTasks.reduce((count, snapshot) => count + snapshot.runtime.sessionBindings.filter(binding => !['closed','lost'].includes(binding.state)).length, 0)
+    const budget = evaluateAttentionBudget({ childDepth, parallelAutoTasks: activeAutoTasks.length, spawnedForRoot, retries: 0, autonomousSessions }, this.attentionBudget)
+    if ((disposition === 'PARALLEL' || disposition === 'INTERRUPT') && !budget.allowed) {
+      disposition = 'DEFER'
+      humanAttentionReason = `Autonomous attention budget prevented task creation: ${budget.reason}`
     }
-    if (!existing?.taskId) this.store.bindAutonomousTask(candidate.sourceKey, taskId, at)
-    return false
+    const taskId = existing?.taskId ?? semanticTaskId ?? null
+    this.store.upsertAutonomousIntake({
+      sourceKey: candidate.sourceKey, projectId: project.id, entityType: candidate.entityType, entityId: candidate.entityId,
+      sourceTaskId: candidate.sourceTaskId, sourceVersion: candidate.sourceVersion, fingerprint: governedFingerprint, taskId,
+      detail: candidate.detail, category: decision.category, severity: decision.severity, confidence: decision.confidence,
+      affectedResources: decision.affectedResources, mainlineImpact: decision.mainlineImpact, disposition,
+      decisionReason: decision.decisionReason, rootTaskId, parentTaskId, attentionCost: decision.attentionCost, sourceRefs,
+      humanAttentionReason, at
+    })
+    if (disposition !== 'PARALLEL' && disposition !== 'INTERRUPT') return false
+    const resolvedTaskId = taskId ?? taskIdFor(linked?.sourceKey ?? candidate.sourceKey)
+    let snapshot: ExecutionTaskSnapshot | null = null
+    try { snapshot = await this.ports.execution.getTask(resolvedTaskId) } catch {}
+    if (snapshot) {
+      if (!existing?.taskId) this.store.bindAutonomousTask(candidate.sourceKey, resolvedTaskId, at)
+      return false
+    }
+    const completionGate = listOfStrings(candidate.detail.completionGate ?? candidate.detail.completion_gate)
+    snapshot = await this.ports.execution.createTask({
+      task: {
+        taskId: resolvedTaskId, projectId: project.id, workspace: project.rootPath?.trim() || null,
+        title: candidate.title, goal: candidate.goal, workflowId: 'autonomous-task-loop', maxParallelSteps: 1,
+        createdBySessionId: null,
+        metadata: {
+          autonomous: true, autonomousTaskLoop: ZERO3_AUTONOMOUS_TASK_LOOP, sourceKey: candidate.sourceKey,
+          sourceEntityType: candidate.entityType, sourceEntityId: candidate.entityId, sourceTaskId: candidate.sourceTaskId,
+          sourceVersion: candidate.sourceVersion, sourceFingerprint: governedFingerprint,
+          autonomousLineage: {
+            rootTaskId, parentTaskId, parentStepId: parentStep?.stepId ?? requestedParentStep,
+            sourceCandidateId: candidate.sourceKey, sourceEventRefs: sourceRefs,
+            creationReason: disposition, resumeParentOnComplete: Boolean(parentTaskId), childDepth
+          }
+        }
+      },
+      steps: [{
+        stepId: 'auto-work', title: candidate.title, objective: candidate.goal, executor: candidate.executor, dependsOn: [],
+        requiredSkills: candidate.requiredSkills, optionalSkills: candidate.optionalSkills, inputArtifacts: [], expectedOutputs: [],
+        completionGate: completionGate.length ? completionGate : ['human_review'], maxAttempts: Math.min(this.attentionBudget.maxRetries, 3),
+        metadata: { autonomousTaskLoop: ZERO3_AUTONOMOUS_TASK_LOOP, sourceKey: candidate.sourceKey, rootTaskId, parentTaskId }
+      }]
+    })
+    this.store.bindAutonomousTask(candidate.sourceKey, resolvedTaskId, at)
+    if (disposition === 'INTERRUPT' && parent && parentStep) {
+      if (parentStep.status !== 'blocked') await this.ports.execution.transitionStep(parent.definition.task.taskId, parentStep.stepId, 'blocked', `Autonomous blocking issue: ${candidate.title}`)
+      const parentStatus = parent.runtime.task.status
+      if (this.ports.execution.transitionTask && ['ready','running','waiting_human'].includes(parentStatus)) {
+        await this.ports.execution.transitionTask(parent.definition.task.taskId, 'blocked', `Autonomous blocking issue: ${candidate.title}`)
+      }
+    }
+    return true
+  }
+
+  private markTaskHumanAttention(taskId: string, reason: string): void {
+    for (const intake of this.store.listAutonomousIntakes().filter(item => item.taskId === taskId && !item.resolvedAt)) {
+      this.store.setAutonomousHumanAttention(intake.sourceKey, reason, nowIso(this.clock))
+    }
   }
 
   private async reconcileTask(initial: ExecutionTaskSnapshot): Promise<void> {
@@ -414,16 +524,93 @@ export class Zero3AutonomousTaskLoop {
         ? runtime.skillPreflight?.executor ?? (plan.recommendedExecutorByStep[stepId] as ExecutionExecutorTarget | undefined) ?? null
         : step.executor
       if (!target) {
+        this.markTaskHumanAttention(taskId, 'Autonomous routing produced no safe executor; manual assignment required.')
         await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', 'Autonomous routing produced no safe executor; manual assignment required.')
         continue
       }
       if (target !== 'GPT_WEB') {
-        await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', `Autonomous launcher for ${target} is not enabled on the authoritative Execution Runtime; manual assignment required.`)
+        const baseline = evaluatePluginCapabilityBaseline(this.options.advertisedPluginCapabilities ?? [])
+        if (!baseline.ready || !this.ports.agentDispatch) {
+          const reason = `Post-plugin capability gate is not ready for ${target}; missing: ${baseline.missing.join(', ') || 'agent dispatch adapter'}.`
+          this.markTaskHumanAttention(taskId, reason)
+          await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', reason)
+          continue
+        }
+        const stepMetadata = record(step.metadata)
+        const requiredCapabilities = listOfStrings(stepMetadata.requiredCapabilities ?? stepMetadata.required_capabilities)
+        const providers = (await this.ports.agentDispatch.listProviders()).filter(provider => provider.executor === target)
+        const route = routeAutonomousCapabilities(requiredCapabilities, providers)
+        if (route.state !== 'READY' || !route.provider) {
+          this.markTaskHumanAttention(taskId, route.reason)
+          await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', route.reason)
+          continue
+        }
+        const dispatched = await this.ports.agentDispatch.dispatch({ task: snapshot, stepId, provider: route.provider })
+        if (!dispatched.dispatched) {
+          const reason = dispatched.reason ?? 'Autonomous agent dispatch failed closed.'
+          this.markTaskHumanAttention(taskId, reason)
+          await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', reason)
+          continue
+        }
+        const observed = await this.ports.execution.getTask(taskId)
+        if (!observed.runtime.steps.find(item => item.stepId === stepId)?.assignmentId) {
+          this.markTaskHumanAttention(taskId, 'Agent dispatch returned without an authoritative Execution Assignment.')
+          await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', 'Agent dispatch returned without an authoritative Execution Assignment.')
+        }
+        snapshot = await this.ports.execution.getTask(taskId)
         continue
       }
       await this.launchGpt(snapshot, stepId, runtime.attempt + 1)
       snapshot = await this.ports.execution.getTask(taskId)
     }
+  }
+
+  private async reconcileParentResume(snapshot: ExecutionTaskSnapshot): Promise<void> {
+    if (snapshot.runtime.task.status !== 'completed') return
+    const lineage = record(snapshot.definition.task.metadata?.autonomousLineage)
+    if (lineage.resumeParentOnComplete !== true || typeof lineage.parentTaskId !== 'string') return
+    const childTaskId = snapshot.definition.task.taskId
+    const parentTaskId = lineage.parentTaskId
+    const parentStepId = typeof lineage.parentStepId === 'string' ? lineage.parentStepId : null
+    const receipt = this.store.putParentResumeReceipt({ childTaskId, parentTaskId, parentStepId, at: nowIso(this.clock) })
+    if (receipt.state === 'RESUMED') return
+    const sourceIntakes = this.store.listAutonomousIntakes(snapshot.definition.task.projectId ?? undefined).filter(item => item.taskId === childTaskId)
+    const requireHuman = (reason: string) => {
+      for (const intake of sourceIntakes) this.store.setAutonomousHumanAttention(intake.sourceKey, reason, nowIso(this.clock))
+      this.store.updateParentResumeReceipt(childTaskId, 'WAITING_HUMAN', reason, nowIso(this.clock))
+    }
+    let parent: ExecutionTaskSnapshot
+    try { parent = await this.ports.execution.getTask(parentTaskId) }
+    catch {
+      requireHuman('Parent task is not available for autonomous resume.')
+      return
+    }
+    if (['completed','cancelled','outcome_unknown'].includes(parent.runtime.task.status)) {
+      requireHuman(`Parent task is ${parent.runtime.task.status}; automatic resume is unsafe.`)
+      return
+    }
+    const parentStep = parentStepId ? parent.runtime.steps.find(step => step.stepId === parentStepId) : null
+    if (parentStep && parentStep.status === 'outcome_unknown') {
+      requireHuman('Parent step outcome is unknown; automatic resume is unsafe.')
+      return
+    }
+    if (parentStep && ['blocked','waiting_human','failed'].includes(parentStep.status)) {
+      await this.ports.execution.transitionStep(parentTaskId, parentStep.stepId, 'ready', `Autonomous repair ${childTaskId} completed.`)
+    }
+    const refreshedParent = await this.ports.execution.getTask(parentTaskId)
+    if (['blocked','waiting_human','failed'].includes(refreshedParent.runtime.task.status)) {
+      if (!this.ports.execution.transitionTask) {
+        requireHuman('Execution Task transition API is unavailable for parent resume.')
+        return
+      }
+      await this.ports.execution.transitionTask(parentTaskId, 'ready', `Autonomous repair ${childTaskId} completed.`)
+    }
+    await this.ports.execution.reconcileReadiness(parentTaskId)
+    for (const intake of sourceIntakes) {
+      if (!intake.resolvedAt) this.store.markAutonomousIntakeResolved(intake.sourceKey, nowIso(this.clock))
+      this.store.setAutonomousHumanAttention(intake.sourceKey, null, nowIso(this.clock))
+    }
+    this.store.updateParentResumeReceipt(childTaskId, 'RESUMED', null, nowIso(this.clock))
   }
 
   private async resumeWakeup(snapshot: ExecutionTaskSnapshot): Promise<void> {

@@ -35,7 +35,9 @@ on:
       - 'scripts/check-cognitive-store-worker-p6.mjs'
       - 'scripts/check-worker-station-manager-final.mjs'
       - 'scripts/check-agent-shared-state-mvp.mjs'
+      - 'scripts/check-autonomous-task-runtime-v1-3.mjs'
       - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
+      - 'docs/AUTONOMOUS_TASK_RUNTIME_V1_3.md'
       - 'skills/zero3-web-worker/**'
       - 'skills/README.md'
       - '.github/workflows/execution-system-v1.yml'
@@ -73,7 +75,9 @@ on:
       - 'scripts/check-cognitive-store-worker-p6.mjs'
       - 'scripts/check-worker-station-manager-final.mjs'
       - 'scripts/check-agent-shared-state-mvp.mjs'
+      - 'scripts/check-autonomous-task-runtime-v1-3.mjs'
       - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
+      - 'docs/AUTONOMOUS_TASK_RUNTIME_V1_3.md'
       - 'skills/zero3-web-worker/**'
       - 'skills/README.md'
       - '.github/workflows/execution-system-v1.yml'
@@ -130,5 +134,9 @@ jobs:
         run: node scripts/check-agent-shared-state-mvp.mjs
       - name: Shared organizational state lifecycle tests
         run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/lifecycle-runtime.test.ts
+      - name: Autonomous Task Runtime v1.3 architecture guard
+        run: node scripts/check-autonomous-task-runtime-v1-3.mjs
+      - name: Autonomous Task Runtime v1.3 behavior
+        run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/autonomous-task-loop.test.ts apps/zero3-desktop/worker-runtime/v2/autonomous-orchestrator.test.ts
       - name: Web MCP access policy tests
         run: node --test apps/zero3-desktop/mcp-runtime/project-context-http-policy.test.mjs
