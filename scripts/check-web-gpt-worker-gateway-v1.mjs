@@ -17,7 +17,7 @@ const workerRpc = read('apps/zero3-desktop/host-runtime/remote-worker-rpc.ts')
 const overlay = read('apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs')
 const design = read('docs/WEB_GPT_PRIVATE_GATEWAY_V1.md')
 
-const tools = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context','session_start','context_resolve','task_claim','event_record','artifact_register','task_complete','memory_commit','handoff_create']
+const tools = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context','session_start','context_resolve','task_claim','event_record','artifact_register','task_complete','memory_commit','handoff_create','bootstrap_worker','commit_and_claim_next','report_blocked','recover_worker']
 for (const tool of tools) {
   requireText(gateway, `"${tool}"`, `AWS Worker Gateway is missing ${tool}.`)
   requireText(workerRpc, `case '${tool}':`, `Local Worker RPC adapter is missing ${tool}.`)
@@ -42,7 +42,7 @@ requireText(remoteNode, 'await this.client.completeWorkerRpc(lease, result)', 'L
 requireText(remoteClient, "capabilities: ['worker-protocol-v1']", 'Worker RPC leasing must advertise only the bounded Worker capability.')
 requireText(overlay, "'remote-worker-rpc.ts'", 'Prepared desktop must include the Worker RPC adapter.')
 const lifecycleOverlay = read('apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs')
-requireText(lifecycleOverlay, '}, () => zero3WorkerRpcRuntime())', 'Prepared desktop must bind Remote Host Worker RPC to the composite V1 + lifecycle runtime.')
+requireText(lifecycleOverlay, '}, () => zero3WorkerRpcRuntime())', 'Prepared desktop must bind Remote Host Worker RPC to the composite V1 + Workflow Worker v2 + lifecycle runtime.')
 requireText(design, 'local Worker Runtime (SQLite)', 'Gateway design must keep WorkUnit/Claim authority local.')
 
 for (const forbidden of [

@@ -66,6 +66,10 @@ export type Zero3WorkerRpcTool =
   | 'task_complete'
   | 'memory_commit'
   | 'handoff_create'
+  | 'bootstrap_worker'
+  | 'commit_and_claim_next'
+  | 'report_blocked'
+  | 'recover_worker'
 
 export type Zero3RemoteWorkerRpcLease = {
   request_id: string

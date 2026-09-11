@@ -22,6 +22,23 @@ When lifecycle tools are available, follow this order:
 
 If `context_version` may be stale, use Zero3 context checking/recovery rather than rereading another GPT conversation.
 
+## Workflow Worker v2 long-lived station loop
+
+When Zero3 supplies a Worker Binding Ticket, treat the current GPT conversation as one physical session attached to a long-lived WorkerSlot. Do not call `register_worker` for this mode.
+
+1. Call `bootstrap_worker` with the binding ticket before doing work. Use the returned role, prompt revision, max batch size and active Claim as authoritative.
+2. Call `claim_work` with `bindingTicket` and a fresh idempotency key. Do not scan Google Drive or project storage to choose work.
+3. Execute only the returned StageRun/WorkItem and use the exact required Skill revision when specified.
+4. Use `report_progress` with `bindingTicket` for long-running work and Claim lease renewal.
+5. Upload durable files through the appropriate storage app (for example Google Drive), then submit structured Artifact metadata with `commit_and_claim_next`.
+6. `commit_and_claim_next` is the normal loop boundary: it commits the current StageRun(s), releases dependent stages immediately and returns the next Claim when available.
+7. When Zero3 returns `NO_WORK_AVAILABLE`, stop the current turn and enter WAITING. Do not busy-poll. Zero3 Wakeup is responsible for prompting the station again when work transitions READY.
+8. If Zero3 returns `ROTATE_REQUIRED`, stop claiming new work. The current physical session must be replaced; the old Binding Ticket generation becomes invalid.
+9. Use `report_blocked` for `BLOCKED_RETRYABLE`, `WAITING_HUMAN`, or `BLOCKED_TERMINAL`. Do not invent retry policy yourself.
+10. After refresh/context loss, call `recover_worker`; never reconstruct active Claim state from chat history.
+
+The same `claim_work` / `report_progress` names support V1 and V2. The presence of `bindingTicket` selects Workflow Worker v2. Never remove or alter the ticket when retrying the same request.
+
 ## V1 WorkUnit compatibility loop
 
 For a legacy Assignment/WorkUnit job that supplies the V1 identities, keep the existing loop:

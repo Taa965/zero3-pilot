@@ -29,17 +29,31 @@ function fakeRuntime(calls: string[]): Zero3WorkerRuntimePort {
     artifactRegister(input) { calls.push('artifact_register'); return { input } },
     taskComplete(input) { calls.push('task_complete'); return { input } },
     memoryCommit(input) { calls.push('memory_commit'); return { input } },
-    handoffCreate(input) { calls.push('handoff_create'); return { input } }
+    handoffCreate(input) { calls.push('handoff_create'); return { input } },
+    bootstrapWorker(input) { calls.push('bootstrap_worker'); return { input } },
+    claimWorkV2(input) { calls.push('claim_work_v2'); return { input } },
+    reportProgressV2(input) { calls.push('report_progress_v2'); return { input } },
+    commitAndClaimNextV2(input) { calls.push('commit_and_claim_next'); return { input } },
+    reportBlockedV2(input) { calls.push('report_blocked'); return { input } },
+    recoverWorker(input) { calls.push('recover_worker'); return { input } }
   }
 }
 
 test('worker RPC executor exposes the bounded Worker Protocol and shared lifecycle actions', async () => {
-  const expected = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context','session_start','context_resolve','task_claim','event_record','artifact_register','task_complete','memory_commit','handoff_create']
+  const expected = ['register_worker','claim_work','report_progress','complete_and_claim_next','report_failure','get_task_context','session_start','context_resolve','task_claim','event_record','artifact_register','task_complete','memory_commit','handoff_create','bootstrap_worker','commit_and_claim_next','report_blocked','recover_worker']
   const calls: string[] = []
   const runtime = fakeRuntime(calls)
   for (const tool of expected) await executeZero3WorkerRpc(runtime, lease(tool, { tool }))
   assert.deepEqual(calls, expected)
 })
+test('claim_work and report_progress route binding tickets to Worker Protocol v2', async () => {
+  const calls: string[] = []
+  const runtime = fakeRuntime(calls)
+  await executeZero3WorkerRpc(runtime, lease('claim_work', { bindingTicket: 'ticket', idempotencyKey: 'c1' }))
+  await executeZero3WorkerRpc(runtime, lease('report_progress', { bindingTicket: 'ticket', claimId: 'c', progress: 0.5, idempotencyKey: 'p1' }))
+  assert.deepEqual(calls, ['claim_work_v2', 'report_progress_v2'])
+})
+
 test('worker RPC rejects every non-Worker-Protocol tool before local dispatch', async () => {
   for (const tool of ['dispatch_codex', 'run_gpu', 'shell', 'workflow_admin', 'file_write']) {
     assert.throws(() => assertZero3WorkerRpcLease(lease(tool)), /tool is not allowed/)

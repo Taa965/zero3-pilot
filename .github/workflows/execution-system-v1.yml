@@ -25,6 +25,7 @@ on:
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V1.md'
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V2.md'
       - 'scripts/check-worker-protocol-v2-p1.mjs'
+      - 'scripts/check-worker-protocol-v2-p2-p3.mjs'
       - 'scripts/check-agent-shared-state-mvp.mjs'
       - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
       - 'skills/zero3-web-worker/**'
@@ -54,6 +55,7 @@ on:
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V1.md'
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V2.md'
       - 'scripts/check-worker-protocol-v2-p1.mjs'
+      - 'scripts/check-worker-protocol-v2-p2-p3.mjs'
       - 'scripts/check-agent-shared-state-mvp.mjs'
       - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
       - 'skills/zero3-web-worker/**'
@@ -92,6 +94,10 @@ jobs:
         run: node scripts/check-worker-protocol-v2-p1.mjs
       - name: Worker Protocol v2 P1 contracts
         run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/p1-contracts.test.ts
+      - name: Worker Protocol v2 P2/P3 guard
+        run: node scripts/check-worker-protocol-v2-p2-p3.mjs
+      - name: Worker Protocol v2 long-lived runtime
+        run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/workflow-worker-runtime.test.ts
       - name: Shared organizational state architecture guard
         run: node scripts/check-agent-shared-state-mvp.mjs
       - name: Shared organizational state lifecycle tests

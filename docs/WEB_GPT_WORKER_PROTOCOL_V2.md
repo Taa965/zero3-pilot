@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase P1 protocol/schema baseline is implemented. V1 remains fully supported and is not replaced in P1.
+Phases P1-P4 are implemented: contracts, long-lived Worker Runtime v2, Private Gateway v2 and the long-lived GPT Worker Skill. V1 remains fully supported for compatibility.
 
 ## Purpose
 
@@ -64,7 +64,7 @@ report_failure
 get_task_context
 ```
 
-P1 does not migrate the existing SQLite tables and does not alter Gateway behavior. `adaptV1WorkUnitToV2` and Artifact adapters provide the explicit bridge needed by P2.
+V1 tables and tools remain intact. V2 uses separate Workflow worker tables and the shared Private Gateway routes `claim_work` / `report_progress` by the presence of `bindingTicket`. `adaptV1WorkUnitToV2` and Artifact adapters remain the explicit compatibility bridge.
 
 ## P1 acceptance
 
@@ -76,4 +76,18 @@ The static acceptance set covers:
 - signature tamper and expiry rejection;
 - existing V1 runtime claim behavior after V2 is added.
 
-Phase P2 will add the V2 persistent WorkerSlot / Physical Session / Claim runtime and `commit_and_claim_next` transaction semantics.
+## P2 long-lived runtime
+
+V2 persists WorkflowRun, WorkerBinding, WorkerSlot, PhysicalWorkerSession, WorkItem, StageRun, Claim, Lease, generation history and worker events in a dedicated SQLite authority. `commit_and_claim_next` completes the current StageRun(s), validates required structured Artifacts, releases downstream StageRuns per WorkItem immediately, and claims the next available work in the same transaction.
+
+Session rotation increments the WorkerSlot generation. Any old Binding Ticket is fenced. Lease expiry returns retryable StageRuns to READY and lets another worker slot claim them.
+
+## P3 Private Gateway v2
+
+The private MCP catalog now includes `bootstrap_worker`, `commit_and_claim_next`, `report_blocked`, and `recover_worker`. Existing `claim_work` / `report_progress` remain one public tool each; `bindingTicket` selects v2 while legacy Task/Step/Assignment identities continue to select v1.
+
+Zero3-only administration (`ensureRun`, `ensureBinding`, `addItems`, `openSession`, `rotateSession`, snapshot and lease expiry) is exposed only through local Electron IPC and is not registered as GPT MCP tools.
+
+## P4 long-lived Worker Skill
+
+`skills/zero3-web-worker/SKILL.md` now requires bootstrap, bounded claim execution, structured Artifact commit, NO_WORK_AVAILABLE waiting behavior, generation rotation handling, blocked reporting and authoritative recovery after context loss.
