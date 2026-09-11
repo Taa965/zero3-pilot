@@ -1,6 +1,16 @@
 name: Codex Overlay Foundation
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'codex-overlays/**'
+      - 'scripts/codex-overlay.mjs'
+      - 'scripts/check-codex-overlay.mjs'
+      - 'apps/zero3-desktop/**'
+      - 'docs/UPSTREAM.md'
+      - 'docs/donors/**'
+      - '.github/workflows/codex-overlay-foundation.yml'
   pull_request:
     branches: [main]
     paths:
@@ -11,6 +21,7 @@ on:
       - 'docs/UPSTREAM.md'
       - 'docs/donors/**'
       - '.github/workflows/codex-overlay-foundation.yml'
+  workflow_dispatch:
 
 jobs:
   overlay-foundation:
