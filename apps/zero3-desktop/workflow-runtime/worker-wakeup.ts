@@ -21,7 +21,7 @@ export type WorkerWakeupRuntimePort = {
 export type GptWebWakeupPort = {
   executionStatus(entryId: string): Promise<{
     executing: boolean
-    health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'recovering' | 'recovery_failed' | null
+    health: 'active' | 'idle' | 'stalled' | 'timeout_error' | 'recovering' | 'recovery_failed' | 'rotating' | 'rotation_failed' | null
   }>
   sendWakeup(entryId: string, message: string): Promise<{ sent: true }>
 }
@@ -110,11 +110,11 @@ export class Zero3WorkerWakeupController {
       }
       return
     }
-    if (status.health === 'timeout_error' || status.health === 'recovering') {
+    if (status.health === 'timeout_error' || status.health === 'recovering' || status.health === 'rotating') {
       this.runtime.deferWakeup(item.wakeupId, `GPT Web session recovery is in progress (${status.health})`)
       return
     }
-    if (status.health === 'recovery_failed') {
+    if (status.health === 'recovery_failed' || status.health === 'rotation_failed') {
       if (item.attemptCount >= this.stalledAttemptsBeforeRotate) {
         this.runtime.requireRotationForWakeup(item.wakeupId, 'GPT Web timeout recovery failed; physical session rotation required')
       } else {

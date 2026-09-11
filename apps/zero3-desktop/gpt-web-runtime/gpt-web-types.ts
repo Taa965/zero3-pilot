@@ -37,6 +37,8 @@ export type Zero3GptWebExecutionHealth =
   | 'timeout_error'
   | 'recovering'
   | 'recovery_failed'
+  | 'rotating'
+  | 'rotation_failed'
 export type Zero3GptWebExecutionStatus = {
   executing: boolean
   health: Zero3GptWebExecutionHealth | null

@@ -113,7 +113,7 @@ export function Zero3AppShell() {
       executionIdleForMs: status.idleForMs,
       recoveryAttempt: status.recoveryAttempt
     } : session))
-    if (status.health === 'timeout_error' || status.health === 'recovering' || status.health === 'recovery_failed') {
+    if (status.health === 'timeout_error' || status.health === 'recovering' || status.health === 'recovery_failed' || status.health === 'rotating' || status.health === 'rotation_failed') {
       setSessionCompletionUnread(sessionId, false)
     } else if (previous === true && !status.executing && status.health === null) {
       setSessionCompletionUnread(sessionId, viewedSessionIdRef.current !== sessionId)

@@ -157,7 +157,9 @@ export function UnifiedSessionList({
     const timeoutError = health === 'timeout_error'
     const recovering = health === 'recovering'
     const recoveryFailed = health === 'recovery_failed'
-    const attentionRing = executing || completionUnread || timeoutError || recovering || recoveryFailed
+    const rotating = health === 'rotating'
+    const rotationFailed = health === 'rotation_failed'
+    const attentionRing = executing || completionUnread || timeoutError || recovering || recoveryFailed || rotating || rotationFailed
     const mark = PROVIDER_MARKS[session.provider]
     return (
       <button
@@ -183,12 +185,12 @@ export function UnifiedSessionList({
           <div className="flex min-w-0 items-center gap-1.5 font-medium">
             <span
               className="relative grid size-4 shrink-0 place-items-center"
-              title={recoveryFailed ? '自动恢复失败，需要人工处理' : recovering ? '检测到发送超时，正在自动继续（1/1）' : timeoutError ? '检测到消息发送超时，准备自动恢复' : stalled ? '疑似卡住：已超过 5 分钟没有可见进展' : idle ? '执行中：已超过 90 秒没有可见进展' : executing ? '正在执行' : completionUnread ? '执行完成，尚未查看' : undefined}
+              title={rotationFailed ? '新会话接管失败，需要人工处理' : rotating ? '旧会话锁死，正在切换新的 GPT 会话' : recoveryFailed ? '自动恢复失败，准备切换新会话' : recovering ? '检测到发送超时，正在自动继续（1/1）' : timeoutError ? '检测到消息发送超时，准备自动恢复' : stalled ? '疑似卡住：已超过 5 分钟没有可见进展' : idle ? '执行中：已超过 90 秒没有可见进展' : executing ? '正在执行' : completionUnread ? '执行完成，尚未查看' : undefined}
             >
               {attentionRing && (
                 <span className={cn(
                   'pointer-events-none absolute inset-[-2px] rounded-full border',
-                  recoveryFailed || timeoutError || stalled ? 'border-red-500' : recovering || idle ? 'border-amber-500' : 'border-emerald-500'
+                  rotationFailed || recoveryFailed || timeoutError || stalled ? 'border-red-500' : rotating || recovering || idle ? 'border-amber-500' : 'border-emerald-500'
                 )} />
               )}
               {executing && health === 'active' && (
@@ -206,6 +208,9 @@ export function UnifiedSessionList({
               {recovering && (
                 <span className="pointer-events-none absolute inset-[-3px] rounded-full border border-amber-400/80 motion-safe:animate-pulse" />
               )}
+              {rotating && (
+                <span className="pointer-events-none absolute inset-[-3px] rounded-full border border-amber-400/80 motion-safe:animate-pulse" />
+              )}
               {completionUnread && !executing && health === null && (
                 <span className="pointer-events-none absolute -right-1 -top-1 z-20 size-2 rounded-full bg-red-500" />
               )}
@@ -216,7 +221,9 @@ export function UnifiedSessionList({
             {stalled && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">疑似卡住</span>}
             {timeoutError && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">发送超时</span>}
             {recovering && <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-normal text-amber-600">自动恢复 1/1</span>}
-            {recoveryFailed && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">恢复失败</span>}
+            {recoveryFailed && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">准备换会话</span>}
+            {rotating && <span className="shrink-0 rounded bg-amber-500/10 px-1 text-[10px] font-normal text-amber-600">切换新会话</span>}
+            {rotationFailed && <span className="shrink-0 rounded bg-red-500/10 px-1 text-[10px] font-normal text-red-600">换会话失败</span>}
             {archived && <Codicon name="archive" className="size-3.5 shrink-0 text-(--ui-text-tertiary)" />}
           </div>
           <span className="shrink-0 pl-2 text-xs text-(--ui-text-tertiary)">{session.updatedAt}</span>

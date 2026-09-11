@@ -6,6 +6,8 @@ export type WorkspaceExecutionHealth =
   | 'timeout_error'
   | 'recovering'
   | 'recovery_failed'
+  | 'rotating'
+  | 'rotation_failed'
 
 export type WorkspaceSession = {
   id: string

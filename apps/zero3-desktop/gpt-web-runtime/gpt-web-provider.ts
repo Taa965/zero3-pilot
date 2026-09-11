@@ -65,6 +65,9 @@ const EXECUTION_STALLED_AFTER_MS = 5 * 60_000
 const TIMEOUT_RECOVERY_DELAY_MS = 3_000
 const TIMEOUT_RECOVERY_START_TIMEOUT_MS = 15_000
 const TIMEOUT_RECOVERY_PROMPT = '现在完成到哪一步了？如果还没完成，请继续执行'
+const TIMEOUT_LOCKED_ROTATION_DELAY_MS = 15_000
+const MAX_TIMEOUT_PHYSICAL_ROTATIONS = 1
+const TIMEOUT_ROTATION_PROMPT = '刚才的会话因消息发送超时且一直卡在执行中，已切换到新的会话。现在完成到哪一步了？如果还没完成，请从未完成的位置继续执行，不要重复已经完成的部分。如果这是 Zero3 Worker 任务，请先调用 recover_worker 获取当前任务状态和最后检查点，再继续。'
 const RENDER_WAIT_TIMEOUT_MS = 8_000
 const SNAPSHOT_MAX_COUNT = 30
 const SNAPSHOT_MAX_WIDTH = 1_280
@@ -397,6 +400,9 @@ export class Zero3GptWebProvider {
   private readonly executionStates = new Map<string, Zero3GptWebExecutionStatus>()
   private readonly timeoutRecoveryStates = new Map<string, { phase: 'scheduled' | 'recovering' | 'failed'; sentAt: number | null; sawExecutionAfterSend: boolean }>()
   private readonly timeoutRecoveryTimers = new Map<string, NodeJS.Timeout>()
+  private readonly timeoutRotationStates = new Map<string, { phase: 'scheduled' | 'rotating' | 'failed'; startedAt: number | null }>()
+  private readonly timeoutRotationTimers = new Map<string, NodeJS.Timeout>()
+  private readonly timeoutRotationAttempts = new Map<string, number>()
   private profileSession: Session | null = null
   private loginWindow: BrowserWindow | null = null
   private persistenceTail: Promise<void> = Promise.resolve()
@@ -702,7 +708,7 @@ export class Zero3GptWebProvider {
   async executionStatus(idValue: unknown): Promise<Zero3GptWebExecutionStatus> {
     const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
     const live = this.live.get(id)
-    if (!live || live.view.webContents.isDestroyed()) return stoppedExecutionStatus()
+    if (!live || live.view.webContents.isDestroyed()) return this.executionStates.get(id) ?? stoppedExecutionStatus()
     const detected = await this.readExecutionState(live)
     if (detected !== null) {
       const effective = this.withTimeoutRecoveryState(live.entryId, detected)
@@ -934,6 +940,9 @@ export class Zero3GptWebProvider {
 
 
   private withTimeoutRecoveryState(entryId: string, status: Zero3GptWebExecutionStatus): Zero3GptWebExecutionStatus {
+    const rotation = this.timeoutRotationStates.get(entryId)
+    if (rotation?.phase === 'rotating') return { ...status, health: 'rotating', recoveryAttempt: 1 }
+    if (rotation?.phase === 'failed') return { ...status, health: 'rotation_failed', recoveryAttempt: 1 }
     const state = this.timeoutRecoveryStates.get(entryId)
     if (state?.phase === 'recovering') return { ...status, health: 'recovering', recoveryAttempt: 1 }
     if (state?.phase === 'failed') return { ...status, health: 'recovery_failed', recoveryAttempt: 1 }
@@ -945,6 +954,24 @@ export class Zero3GptWebProvider {
     if (timer) clearTimeout(timer)
     this.timeoutRecoveryTimers.delete(entryId)
     this.timeoutRecoveryStates.delete(entryId)
+  }
+
+  private clearTimeoutRotation(entryId: string, resetAttempt = false): void {
+    const timer = this.timeoutRotationTimers.get(entryId)
+    if (timer) clearTimeout(timer)
+    this.timeoutRotationTimers.delete(entryId)
+    this.timeoutRotationStates.delete(entryId)
+    if (resetAttempt) this.timeoutRotationAttempts.delete(entryId)
+  }
+
+  private scheduleTimeoutRotation(live: LiveGptWebView, delayMs = TIMEOUT_LOCKED_ROTATION_DELAY_MS): void {
+    const attempts = this.timeoutRotationAttempts.get(live.entryId) ?? 0
+    if (attempts >= MAX_TIMEOUT_PHYSICAL_ROTATIONS) return
+    if (this.timeoutRotationStates.has(live.entryId) || this.timeoutRotationTimers.has(live.entryId)) return
+    this.timeoutRotationStates.set(live.entryId, { phase: 'scheduled', startedAt: null })
+    const timer = setTimeout(() => void this.attemptTimeoutRotation(live.entryId), delayMs)
+    timer.unref?.()
+    this.timeoutRotationTimers.set(live.entryId, timer)
   }
 
   private scheduleTimeoutRecovery(live: LiveGptWebView): void {
@@ -966,6 +993,75 @@ export class Zero3GptWebProvider {
     }
   }
 
+
+  private async archivePreRotationConversation(entry: Zero3GptWebWorkspaceEntry): Promise<void> {
+    if (!entry.conversationUrl) return
+    try {
+      const history = await this.entries.createGptWeb({ projectId: entry.projectId, homeUrl: entry.currentUrl })
+      await this.entries.updateGptWebNavigation({
+        id: history.id,
+        currentUrl: entry.currentUrl,
+        conversationUrl: entry.conversationUrl,
+        ...(entry.pageTitle ? { pageTitle: entry.pageTitle } : {})
+      })
+      const baseTitle = entry.localDisplayTitle ?? entry.pageTitle ?? 'GPT 会话'
+      await this.entries.rename({ id: history.id, title: `恢复前：${baseTitle}`.slice(0, 500) })
+      await this.entries.setArchived({ id: history.id, archived: true })
+    } catch {
+      // History preservation is best-effort; recovery must not be blocked by archive capacity or I/O.
+    }
+  }
+
+  private async rotatePhysicalConversation(entryId: string): Promise<void> {
+    const entry = await this.requireEntry(entryId)
+    const live = this.live.get(entryId)
+    if (!live || live.view.webContents.isDestroyed()) throw new Error('GPT Web view is not live for rotation')
+    await this.archivePreRotationConversation(entry)
+    const target = await this.boundProjectUrl(entry.projectId) ?? ZERO3_GPT_WEB_HOME
+    await this.entries.updateGptWebNavigation({ id: entryId, currentUrl: target, conversationUrl: null })
+    await this.loadPage(live, target)
+    if (live.view.webContents.isDestroyed()) throw new Error('GPT Web view was destroyed during rotation')
+    await sendChatGptWakeup(live.view.webContents, TIMEOUT_ROTATION_PROMPT)
+    live.lastUsedAt = Date.now()
+    this.bump(entryId)
+  }
+
+  private async attemptTimeoutRotation(entryId: string): Promise<void> {
+    const timer = this.timeoutRotationTimers.get(entryId)
+    if (timer) clearTimeout(timer)
+    this.timeoutRotationTimers.delete(entryId)
+    const rotation = this.timeoutRotationStates.get(entryId)
+    if (!rotation || rotation.phase !== 'scheduled') return
+    const live = this.live.get(entryId)
+    if (!live || live.view.webContents.isDestroyed()) { this.clearTimeoutRotation(entryId); return }
+    const detected = await this.readExecutionState(live)
+    const recovery = this.timeoutRecoveryStates.get(entryId)
+    const eligible = recovery?.phase === 'failed' || (detected?.health === 'timeout_error' && detected.executing)
+    if (!eligible) { this.clearTimeoutRotation(entryId); if (detected) this.publishExecutionState(entryId, detected); return }
+    const attempts = this.timeoutRotationAttempts.get(entryId) ?? 0
+    if (attempts >= MAX_TIMEOUT_PHYSICAL_ROTATIONS) {
+      rotation.phase = 'failed'
+      rotation.startedAt = Date.now()
+      if (detected) this.publishExecutionState(entryId, detected)
+      return
+    }
+    this.timeoutRotationAttempts.set(entryId, attempts + 1)
+    rotation.phase = 'rotating'
+    rotation.startedAt = Date.now()
+    this.clearTimeoutRecovery(entryId)
+    this.publishExecutionState(entryId, detected ?? stoppedExecutionStatus())
+    try {
+      await this.rotatePhysicalConversation(entryId)
+      this.timeoutRotationStates.delete(entryId)
+      this.timeoutRecoveryStates.set(entryId, { phase: 'recovering', sentAt: Date.now(), sawExecutionAfterSend: false })
+      const current = await this.readExecutionState(live) ?? stoppedExecutionStatus()
+      this.publishExecutionState(entryId, current)
+    } catch {
+      rotation.phase = 'failed'
+      const current = await this.readExecutionState(live) ?? stoppedExecutionStatus()
+      this.publishExecutionState(entryId, current)
+    }
+  }
 
   private async attemptTimeoutRecovery(entryId: string): Promise<void> {
     const timer = this.timeoutRecoveryTimers.get(entryId)
@@ -1001,36 +1097,65 @@ export class Zero3GptWebProvider {
 
   private async handleExecutionProbe(live: LiveGptWebView, status: Zero3GptWebExecutionStatus): Promise<void> {
     const entryId = live.entryId
-    const state = this.timeoutRecoveryStates.get(entryId)
-    if (state?.phase === 'failed') {
-      if (status.executing && status.health !== 'timeout_error') {
+    const rotation = this.timeoutRotationStates.get(entryId)
+    const recovery = this.timeoutRecoveryStates.get(entryId)
+    if (rotation?.phase === 'failed') {
+      if (status.executing && status.health === 'active') {
+        this.clearTimeoutRotation(entryId, true)
         this.clearTimeoutRecovery(entryId)
         this.publishExecutionState(entryId, status)
-      } else this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, status))
+      } else this.publishExecutionState(entryId, status)
       return
     }
-    if (state?.phase === 'recovering') {
-      if (status.executing) {
-        state.sawExecutionAfterSend = true
-        this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, status))
-        return
+    if (rotation?.phase === 'rotating') {
+      this.publishExecutionState(entryId, status)
+      return
+    }
+    if (recovery?.phase === 'failed') {
+      this.publishExecutionState(entryId, status)
+      if ((this.timeoutRotationAttempts.get(entryId) ?? 0) < MAX_TIMEOUT_PHYSICAL_ROTATIONS) {
+        this.scheduleTimeoutRotation(live, 1_000)
+      } else {
+        this.timeoutRotationStates.set(entryId, { phase: 'failed', startedAt: Date.now() })
+        this.publishExecutionState(entryId, status)
       }
-      const elapsed = state.sentAt ? Date.now() - state.sentAt : TIMEOUT_RECOVERY_START_TIMEOUT_MS
+      return
+    }
+    if (recovery?.phase === 'recovering') {
+      const elapsed = recovery.sentAt ? Date.now() - recovery.sentAt : TIMEOUT_RECOVERY_START_TIMEOUT_MS
       if (status.health === 'timeout_error') {
-        if (state.sawExecutionAfterSend || elapsed >= TIMEOUT_RECOVERY_START_TIMEOUT_MS) state.phase = 'failed'
-        this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, status))
+        if (elapsed < TIMEOUT_RECOVERY_START_TIMEOUT_MS && !recovery.sawExecutionAfterSend) {
+          this.publishExecutionState(entryId, status)
+          return
+        }
+        recovery.phase = 'failed'
+        this.publishExecutionState(entryId, status)
+        if ((this.timeoutRotationAttempts.get(entryId) ?? 0) < MAX_TIMEOUT_PHYSICAL_ROTATIONS) this.scheduleTimeoutRotation(live, 1_000)
+        else this.timeoutRotationStates.set(entryId, { phase: 'failed', startedAt: Date.now() })
         return
       }
-      if (state.sawExecutionAfterSend) {
-        this.clearTimeoutRecovery(entryId)
+      if (status.executing) {
+        recovery.sawExecutionAfterSend = true
         this.publishExecutionState(entryId, status)
         return
       }
-      if (elapsed >= TIMEOUT_RECOVERY_START_TIMEOUT_MS) state.phase = 'failed'
-      this.publishExecutionState(entryId, this.withTimeoutRecoveryState(entryId, status))
+      if (recovery.sawExecutionAfterSend) {
+        this.clearTimeoutRecovery(entryId)
+        this.clearTimeoutRotation(entryId, true)
+        this.publishExecutionState(entryId, status)
+        return
+      }
+      if (elapsed >= TIMEOUT_RECOVERY_START_TIMEOUT_MS) {
+        recovery.phase = 'failed'
+        this.publishExecutionState(entryId, status)
+        if ((this.timeoutRotationAttempts.get(entryId) ?? 0) < MAX_TIMEOUT_PHYSICAL_ROTATIONS) this.scheduleTimeoutRotation(live, 1_000)
+        else this.timeoutRotationStates.set(entryId, { phase: 'failed', startedAt: Date.now() })
+        return
+      }
+      this.publishExecutionState(entryId, status)
       return
     }
-    if (state?.phase === 'scheduled') {
+    if (recovery?.phase === 'scheduled') {
       if (status.health !== 'timeout_error' || status.executing) {
         this.clearTimeoutRecovery(entryId)
         this.publishExecutionState(entryId, status)
@@ -1039,24 +1164,38 @@ export class Zero3GptWebProvider {
     }
     if (status.health === 'timeout_error') {
       this.publishExecutionState(entryId, status)
-      if (!status.executing) this.scheduleTimeoutRecovery(live)
+      if (status.executing) {
+        if ((this.timeoutRotationAttempts.get(entryId) ?? 0) < MAX_TIMEOUT_PHYSICAL_ROTATIONS) this.scheduleTimeoutRotation(live)
+        else {
+          this.timeoutRotationStates.set(entryId, { phase: 'failed', startedAt: Date.now() })
+          this.publishExecutionState(entryId, status)
+        }
+      } else if ((this.timeoutRotationAttempts.get(entryId) ?? 0) < MAX_TIMEOUT_PHYSICAL_ROTATIONS) {
+        this.scheduleTimeoutRecovery(live)
+      } else {
+        this.timeoutRotationStates.set(entryId, { phase: 'failed', startedAt: Date.now() })
+        this.publishExecutionState(entryId, status)
+      }
       return
     }
+    if (rotation?.phase === 'scheduled') this.clearTimeoutRotation(entryId)
     this.publishExecutionState(entryId, status)
   }
 
   private publishExecutionState(entryId: string, status: Zero3GptWebExecutionStatus): void {
+    const effective = this.withTimeoutRecoveryState(entryId, status)
     const previous = this.executionStates.get(entryId)
-    this.executionStates.set(entryId, status)
-    const unchanged = previous?.executing === status.executing && previous?.health === status.health && previous?.recoveryAttempt === status.recoveryAttempt
-    if (unchanged || (previous === undefined && !status.executing && status.health === null)) return
-    this.emitEvent({ kind: 'execution', entryId, ...status })
+    this.executionStates.set(entryId, effective)
+    const unchanged = previous?.executing === effective.executing && previous?.health === effective.health && previous?.recoveryAttempt === effective.recoveryAttempt
+    if (unchanged || (previous === undefined && !effective.executing && effective.health === null)) return
+    this.emitEvent({ kind: 'execution', entryId, ...effective })
   }
 
   private clearExecutionState(entryId: string): void {
     const previous = this.executionStates.get(entryId)
     this.executionStates.delete(entryId)
     this.clearTimeoutRecovery(entryId)
+    this.clearTimeoutRotation(entryId)
     if (previous?.executing || previous?.health) this.emitEvent({ kind: 'execution', entryId, ...stoppedExecutionStatus() })
   }
 
@@ -1325,6 +1464,15 @@ export class Zero3GptWebProvider {
           this.timeoutRecoveryTimers.delete(sourceEntryId)
           this.timeoutRecoveryStates.delete(sourceEntryId)
           if (sourceRecovery && sourceRecovery.phase !== 'scheduled') this.timeoutRecoveryStates.set(live.entryId, sourceRecovery)
+          const sourceRotation = this.timeoutRotationStates.get(sourceEntryId)
+          const sourceRotationTimer = this.timeoutRotationTimers.get(sourceEntryId)
+          const sourceRotationAttempts = this.timeoutRotationAttempts.get(sourceEntryId)
+          if (sourceRotationTimer) clearTimeout(sourceRotationTimer)
+          this.timeoutRotationTimers.delete(sourceEntryId)
+          this.timeoutRotationStates.delete(sourceEntryId)
+          this.timeoutRotationAttempts.delete(sourceEntryId)
+          if (sourceRotation && sourceRotation.phase !== 'scheduled') this.timeoutRotationStates.set(live.entryId, sourceRotation)
+          if (sourceRotationAttempts !== undefined) this.timeoutRotationAttempts.set(live.entryId, sourceRotationAttempts)
 
           const sourceSnapshot = this.snapshots.get(sourceEntryId)
           if (sourceSnapshot) {
