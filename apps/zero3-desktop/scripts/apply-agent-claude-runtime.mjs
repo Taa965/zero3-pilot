@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const sourceAdapter = path.join(repoRoot, 'apps', 'zero3-desktop', 'agent-routing-runtime', 'claude-task-adapter.ts')
 const targetAdapter = path.join(hermesDesktopDir, 'electron', 'zero3', 'agent-routing', 'claude-task-adapter.ts')
@@ -24,7 +24,7 @@ function patchFile(relativePath, replacements) {
 
 export function applyZero3AgentClaudeRuntime() {
   if (!fs.statSync(sourceAdapter).isFile()) throw new Error(`Zero3 Claude task adapter source missing: ${sourceAdapter}`)
-  write(targetAdapter, read(sourceAdapter))
+  write(targetAdapter, overlayRuntimeSource(read(sourceAdapter)))
 
   patchFile('electron/main.ts', [
     {
@@ -58,8 +58,8 @@ const zero3ClaudeTaskAdapter = new Zero3ClaudeTaskAdapter({
     {
       label: 'Claude dispatcher dependency',
       appliedMarker: '  claude: zero3ClaudeTaskAdapter,',
-      from: '  codex: zero3CodexTaskAdapter,\n  availability: zero3ProviderAvailability,',
-      to: '  codex: zero3CodexTaskAdapter,\n  claude: zero3ClaudeTaskAdapter,\n  availability: zero3ProviderAvailability,'
+      from: '  codex: zero3CodexTaskAdapter,\n  skills: zero3TaskSkillRuntime,\n  availability: zero3ProviderAvailability,',
+      to: '  codex: zero3CodexTaskAdapter,\n  claude: zero3ClaudeTaskAdapter,\n  skills: zero3TaskSkillRuntime,\n  availability: zero3ProviderAvailability,'
     }
   ])
 

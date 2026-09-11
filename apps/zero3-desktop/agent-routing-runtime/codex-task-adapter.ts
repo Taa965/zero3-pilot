@@ -3,6 +3,7 @@ import {
   type Zero3ExecutionResultV2,
   type Zero3TaskSpecV2
 } from './agent-contracts'
+import type { Zero3ResolvedTaskSkill } from '../skill-runtime/skill-types'
 
 export type Zero3CodexRunnerLike = {
   run(lease: {
@@ -34,7 +35,7 @@ function remoteEvidenceGate(task: Zero3TaskSpecV2): string[] {
   return [...evidence]
 }
 
-function remoteTask(task: Zero3TaskSpecV2): Record<string, unknown> {
+function remoteTask(task: Zero3TaskSpecV2, skills: readonly Zero3ResolvedTaskSkill[] = []): Record<string, unknown> {
   if (!task.worktreePath?.trim()) throw new Error('Codex TaskSpecV2 requires an explicit isolated worktreePath')
   return {
     protocol: 'zero3.pilot.remote-task.v1',
@@ -47,6 +48,7 @@ function remoteTask(task: Zero3TaskSpecV2): Record<string, unknown> {
     },
     constraints: [...task.constraints],
     acceptance_criteria: [...task.requirements],
+    ...(skills.length ? { native_skills: skills.map(skill => ({ name: skill.name, path: skill.path })) } : {}),
     permission_profile: 'standard',
     execution: {
       max_turns: 1,
@@ -127,13 +129,13 @@ function resultFromRun(task: Zero3TaskSpecV2, rawValue: unknown): Zero3Execution
 export class Zero3CodexTaskAdapter {
   constructor(private readonly runner: Zero3CodexRunnerLike) {}
 
-  async dispatchTask(task: Zero3TaskSpecV2): Promise<Zero3ExecutionResultV2> {
+  async dispatchTask(task: Zero3TaskSpecV2, skills: readonly Zero3ResolvedTaskSkill[] = []): Promise<Zero3ExecutionResultV2> {
     let raw: unknown
     try {
       raw = await this.runner.run({
         lease_id: `local-${task.executionId}`,
         fencing_token: 1,
-        task: remoteTask(task)
+        task: remoteTask(task, skills)
       })
     } catch (error) {
       const name = error instanceof Error ? error.name : ''

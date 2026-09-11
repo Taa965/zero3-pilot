@@ -38,6 +38,7 @@ export type Zero3RemoteTask = {
   target: Zero3RemoteTaskTarget
   constraints?: string[]
   acceptance_criteria?: string[]
+  native_skills?: Array<{ name: string; path: string }>
   permission_profile?: Zero3RemotePermissionProfile
   execution?: Zero3RemoteTaskExecution
   project_context?: Zero3RemoteProjectContextRef
@@ -50,6 +51,8 @@ export type Zero3RemoteLease = {
   lease_expires_at?: string
   task: Zero3RemoteTask
 }
+
+export type Zero3SkillRpcTool = 'list_skills' | 'search_skills' | 'get_skill' | 'invoke_skill'
 
 export type Zero3WorkerRpcTool =
   | 'register_worker'
@@ -71,12 +74,15 @@ export type Zero3WorkerRpcTool =
   | 'report_blocked'
   | 'recover_worker'
 
+export type Zero3RemoteRpcTool = Zero3WorkerRpcTool | Zero3SkillRpcTool
+
 export type Zero3RemoteWorkerRpcLease = {
   request_id: string
+  capability: string
   lease_id: string
   fencing_token: number
   lease_expires_at: string
-  tool: Zero3WorkerRpcTool
+  tool: Zero3RemoteRpcTool
   arguments: Record<string, unknown>
 }
 
@@ -163,6 +169,7 @@ export type Zero3RemoteOutboxEnvelope = Zero3RemoteOutboxEventEnvelope | Zero3Re
 export type Zero3RemoteHostConfig = {
   enabled: boolean
   workerTunnelEnabled: boolean
+  skillTunnelEnabled: boolean
   baseUrl: string | null
   tokenFile: string | null
   nodeId: string

@@ -19,7 +19,7 @@ import { WorkspaceRouter } from './WorkspaceRouter'
 import { InspectorDrawer } from './InspectorDrawer'
 import type { RuntimeTarget } from '../runtime/runtime-types'
 
-export type ActiveModule = 'conversations' | 'tasks' | 'groups' | 'projects' | 'runtime'
+export type ActiveModule = 'conversations' | 'tasks' | 'groups' | 'projects' | 'skills' | 'runtime'
 
 const ACTIVE_PROJECT_STORAGE_KEY = 'zero3.active-project-id'
 const SESSION_COMPLETION_UNREAD_STORAGE_KEY = 'zero3.session-completion-unread.v1'

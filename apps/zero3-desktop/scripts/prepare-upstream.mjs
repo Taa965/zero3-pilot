@@ -20,6 +20,7 @@ import { applyZero3CodexPromptQueueHardening } from './apply-codex-prompt-queue-
 import { applyZero3CodexPrompts } from './apply-codex-prompts.mjs'
 import { applyZero3CodexSessionListGuard } from './apply-codex-session-list-guard.mjs'
 import { applyZero3CodexStructuredInput } from './apply-codex-structured-input.mjs'
+import { applyZero3CodexSkills } from './apply-codex-skills.mjs'
 import { applyZero3CodexTransport } from './apply-codex-transport.mjs'
 import { applyZero3ControlRuntime } from './apply-control-runtime.mjs'
 import { applyZero3GptWebProvider } from './apply-gpt-web-provider.mjs'
@@ -313,6 +314,7 @@ applyZero3CodexItemRendering()
 applyZero3CodexItemRenderingHardening()
 applyZero3CodexSessionListGuard()
 applyZero3CodexStructuredInput()
+applyZero3CodexSkills()
 applyZero3RemoteHostRuntime()
 applyZero3DataDirectory()
 

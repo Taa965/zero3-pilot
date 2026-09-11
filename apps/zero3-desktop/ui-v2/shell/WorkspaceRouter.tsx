@@ -8,6 +8,7 @@ import type { LocalSessionRecord, WorkspaceProvider, WorkspaceSession } from '..
 import { TaskWorkspace } from '../tasks/TaskWorkspace'
 import { DevelopmentGroupWorkspace } from '../development-groups/DevelopmentGroupWorkspace'
 import { ProjectWorkspace } from '../projects/ProjectWorkspace'
+import { SkillWorkspace } from '../skills/SkillWorkspace'
 import { RuntimeWorkspace } from '../runtime/RuntimeWorkspace'
 import type { RuntimeTarget } from '../runtime/runtime-types'
 
@@ -113,6 +114,8 @@ export function WorkspaceRouter({
             onBindChatGptProject={onBindChatGptProject}
             onUnbindChatGptProject={onUnbindChatGptProject}
           />
+        ) : activeModule === 'skills' ? (
+          <SkillWorkspace cwd={activeProject?.rootPath ?? null} />
         ) : activeModule === 'runtime' ? (
           <RuntimeWorkspace target={runtimeTarget} />
         ) : (

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file'
+import type { Zero3ResolvedTaskSkill } from '../skill-runtime/skill-types'
 
 import type {
   Zero3CrossAgentBinding,
@@ -22,6 +23,7 @@ export type Zero3AgentTaskRecord = {
   state: Zero3AgentTaskState
   binding: Zero3CrossAgentBinding | null
   result: Zero3ExecutionResultV2 | null
+  skillsUsed: Zero3ResolvedTaskSkill[]
   remoteTaskId: string | null
   remoteExecutionId: string | null
   createdAt: string
@@ -56,6 +58,7 @@ export class Zero3AgentTaskStore {
       if (buffer.byteLength > MAX_FILE_BYTES) throw new Error('agent task record exceeds size limit')
       const value = JSON.parse(buffer.toString('utf8')) as Zero3AgentTaskRecord
       if (value.task?.taskId !== taskId) throw new Error('agent task record identity mismatch')
+      value.skillsUsed ??= []
       return clone(value)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -79,6 +82,7 @@ export class Zero3AgentTaskStore {
         state: 'DRAFT',
         binding: null,
         result: null,
+        skillsUsed: [],
         remoteTaskId: null,
         remoteExecutionId: null,
         createdAt: timestamp,
@@ -113,6 +117,11 @@ export class Zero3AgentTaskStore {
 
   setBinding(taskId: string, binding: Zero3CrossAgentBinding): Promise<Zero3AgentTaskRecord> {
     return this.update(taskId, current => ({ ...current, binding: clone(binding) }))
+  }
+
+
+  setSkills(taskId: string, skills: readonly Zero3ResolvedTaskSkill[]): Promise<Zero3AgentTaskRecord> {
+    return this.update(taskId, current => ({ ...current, skillsUsed: structuredClone([...skills]) }))
   }
 
   setResult(taskId: string, result: Zero3ExecutionResultV2, state: Zero3AgentTaskState): Promise<Zero3AgentTaskRecord> {

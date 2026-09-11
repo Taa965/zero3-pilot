@@ -56,6 +56,7 @@ export function ContextPane({
     tasks: '任务',
     groups: '开发组',
     projects: '项目',
+    skills: 'Skills',
     runtime: '运行中心'
   }
 
@@ -96,6 +97,8 @@ export function ContextPane({
             onSelect={onSelectProject}
             onCreate={onCreateProject}
           />
+        ) : activeModule === 'skills' ? (
+          <div className="space-y-3 p-4 text-sm"><div className="font-medium">Codex Native Skills</div><div className="text-(--ui-text-secondary)">安装、发现、启停和执行都以 Codex 原生 Skill 系统为准。</div><div className="rounded-md border border-(--ui-border) bg-background p-3 text-xs text-(--ui-text-tertiary)">Zero3 不复制 SKILL.md，也不维护第二套 Skill Registry。</div></div>
         ) : activeModule === 'runtime' ? (
           <RuntimeList activeTarget={runtimeTarget} onTargetChange={onSelectRuntimeTarget} />
         ) : (

@@ -42,6 +42,8 @@ export type Zero3TaskSpecV2 = {
   baseSha?: string | null
   branch?: string | null
   worktreePath?: string | null
+  workflowId?: string | null
+  skillSelectors?: string[]
   requirements: string[]
   constraints: string[]
   requiredContracts: string[]

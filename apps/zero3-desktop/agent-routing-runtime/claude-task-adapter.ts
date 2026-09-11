@@ -14,6 +14,7 @@ import {
   type Zero3ExecutionResultV2,
   type Zero3TaskSpecV2
 } from './agent-contracts'
+import type { Zero3ResolvedTaskSkill } from '../skill-runtime/skill-types'
 import { renderZero3AgentTaskPrompt } from './task-prompt'
 
 export type Zero3ClaudeProjectMcpOptions = {
@@ -113,7 +114,11 @@ export class Zero3ClaudeTaskAdapter {
     return { available: false, authenticated: null, detail }
   }
 
-  async dispatchTask(task: Zero3TaskSpecV2): Promise<Zero3ExecutionResultV2> {
+  async dispatchTask(
+    task: Zero3TaskSpecV2,
+    _skills: readonly Zero3ResolvedTaskSkill[] = [],
+    skillContext = ''
+  ): Promise<Zero3ExecutionResultV2> {
     const workspace = nonEmpty(task.worktreePath ?? '', 'Claude task worktreePath')
     const executor = this.#factory(zero3ClaudeProjectMcpConfig(task, this.options))
     const startContext: ExecutorStartContext = {
@@ -137,7 +142,9 @@ export class Zero3ClaudeTaskAdapter {
     let failure: ExecutorFailure | null = null
     let outcome: 'succeeded' | 'cancelled' | 'failed' | null = null
     try {
-      const prompt = `${handoffInstruction(task)}\n\n${renderZero3AgentTaskPrompt(task)}`
+      const prompt = [handoffInstruction(task), skillContext.trim(), renderZero3AgentTaskPrompt(task)]
+        .filter(Boolean)
+        .join('\n\n')
       for await (const event of executor.prompt(session, {
         kind: 'prompt',
         clientRequestId: `${task.executionId}:claude`,

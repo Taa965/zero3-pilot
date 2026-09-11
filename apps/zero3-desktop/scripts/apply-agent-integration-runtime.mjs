@@ -65,6 +65,20 @@ const zero3CodexRuntime = {
   readThread: (params: unknown) => zero3CodexAppServer.request('thread/read', params),
   execCommand: (params: unknown, timeoutMs?: number) => zero3CodexAppServer.request('command/exec', params, timeoutMs)
 }
+const zero3TaskSkillRuntime = {
+  resolve: async (task: { worktreePath?: string | null }, target: 'CODEX' | 'GEMINI' | 'CLAUDE') => {
+    const cwd = task.worktreePath?.trim() || ''
+    const listing = await zero3CodexAppServer.request('skills/list', { cwds: cwd ? [cwd] : [], forceReload: false })
+    return zero3SkillRouter.resolve({
+      task: task as never,
+      target,
+      skills: zero3NativeSkillCatalog(listing),
+      bindings: await zero3SkillBindingStore.list()
+    })
+  },
+  renderContext: (skills: never[]) => renderZero3SkillContext(skills),
+  recordUsage: (input: never) => zero3SkillUsageLedger.append(input)
+}
 const zero3VerificationCollector = new Zero3VerificationCollector(zero3CodexRuntime)
 const zero3AuthoritativeResultFinalizer = new Zero3AuthoritativeResultFinalizer({
   collectGitEvidence: (workspace, requestedBaseSha) => zero3GitEvidence(zero3CodexRuntime, workspace, requestedBaseSha),
@@ -89,6 +103,7 @@ const zero3LocalCodexRunner = {
     const runner = new Zero3RemoteTaskRunner({
       enabled: false,
       workerTunnelEnabled: false,
+      skillTunnelEnabled: false,
       baseUrl: null,
       tokenFile: null,
       nodeId: 'zero3-local-agent',
@@ -138,6 +153,7 @@ const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({
   reviewStore: zero3ReviewStore,
   antigravity: zero3Antigravity,
   codex: zero3CodexTaskAdapter,
+  skills: zero3TaskSkillRuntime,
   availability: zero3ProviderAvailability,
   finalizeResult: (task, candidate) => zero3AuthoritativeResultFinalizer.finalize(task, candidate)
 })
@@ -238,6 +254,8 @@ type Zero3AgentTaskSpecV2 = {
   baseSha?: string | null
   branch?: string | null
   worktreePath?: string | null
+  workflowId?: string | null
+  skillSelectors?: string[]
   requirements: string[]
   constraints: string[]
   requiredContracts: string[]
