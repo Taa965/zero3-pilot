@@ -18,6 +18,7 @@ import { applyZero3DataDirectory } from './apply-data-directory.mjs'
 import { applyDevelopmentGroupBridge } from './apply-development-group-bridge.mjs'
 import { applyExecutionRuntimeBridge } from './apply-execution-runtime-bridge.mjs'
 import { applyZero3AgentLifecycleRuntime } from './apply-agent-lifecycle-runtime.mjs'
+import { applyWorkflowWorkerTaskIntegration } from './apply-workflow-worker-task-integration.mjs'
 
 const mode = process.argv[2] ?? 'dev'
 const allowedModes = new Set(['dev', 'typecheck', 'dist:win'])
@@ -339,6 +340,7 @@ if (!externallyPrepared) {
     applyDevelopmentGroupBridge()
     applyExecutionRuntimeBridge()
     applyZero3AgentLifecycleRuntime()
+    applyWorkflowWorkerTaskIntegration()
     console.log('[Zero3] Desktop reload: reusing the compiled Codex core.')
   } else {
     runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])

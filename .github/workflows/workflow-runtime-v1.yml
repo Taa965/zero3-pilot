@@ -8,6 +8,9 @@ on:
       - 'apps/zero3-desktop/workflow-modules/**'
       - 'apps/zero3-desktop/ui-v2/tasks/**'
       - 'apps/zero3-desktop/scripts/apply-execution-runtime-bridge.mjs'
+      - 'apps/zero3-desktop/scripts/apply-workflow-worker-task-integration.mjs'
+      - 'apps/zero3-desktop/scripts/run.mjs'
+      - 'apps/zero3-desktop/scripts/prepare-codex-upstream.mjs'
       - 'apps/zero3-desktop/tests/workflow-task-ui.test.cjs'
       - 'scripts/check-workflow-module-runtime-v1.mjs'
       - 'docs/WORKFLOW_MODULE_RUNTIME_V1.md'
@@ -19,6 +22,9 @@ on:
       - 'apps/zero3-desktop/workflow-modules/**'
       - 'apps/zero3-desktop/ui-v2/tasks/**'
       - 'apps/zero3-desktop/scripts/apply-execution-runtime-bridge.mjs'
+      - 'apps/zero3-desktop/scripts/apply-workflow-worker-task-integration.mjs'
+      - 'apps/zero3-desktop/scripts/run.mjs'
+      - 'apps/zero3-desktop/scripts/prepare-codex-upstream.mjs'
       - 'apps/zero3-desktop/tests/workflow-task-ui.test.cjs'
       - 'scripts/check-workflow-module-runtime-v1.mjs'
       - 'docs/WORKFLOW_MODULE_RUNTIME_V1.md'
@@ -59,6 +65,7 @@ jobs:
           apps/zero3-desktop/workflow-runtime/automation-controller.test.ts
           apps/zero3-desktop/workflow-runtime/worker-v2-adapter.test.ts
           apps/zero3-desktop/workflow-runtime/workflow-worker-queue.test.ts
+          apps/zero3-desktop/workflow-runtime/workflow-worker-projection.test.ts
           apps/zero3-desktop/workflow-modules/cognitive-store-video/cognitive-store-video.test.ts
       - name: Task Center static UI contract
         run: node --test apps/zero3-desktop/tests/workflow-task-ui.test.cjs

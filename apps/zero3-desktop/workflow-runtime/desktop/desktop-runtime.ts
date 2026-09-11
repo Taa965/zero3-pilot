@@ -10,6 +10,8 @@ import { Zero3WorkflowRemoteRenderService } from '../remote-render.ts'
 import { FfprobeWorkflowVideoQcPort, Zero3WorkflowVideoPullbackService } from '../video-pullback.ts'
 import { Zero3WorkflowAutomationController } from '../automation-controller.ts'
 import { Zero3WorkflowStore } from '../store.ts'
+import { DefaultWorkflowWorkerArtifactVerifier, Zero3WorkflowWorkerQueueService } from '../workflow-worker-queue.ts'
+import { Zero3WorkflowWorkerProjectionService, type WorkflowWorkerAdminPort } from '../workflow-worker-projection.ts'
 import { createBuiltinWorkflowRegistry } from '../../workflow-modules/index.ts'
 import type { WorkflowDesktopPort } from './desktop-port.ts'
 
@@ -25,6 +27,7 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
   readonly remoteRender: Zero3WorkflowRemoteRenderService | null
   readonly videoPullback: Zero3WorkflowVideoPullbackService | null
   readonly automation: Zero3WorkflowAutomationController
+  private workerProjection: Zero3WorkflowWorkerProjectionService | null = null
   readonly #projectRunnerCache = new Map<string, { port: Zero3GptGpuRunnerPort | null; error: string | null }>()
 
   constructor(root: string) {
@@ -50,7 +53,8 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
       remoteRender: this.remoteRender,
       videoPullback: this.videoPullback,
       remoteRenderForRun: runId => this.remoteRenderForRun(runId),
-      videoPullbackForRun: runId => this.videoPullbackForRun(runId)
+      videoPullbackForRun: runId => this.videoPullbackForRun(runId),
+      workerProjectionSync: runId => this.workerProjection ? this.workerProjection.syncRun(runId) : Promise.resolve(null)
     })
   }
 
@@ -86,6 +90,14 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
       : null
   }
 
+  attachWorkflowWorkerAdmin(port: WorkflowWorkerAdminPort): void {
+    const queue = new Zero3WorkflowWorkerQueueService(
+      this.runtime,
+      new DefaultWorkflowWorkerArtifactVerifier(this.drivePort)
+    )
+    this.workerProjection = new Zero3WorkflowWorkerProjectionService(this.runtime, port, queue)
+  }
+
   runtimeCapabilities(projectRootPath?: string | null) {
     const projectRunner = this.resolveProjectRunner(projectRootPath)
     return {
@@ -99,7 +111,8 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
       handoffMaterialization: Boolean(this.handoffIngest),
       remoteRender: Boolean(this.remoteRender),
       videoPullback: Boolean(this.videoPullback),
-      automation: true
+      automation: true,
+      workerProjection: Boolean(this.workerProjection)
     }
   }
   startAutomation(): void { this.automation.start() }
@@ -112,11 +125,9 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
   getRun(runId: string) { return this.runtime.getRun(runId) }
   async createRun(request: CreateWorkflowRunRequest) {
     const created = this.runtime.createRun(request)
-    if (request.start !== false && this.inputIngest) {
-      await this.inputIngest.ingestRun(created.run.workflowRunId)
-      return this.runtime.getRun(created.run.workflowRunId)
-    }
-    return created
+    if (request.start !== false && this.inputIngest) await this.inputIngest.ingestRun(created.run.workflowRunId)
+    if (request.start !== false && this.workerProjection) await this.workerProjection.syncRun(created.run.workflowRunId)
+    return this.runtime.getRun(created.run.workflowRunId)
   }
   startRun(runId: string) { return this.runtime.startRun(runId) }
   readyStages(runId: string, workerDefinitionId?: string | null) { return this.runtime.readyStages(runId, workerDefinitionId) }

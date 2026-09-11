@@ -43,6 +43,12 @@ The image rule (overview first, then per chapter with at most 10 images per batc
 
 The module declares logical WorkerDefinitions (`script-worker`, `visual-worker`, `image-worker`). `worker-v2-adapter.ts` projects those definitions and item-level READY/FIX_REQUIRED StageRuns into the shared Worker Protocol v2 `WorkflowWorkerBinding` and `WorkflowWorkUnit` contracts. The parallel GPT Worker Protocol v2 effort owns physical ChatGPT session binding, Claim/Lease, wakeup, and session rotation; the Task runtime remains authoritative for WorkflowRun/WorkItem/StageRun dependencies.
 
+## Worker Runtime projection
+
+The long-lived Web-GPT Worker Runtime is treated as a lease/session execution mirror, not as the business Workflow authority. `Zero3WorkflowWorkerProjectionService` publishes only Task-side `READY` / `FIX_REQUIRED` GPT StageRuns into the Worker Runtime. Each mirror StageRun carries `authoritativeStageRunId` and `authoritativeAttempt`. When the plugin commits structured Artifacts, the projection translates them back to the authoritative WorkItem/StageRun, verifies storage, and passes the Task Completion Gate before downstream work is released.
+
+This also solves dynamic Artifact inputs. Downstream visual/image work is not pre-seeded with stale inputs: the Task Runtime first records and verifies the upstream Artifact, then creates a fresh Worker mirror unit whose inputs contain the actual Drive `fileId`. A failed verification increments the authoritative retry attempt and therefore creates a new mirror identity instead of pretending a completed plugin mirror can be reused.
+
 ## Worker queue authority
 
 `Zero3WorkflowWorkerQueueService` is the task-side bridge for Worker Protocol v2. It atomically claims the next per-item StageRun for a WorkerSlot, recovers an already-active claim after a transport retry, verifies producer scope and Artifact availability, passes the Completion Gate, and only then claims the next item for that logical workstation. This removes the unsafe `list READY -> claim later` race when multiple GPT workers share one stage queue.

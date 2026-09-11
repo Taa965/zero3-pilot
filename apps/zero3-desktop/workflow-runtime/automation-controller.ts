@@ -11,6 +11,7 @@ export interface WorkflowAutomationServices {
   videoPullback?: Zero3WorkflowVideoPullbackService | null
   remoteRenderForRun?: ((runId: string) => Zero3WorkflowRemoteRenderService | null) | null
   videoPullbackForRun?: ((runId: string) => Zero3WorkflowVideoPullbackService | null) | null
+  workerProjectionSync?: ((runId: string) => Promise<unknown>) | null
 }
 
 export interface WorkflowAutomationTickResult {
@@ -63,6 +64,10 @@ export class Zero3WorkflowAutomationController {
         let snapshot = this.runtime.getRun(runId)
         if (this.services.inputIngest && snapshot.stages.some(stage => stage.stageId === 'input-ingest' && ['READY', 'FIX_REQUIRED'].includes(stage.status))) {
           await attempt('input-ingest', () => this.services.inputIngest!.ingestRun(runId))
+          snapshot = this.runtime.getRun(runId)
+        }
+        if (this.services.workerProjectionSync) {
+          await attempt('worker-projection', () => this.services.workerProjectionSync!(runId))
           snapshot = this.runtime.getRun(runId)
         }
         if (this.services.handoffIngest && snapshot.stages.some(stage => stage.stageId === 'local-ingest' && ['READY', 'FIX_REQUIRED'].includes(stage.status))) {

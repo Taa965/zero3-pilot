@@ -53,9 +53,12 @@ export type WorkflowWorkerClaimResult =
   | { state: 'CLAIMED'; stage: WorkflowStageRunRecord; workUnit: WorkflowWorkUnit }
   | { state: 'NO_WORK_AVAILABLE' }
 
-export type WorkflowWorkerCommitResult = {
+export type WorkflowWorkerStageCommitResult = {
   state: 'COMPLETED' | 'FIX_REQUIRED'
   replayed: boolean
+}
+
+export type WorkflowWorkerCommitResult = WorkflowWorkerStageCommitResult & {
   next: WorkflowWorkerClaimResult
 }
 
@@ -102,21 +105,23 @@ export class Zero3WorkflowWorkerQueueService {
     return this.runtime.reportProgress(binding.workflowRunId, stageRunId, progress, currentActivity)
   }
 
-  async commitAndClaimNext(
+  async commitStage(
     binding: WorkflowWorkerBinding,
     workerSessionIdValue: string,
     stageRunIdValue: string,
     artifacts: readonly WorkflowArtifactRef[]
-  ): Promise<WorkflowWorkerCommitResult> {
+  ): Promise<WorkflowWorkerStageCommitResult> {
     this.validateBinding(binding)
     const workerSessionId = requireId(workerSessionIdValue, 'workerSessionId')
     const stageRunId = requireId(stageRunIdValue, 'stageRunId')
     let stage = this.stageFor(binding, stageRunId)
 
-    if (stage.status === 'COMPLETED') {
-      return { state: 'COMPLETED', replayed: true, next: this.claimNext(binding, workerSessionId) }
+    if (stage.status === 'COMPLETED') return { state: 'COMPLETED', replayed: true }
+    if (stage.status === 'READY' || stage.status === 'FIX_REQUIRED') {
+      this.runtime.claimStage(binding.workflowRunId, stageRunId, binding.workerSlotId)
+      stage = this.stageFor(binding, stageRunId)
     }
-    if (!['CLAIMED', 'RUNNING', 'FIX_REQUIRED'].includes(stage.status)) throw new Error(`workflow StageRun cannot be committed while ${stage.status}`)
+    if (!['CLAIMED', 'RUNNING'].includes(stage.status)) throw new Error(`workflow StageRun cannot be committed while ${stage.status}`)
     if (stage.claimOwnerId !== binding.workerSlotId) throw new Error('workflow StageRun claim owner does not match WorkerSlot')
 
     for (const artifact of artifacts) {
@@ -132,7 +137,7 @@ export class Zero3WorkflowWorkerQueueService {
     if (verification.some(value => !value)) {
       this.runtime.requestVerification(binding.workflowRunId, stageRunId, [])
       this.runtime.gateFailed(binding.workflowRunId, stageRunId, 'worker Artifact verification failed')
-      return { state: 'FIX_REQUIRED', replayed: false, next: { state: 'NO_WORK_AVAILABLE' } }
+      return { state: 'FIX_REQUIRED', replayed: false }
     }
 
     const seeds: WorkflowArtifactSeed[] = artifacts.map(artifact => ({
@@ -145,9 +150,7 @@ export class Zero3WorkflowWorkerQueueService {
       ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}),
       ...(artifact.sizeBytes == null ? {} : { sizeBytes: artifact.sizeBytes }),
       state: 'VERIFIED',
-      metadata: {
-        producer: { ...artifact.producer }
-      }
+      metadata: { producer: { ...artifact.producer } }
     }))
     this.runtime.requestVerification(binding.workflowRunId, stageRunId, seeds)
     this.runtime.gatePassed(binding.workflowRunId, stageRunId, {
@@ -158,6 +161,22 @@ export class Zero3WorkflowWorkerQueueService {
     })
     stage = this.stageFor(binding, stageRunId)
     if (stage.status !== 'COMPLETED') throw new Error('worker StageRun did not complete after gate pass')
-    return { state: 'COMPLETED', replayed: false, next: this.claimNext(binding, workerSessionId) }
+    return { state: 'COMPLETED', replayed: false }
+  }
+
+  async commitAndClaimNext(
+    binding: WorkflowWorkerBinding,
+    workerSessionIdValue: string,
+    stageRunIdValue: string,
+    artifacts: readonly WorkflowArtifactRef[]
+  ): Promise<WorkflowWorkerCommitResult> {
+    const workerSessionId = requireId(workerSessionIdValue, 'workerSessionId')
+    const committed = await this.commitStage(binding, workerSessionId, stageRunIdValue, artifacts)
+    return {
+      ...committed,
+      next: committed.state === 'COMPLETED'
+        ? this.claimNext(binding, workerSessionId)
+        : { state: 'NO_WORK_AVAILABLE' }
+    }
   }
 }
