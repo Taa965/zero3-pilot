@@ -87,6 +87,11 @@ export async function openSharedMemory({ configPath, projectId, fetchImpl = fetc
         event_type: 'handoff.published', memory: { class: 'task', entity_type: 'handoff', entity_id: 'execution-handoff', authority: 60, expected_entity_version: expectedVersion },
         source: { type: 'task' }, supersedes: [], payload: result })
     },
+    async flush() {
+      try { await client.flushPending(); if (state === 'ready') lastError = null }
+      catch { lastError = 'memory_sync_unavailable' }
+      return runtime.status()
+    },
     status(eventId) { return { state, lastError, cursor: store.getCursor(config.clientId)?.last_sequence ?? 0, queue: store.counts(), event: eventId ? store.status(eventId) : null } },
     async close() {
       if (closed) return

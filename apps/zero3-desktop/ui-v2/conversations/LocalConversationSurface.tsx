@@ -96,6 +96,8 @@ async function runZero3Turn(session: LocalSessionRecord, project: Zero3ProjectRe
     : session.messages.slice(0, -1).map(message => ({ role: message.role, content: message.content }))
   const result = await window.zero3SessionProviders.zero3Turn({
     profileId: session.zero3ProfileId,
+    logicalSessionId: session.id,
+    generation: 1,
     text: prompt,
     cwd: project.rootPath,
     projectId: project.id,

@@ -100,6 +100,12 @@ function zero3CodexSandbox(value: unknown): string | undefined {
   }
   return sandbox
 }
+function zero3CodexReasoningEffort(value: unknown): string | undefined {
+  const effort = zero3CodexOptionalString(value, 'effort', 32)
+  if (effort == null) return undefined
+  if (!['minimal', 'low', 'medium', 'high', 'xhigh'].includes(effort)) throw new Error('effort is not supported')
+  return effort
+}
 
 function zero3CodexIdKey(id: Zero3CodexRpcId): string {
   return typeof id + ':' + String(id)
@@ -931,9 +937,11 @@ function zero3CodexTurnStartParams(value: unknown) {
   }
   const cwd = zero3CodexOptionalString(input.cwd, 'cwd', 4096)
   const model = zero3CodexOptionalString(input.model, 'model', 256)
+  const effort = zero3CodexReasoningEffort(input.effort)
   const approvalPolicy = zero3CodexApprovalPolicy(input.approvalPolicy)
   if (cwd) params.cwd = cwd
   if (model) params.model = model
+  if (effort) params.effort = effort
   if (approvalPolicy) params.approvalPolicy = approvalPolicy
   return params
 }
@@ -947,6 +955,17 @@ function zero3CodexTurnInterruptParams(value: unknown) {
 }
 
 ipcMain.handle('zero3:codex:status', () => zero3CodexAppServer.status())
+ipcMain.handle('zero3:codex:model:list', (_event, request: unknown) => {
+  const input = zero3CodexRecord(request)
+  const params: Record<string, unknown> = {}
+  const cursor = zero3CodexOptionalString(input.cursor, 'cursor', 4096)
+  const limit = zero3CodexOptionalPositiveInt(input.limit, 'limit', 100)
+  const includeHidden = zero3CodexOptionalBoolean(input.includeHidden, 'includeHidden')
+  if (cursor) params.cursor = cursor
+  if (limit != null) params.limit = limit
+  if (includeHidden != null) params.includeHidden = includeHidden
+  return zero3CodexAppServer.request('model/list', params)
+})
 ipcMain.handle('zero3:codex:start', () => zero3CodexAppServer.ensureStarted())
 ipcMain.handle('zero3:ollama:list-models', () => zero3ListOllamaModels())
 ipcMain.handle('zero3:codex:thread:start', async (_event, request: unknown) => {
@@ -982,6 +1001,7 @@ app.on('before-quit', () => {
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Codex', {
   status: () => ipcRenderer.invoke('zero3:codex:status'),
   start: () => ipcRenderer.invoke('zero3:codex:start'),
+  model: { list: request => ipcRenderer.invoke('zero3:codex:model:list', request) },
   ollama: {
     listModels: () => ipcRenderer.invoke('zero3:ollama:list-models')
   },
@@ -1009,6 +1029,7 @@ const globalTypes = String.raw`interface Window {
     zero3Codex: {
       status: () => Promise<Zero3CodexStatus>
       start: () => Promise<Zero3CodexStatus>
+      model: { list: (request?: Zero3CodexModelListRequest) => Promise<unknown> }
       ollama: {
         listModels: () => Promise<Zero3OllamaModelsResponse>
       }
@@ -1070,6 +1091,7 @@ type Zero3CodexThreadResumeRequest = {
   threadId: string
 }
 
+type Zero3CodexModelListRequest = { cursor?: string; limit?: number; includeHidden?: boolean }
 type Zero3CodexThreadListRequest = { archived?: boolean; cursor?: string; limit?: number }
 type Zero3CodexThreadReadRequest = { includeTurns?: boolean; threadId: string }
 
@@ -1077,6 +1099,7 @@ type Zero3CodexTurnStartRequest = {
   approvalPolicy?: Zero3CodexApprovalPolicy
   cwd?: string
   model?: string
+  effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   text: string
   threadId: string
 }

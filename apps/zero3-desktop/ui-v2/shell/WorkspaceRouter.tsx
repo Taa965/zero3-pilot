@@ -4,6 +4,7 @@ import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
 import { GptWebSurface } from '../conversations/GptWebSurface'
 import { GeminiWebSurface } from '../conversations/GeminiWebSurface'
 import { LocalConversationSurface } from '../conversations/LocalConversationSurface'
+import { Zero3NativeConversationSurface } from '../conversations/Zero3NativeConversationSurface'
 import type { LocalSessionRecord, WorkspaceProvider, WorkspaceSession } from '../conversations/session-types'
 import { TaskWorkspace } from '../tasks/TaskWorkspace'
 import { DevelopmentGroupWorkspace } from '../development-groups/DevelopmentGroupWorkspace'
@@ -96,6 +97,12 @@ export function WorkspaceRouter({
         {activeModule === 'conversations' ? (
           provider === 'gpt' ? <GptWebSurface entryId={webEntryId} /> :
           provider === 'gemini' ? <GeminiWebSurface entryId={webEntryId} /> :
+          provider === 'zero3' ? <Zero3NativeConversationSurface
+            session={localSession}
+            project={activeProject}
+            onChanged={onLocalSessionChanged}
+            onExecutionChange={onLocalSessionExecutionChange}
+          /> :
           <LocalConversationSurface
             provider={provider}
             session={localSession}

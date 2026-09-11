@@ -440,9 +440,10 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
             disabled={!canCreate}
             onClick={() => {
               const runtime = isRuntimeProvider(selected) ? runtimeDrafts[selected] : null
+              const zero3Profile = selected === 'zero3' ? profiles.find(profile => profile.id === profileId) : null
               onCreate(selected, {
                 zero3ProfileId: selected === 'zero3' ? profileId : null,
-                model: runtime?.model.trim() || null,
+                model: zero3Profile?.model ?? (runtime?.model.trim() || null),
                 thinkingEffort: runtime?.thinkingEffort || null
               })
             }}

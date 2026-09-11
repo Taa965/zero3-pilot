@@ -30,6 +30,15 @@ ipcMain.handle('zero3:shared-memory:read', async (_event, request: unknown) => {
   try { return { mode: 'shared', context: await memory.getProject(projectId), status: memory.status() } }
   catch { return { mode: 'shared', context: null, status: memory.status(), error: '共享记忆服务暂时不可用；已保留待同步内容。' } }
 })
+ipcMain.handle('zero3:shared-memory:flush', async (_event, request: unknown) => {
+  const input = request as { projectId?: string }
+  const projectId = input?.projectId
+  if (!projectId) throw new Error('请选择已登记的项目')
+  const memory = await zero3SharedMemoryForProject(projectId)
+  if (!memory) return { mode: 'unconfigured' }
+  const status = await memory.flush()
+  return { mode: 'shared', status }
+})
 ipcMain.handle('zero3:shared-memory:import', async () => {
   const chosen = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '共享记忆连接配置', extensions: ['json'] }] })
   if (chosen.canceled || !chosen.filePaths[0]) return { imported: false }
@@ -71,7 +80,7 @@ export function applyZero3SharedMemory() {
   const preloadFile = path.join(hermesDesktopDir, 'electron', 'preload.ts')
   let preload = fs.readFileSync(preloadFile, 'utf8')
   if (!preload.includes("exposeInMainWorld('zero3SharedMemory'")) {
-    preload += `\ncontextBridge.exposeInMainWorld('zero3SharedMemory', {\n  read: request => ipcRenderer.invoke('zero3:shared-memory:read', request),\n  importConfig: () => ipcRenderer.invoke('zero3:shared-memory:import')\n})\n`
+    preload += `\ncontextBridge.exposeInMainWorld('zero3SharedMemory', {\n  read: request => ipcRenderer.invoke('zero3:shared-memory:read', request),\n  flush: request => ipcRenderer.invoke('zero3:shared-memory:flush', request),\n  importConfig: () => ipcRenderer.invoke('zero3:shared-memory:import')\n})\n`
     fs.writeFileSync(preloadFile, preload)
   }
 }

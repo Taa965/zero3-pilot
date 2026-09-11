@@ -73,9 +73,11 @@ const structuredTurnStart = String.raw`function zero3CodexTurnStartParams(value:
   }
   const cwd = zero3CodexOptionalString(input.cwd, 'cwd', 4096)
   const model = zero3CodexOptionalString(input.model, 'model', 256)
+  const effort = zero3CodexReasoningEffort(input.effort)
   const approvalPolicy = zero3CodexApprovalPolicy(input.approvalPolicy)
   if (cwd) params.cwd = cwd
   if (model) params.model = model
+  if (effort) params.effort = effort
   if (approvalPolicy) params.approvalPolicy = approvalPolicy
   return params
 }`
@@ -88,6 +90,7 @@ type Zero3CodexTurnStartBase = {
   approvalPolicy?: Zero3CodexApprovalPolicy
   cwd?: string
   model?: string
+  effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   threadId: string
 }
 
@@ -241,9 +244,11 @@ export function applyZero3CodexStructuredInput() {
   }
   const cwd = zero3CodexOptionalString(input.cwd, 'cwd', 4096)
   const model = zero3CodexOptionalString(input.model, 'model', 256)
+  const effort = zero3CodexReasoningEffort(input.effort)
   const approvalPolicy = zero3CodexApprovalPolicy(input.approvalPolicy)
   if (cwd) params.cwd = cwd
   if (model) params.model = model
+  if (effort) params.effort = effort
   if (approvalPolicy) params.approvalPolicy = approvalPolicy
   return params
 }`,
@@ -258,6 +263,7 @@ export function applyZero3CodexStructuredInput() {
   approvalPolicy?: Zero3CodexApprovalPolicy
   cwd?: string
   model?: string
+  effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   text: string
   threadId: string
 }`,

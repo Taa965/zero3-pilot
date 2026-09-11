@@ -174,8 +174,8 @@ export const LocalSessionAdapter = {
       updatedAt: timestamp,
       runtimeId: provider === 'antigravity' ? uid('agy-session') : null,
       zero3ProfileId: provider === 'zero3' ? zero3ProfileId : null,
-      model: provider === 'zero3' ? null : normalizeModel(runtimeConfig.model),
-      thinkingEffort: provider === 'zero3' ? null : normalizeThinkingEffort(runtimeConfig.thinkingEffort),
+      model: normalizeModel(runtimeConfig.model),
+      thinkingEffort: normalizeThinkingEffort(runtimeConfig.thinkingEffort),
       archived: false,
       messages: []
     }
@@ -213,6 +213,15 @@ export const LocalSessionAdapter = {
 
   resetRuntimeConfig(id: string): LocalSessionRecord {
     return mutate(id, record => ({ ...record, model: null, thinkingEffort: null, updatedAt: now() }))
+  },
+
+  setZero3RuntimeConfig(id: string, input: { profileId: string; model?: string | null; thinkingEffort?: LocalSessionThinkingEffort | null }): LocalSessionRecord {
+    const profileId = input.profileId.trim()
+    if (!profileId) throw new Error('Zero3 API Profile 不能为空')
+    return mutate(id, record => {
+      if (record.provider !== 'zero3') throw new Error('只有 Zero3 本体会话可以切换 API Profile')
+      return { ...record, zero3ProfileId: profileId, model: normalizeModel(input.model), thinkingEffort: normalizeThinkingEffort(input.thinkingEffort), updatedAt: now() }
+    })
   },
 
   appendMessage(id: string, role: 'user' | 'assistant', content: string): LocalSessionRecord {
