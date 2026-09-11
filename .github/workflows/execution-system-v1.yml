@@ -6,6 +6,8 @@ on:
     paths:
       - 'apps/zero3-desktop/execution-runtime/**'
       - 'apps/zero3-desktop/worker-runtime/**'
+      - 'apps/zero3-desktop/workflow-runtime/**'
+      - 'apps/zero3-desktop/gpt-web-runtime/chatgpt-wakeup.ts'
       - 'apps/zero3-desktop/artifact-runtime/**'
       - 'apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs'
       - 'apps/zero3-desktop/scripts/apply-artifact-runtime.mjs'
@@ -26,6 +28,7 @@ on:
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V2.md'
       - 'scripts/check-worker-protocol-v2-p1.mjs'
       - 'scripts/check-worker-protocol-v2-p2-p3.mjs'
+      - 'scripts/check-worker-wakeup-p5.mjs'
       - 'scripts/check-agent-shared-state-mvp.mjs'
       - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
       - 'skills/zero3-web-worker/**'
@@ -36,6 +39,8 @@ on:
     paths:
       - 'apps/zero3-desktop/execution-runtime/**'
       - 'apps/zero3-desktop/worker-runtime/**'
+      - 'apps/zero3-desktop/workflow-runtime/**'
+      - 'apps/zero3-desktop/gpt-web-runtime/chatgpt-wakeup.ts'
       - 'apps/zero3-desktop/artifact-runtime/**'
       - 'apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs'
       - 'apps/zero3-desktop/scripts/apply-artifact-runtime.mjs'
@@ -56,6 +61,7 @@ on:
       - 'docs/WEB_GPT_WORKER_PROTOCOL_V2.md'
       - 'scripts/check-worker-protocol-v2-p1.mjs'
       - 'scripts/check-worker-protocol-v2-p2-p3.mjs'
+      - 'scripts/check-worker-wakeup-p5.mjs'
       - 'scripts/check-agent-shared-state-mvp.mjs'
       - 'docs/AGENT_SHARED_ORGANIZATIONAL_STATE_MVP.md'
       - 'skills/zero3-web-worker/**'
@@ -98,6 +104,10 @@ jobs:
         run: node scripts/check-worker-protocol-v2-p2-p3.mjs
       - name: Worker Protocol v2 long-lived runtime
         run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/workflow-worker-runtime.test.ts
+      - name: Worker Wakeup P5 guard
+        run: node scripts/check-worker-wakeup-p5.mjs
+      - name: Worker Wakeup P5 behavior
+        run: node --experimental-transform-types --test apps/zero3-desktop/workflow-runtime/worker-wakeup.test.ts apps/zero3-desktop/gpt-web-runtime/chatgpt-wakeup.test.ts
       - name: Shared organizational state architecture guard
         run: node scripts/check-agent-shared-state-mvp.mjs
       - name: Shared organizational state lifecycle tests
