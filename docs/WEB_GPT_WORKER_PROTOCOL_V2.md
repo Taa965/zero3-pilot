@@ -100,3 +100,13 @@ The Workflow Worker runtime persists READY-queue observations and creates a dura
 `Zero3WorkerWakeupController` is local-only. It checks the existing GPT Web execution-health watchdog before delivery, never reads assistant output, and sends a bounded fixed prompt through the visible ChatGPT composer. Active turns are deferred with backoff; repeated stalled turns move the physical session to `ROTATING` instead of sending more prompts. If the ready work is claimed before delivery, the stale wakeup is suppressed.
 
 Wakeup is intentionally absent from the public MCP catalog. Web GPT cannot wake itself or another session through the plugin.
+
+## P6 Cognitive Store production module
+
+`workflow-runtime/cognitive-store-module.ts` is the first production Workflow Module on Worker Protocol v2. It installs three fixed long-lived stations: `script-worker-01`, `visual-worker-01`, and `image-worker-01`. Each script is an independent WorkItem, so Script 02 can release Visual 02 without waiting for all scripts in the run.
+
+The generic Worker Runtime now merges Artifacts from direct dependency StageRuns into the downstream Claim inputs. Visual therefore receives `重构脚本.md` directly, and Image receives `完整视觉规划.md` directly; workers never scan Google Drive or chat history to guess the upstream result.
+
+The ChatGPT image-generation limit remains module-local. Each WorkItem creates a separate overview Stage, chapter image StageRuns partitioned into at most 10 images, and a package Stage that depends on every required image Stage. Examples: 8 -> `[8]`, 17 -> `[10,7]`, 23 -> `[10,10,3]`. The generic Worker Runtime contains no hard-coded image batch limit.
+
+The module installer is exposed only through local Zero3 IPC as `zero3:workflow-worker:install-cognitive-store`. It is intentionally absent from the public Worker MCP catalog; GPT Workers may execute Claims but cannot create Workflow topology or WorkItems.

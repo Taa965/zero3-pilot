@@ -109,6 +109,7 @@ function zero3WorkflowWorkerInput(value: unknown): Record<string, unknown> {
 ipcMain.handle('zero3:workflow-worker:ensure-run', (_event, request: unknown) => zero3WorkflowWorkerRuntime.ensureWorkflowRun(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:ensure-binding', (_event, request: unknown) => zero3WorkflowWorkerRuntime.ensureWorkerBinding(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:add-items', (_event, request: unknown) => zero3WorkflowWorkerRuntime.addWorkItems(zero3WorkflowWorkerInput(request)))
+ipcMain.handle('zero3:workflow-worker:install-cognitive-store', (_event, request: unknown) => installCognitiveStoreWorkflow(zero3WorkflowWorkerRuntime, zero3WorkflowWorkerInput(request) as never))
 ipcMain.handle('zero3:workflow-worker:open-session', (_event, request: unknown) => zero3WorkflowWorkerRuntime.openPhysicalSession(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:rotate-session', (_event, request: unknown) => zero3WorkflowWorkerRuntime.rotatePhysicalSession(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:snapshot', (_event, workflowRunId: unknown) => zero3WorkflowWorkerRuntime.workflowSnapshot(workflowRunId))
@@ -146,6 +147,7 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3WorkflowW
   ensureRun: input => ipcRenderer.invoke('zero3:workflow-worker:ensure-run', input),
   ensureBinding: input => ipcRenderer.invoke('zero3:workflow-worker:ensure-binding', input),
   addItems: input => ipcRenderer.invoke('zero3:workflow-worker:add-items', input),
+  installCognitiveStore: input => ipcRenderer.invoke('zero3:workflow-worker:install-cognitive-store', input),
   openSession: input => ipcRenderer.invoke('zero3:workflow-worker:open-session', input),
   rotateSession: input => ipcRenderer.invoke('zero3:workflow-worker:rotate-session', input),
   snapshot: workflowRunId => ipcRenderer.invoke('zero3:workflow-worker:snapshot', workflowRunId),
@@ -158,6 +160,7 @@ const globalBridge = String.raw`    zero3WorkflowWorkers: {
       ensureRun: (input: Record<string, unknown>) => Promise<unknown>
       ensureBinding: (input: Record<string, unknown>) => Promise<unknown>
       addItems: (input: Record<string, unknown>) => Promise<unknown>
+      installCognitiveStore: (input: Record<string, unknown>) => Promise<unknown>
       openSession: (input: Record<string, unknown>) => Promise<unknown>
       rotateSession: (input: Record<string, unknown>) => Promise<unknown>
       snapshot: (workflowRunId: string) => Promise<unknown>
@@ -172,7 +175,7 @@ export function applyZero3AgentLifecycleRuntime() {
       label: 'Agent Lifecycle runtime import',
       appliedMarker: "from './zero3/worker-runtime/v2/index'",
       from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
-      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerWakeupController } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
     },
     {
       label: 'Agent Lifecycle composition after Execution Runtime',

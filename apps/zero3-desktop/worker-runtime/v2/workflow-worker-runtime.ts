@@ -436,6 +436,17 @@ export class Zero3WorkflowWorkerRuntime {
     if (!row) throw new Error('StageRun not found')
     const workItem = this.store.db.prepare('SELECT title FROM work_items WHERE workflow_run_id=? AND work_item_id=?')
       .get(row.workflow_run_id, row.work_item_id) as any
+    const declaredInputs = workflowParse<WorkflowArtifactRef[]>(row.inputs_json, [])
+    const parentRows = this.store.db.prepare(`SELECT p.artifacts_json FROM stage_dependencies d
+      JOIN stage_runs p ON p.stage_run_id=d.depends_on_stage_run_id
+      WHERE d.stage_run_id=? ORDER BY p.ordinal,p.stage_run_id`).all(row.stage_run_id) as any[]
+    const inputById = new Map<string, WorkflowArtifactRef>()
+    for (const artifact of declaredInputs) inputById.set(artifact.artifactId, artifact)
+    for (const parent of parentRows) {
+      for (const artifact of workflowParse<WorkflowArtifactRef[]>(parent.artifacts_json, [])) {
+        inputById.set(artifact.artifactId, artifact)
+      }
+    }
     return {
       workItemId: row.work_item_id,
       stageRunId: row.stage_run_id,
@@ -444,7 +455,7 @@ export class Zero3WorkflowWorkerRuntime {
       title: workItem?.title ?? row.work_item_id,
       instruction: row.instruction,
       ...(row.skill_json ? { skill: workflowParse(row.skill_json, null) } : {}),
-      inputs: workflowParse(row.inputs_json, []),
+      inputs: [...inputById.values()],
       expectedOutputs: workflowParse(row.expected_outputs_json, []),
       policy: workflowParse(row.policy_json, {}),
       metadata: workflowParse(row.metadata_json, {}),
