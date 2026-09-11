@@ -24,6 +24,12 @@ The Skills module lists native Codex metadata, searches it locally, refreshes on
 
 The Install action starts a normal Codex Thread and invokes Codex's system `skill-installer` Skill. GitHub/private-repository behavior, credentials, download fallback, destination rules, and future installer improvements remain owned by Codex.
 
+The installation request selects an enabled **system-scope** installer and explicitly instructs its native script to use `--dest` with the shared Skill root (`ZERO3_SHARED_CODEX_SKILLS_ROOT`, otherwise `~/.codex/skills`). The isolated kernel's `CODEX_HOME` is not the install destination.
+
+The Skills page retains the live installation while switching modules, displays installer output, handles command/file approvals and native questions, and supports cancellation. Completion and failure refresh the catalog. A completed Codex Turn is labelled **installation task ended**, not installation success: the installer can report a repository, authentication, or existing-destination failure in a successful Turn. Users should inspect its report and the refreshed list. Live progress is scoped to the current desktop renderer; recovery of pending approvals after a full app restart is not implemented.
+
+Regression validation: `node --test apps/zero3-desktop/tests/skill-install.test.cjs` (uses the prepared desktop's dependencies, or `ZERO3_TEST_NODE_MODULES`), plus `node scripts/check-codex-native-skills.mjs`. Tests exercise the actual overlay helpers, native RPC/event lifecycle, and rendered installation panel without installing a Skill in the user's home directory.
+
 Native Skill execution uses the upstream structured input:
 
 ```json

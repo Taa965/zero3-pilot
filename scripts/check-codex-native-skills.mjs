@@ -34,7 +34,7 @@ requireText(skillRpc, 'skills.map(publicSkill)', 'Web list results must project 
 requireText(skillRpc, "{ type: 'skill', name: skill.name, path: skill.path }", 'Local invocation must resolve a native Skill path immediately before execution.')
 requireText(remoteNode, 'zero3RemoteWorkspaceAllowed(this.config, requested)', 'Web Skill invocation cwd must be allow-listed locally.')
 requireText(remoteConfig, '(enabled || skillTunnelEnabled) && allowedWorkspaces.length === 0', 'Skill tunnel must fail closed without an allow-listed workspace.')
-requireText(ui, 'Codex 原生 skill-installer', 'Skills UI must identify Codex as installer authority.')
+requireText(read('apps/zero3-desktop/ui-v2/skills/SkillInstallPanel.tsx'), 'Codex 原生 skill-installer', 'Skills UI must identify Codex as installer authority.')
 requireText(ui, 'Skill Detail / Binding', 'Skills UI must expose native detail and relation-only Binding management.')
 requireText(bindings, 'class Zero3SkillBindingStore', 'Zero3 Binding must be a relation-only store.')
 forbidText(bindings, 'SKILL.md', 'Binding store must never copy Skill body content.')
