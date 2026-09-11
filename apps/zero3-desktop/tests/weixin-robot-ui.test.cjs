@@ -49,7 +49,7 @@ test('robot default Zero3 path is read-only and elevated agents require channel 
   assert.match(runtime, /routeZero3/)
   assert.match(overlay, /sandbox: 'read-only'/)
   assert.match(overlay, /zero3ApiAgentBridge\.register/)
-  assert.match(overlay, /zero3ApiAgentWaitForTurn/)
+  assert.match(overlay, /zero3ApiAgentRunTurn/)
 })
 
 test('desktop build carries Weixin binary and QQ transport bridge', () => {

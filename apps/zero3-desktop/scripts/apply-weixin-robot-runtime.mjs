@@ -100,12 +100,9 @@ const disposeZero3WeixinRobotIpc = registerWeixinRobotDesktopIpc({
       const started = await zero3CodexAppServer.request('thread/start', { ...runtimeOverrides, zero3ProjectId: projectId, ephemeral: false })
       threadId = zero3ApiAgentId(started, 'thread')
     }
-    const turn = await zero3CodexAppServer.request('turn/start', {
-      threadId,
-      input: [{ type: 'text', text: zero3ApiAgentPrompt(text, request.history), textElements: [] }]
-    })
-    const turnId = zero3ApiAgentId(turn, 'turn')
-    const responseText = await zero3ApiAgentWaitForTurn(threadId, turnId)
+    const responseText = await zero3ApiAgentRunTurn(threadId, [
+      { type: 'text', text: zero3ApiAgentPrompt(text, request.history), textElements: [] }
+    ])
     return { text: responseText, model: profile.model, profileId: profile.id, threadId }
   },
   runCodex: request => zero3RunCodexCliTurn(request),

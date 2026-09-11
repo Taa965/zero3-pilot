@@ -614,6 +614,46 @@ async function zero3ApiAgentWaitForTurn(threadId: string, turnId: string) {
   }
   throw new Error('Codex Agent Kernel turn 超时')
 }
+// Subscribe before turn/start: fast completions can precede its RPC response.
+// thread/read reconstructs history and can briefly mark a running tool turn as
+// interrupted. Only the server's turn/completed notification is terminal here.
+async function zero3ApiAgentRunTurn(threadId: string, input: Array<Record<string, unknown>>) {
+  const deadline = Date.now() + ZERO3_API_TIMEOUT_MS
+  const completed = new Map<string, Record<string, unknown>>()
+  let lifecycleError: Error | null = null
+  const unsubscribe = zero3CodexAppServer.subscribe(event => {
+    if (event.kind === 'lifecycle' && (event.state === 'stopped' || event.state === 'error')) {
+      lifecycleError = new Error('Codex Agent Kernel 连接已关闭：' + (event.detail ?? event.state))
+      return
+    }
+    if (event.kind !== 'notification' || event.method !== 'turn/completed') return
+    const params = zero3SessionRecord(event.params)
+    if (params.threadId !== threadId) return
+    const turn = zero3SessionRecord(params.turn)
+    if (typeof turn.id === 'string') completed.set(turn.id, turn)
+  })
+  try {
+    const started = await zero3CodexAppServer.request('turn/start', { threadId, input })
+    const turnId = zero3ApiAgentId(started, 'turn')
+    while (Date.now() < deadline) {
+      const turn = completed.get(turnId)
+      if (turn) {
+        if (turn.status === 'failed') throw new Error('Codex Agent Kernel turn 失败：' + JSON.stringify(turn.error ?? 'unknown error'))
+        if (turn.status === 'interrupted') throw new Error('Codex Agent Kernel turn 已被中断')
+        if (turn.status !== 'completed') throw new Error('Codex Agent Kernel 返回了未知的终止状态')
+        // The pinned server includes the final agentMessage in this notification.
+        // Older compatible servers may omit items; read history only after the
+        // authoritative completion in that case.
+        return zero3ApiAgentFinalText(turn) || await zero3ApiAgentWaitForTurn(threadId, turnId)
+      }
+      if (lifecycleError) throw lifecycleError
+      await new Promise(resolve => setTimeout(resolve, ZERO3_API_AGENT_BRIDGE_POLL_MS))
+    }
+    throw new Error('Codex Agent Kernel turn 超时')
+  } finally {
+    unsubscribe()
+  }
+}
 async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: unknown, robotSafe = false) {
   const request = zero3SessionRecord(requestValue)
   const text = zero3SessionText(request.text, 'Zero3 prompt', 128_000)
@@ -649,12 +689,9 @@ async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: u
     })
     threadId = zero3ApiAgentId(started, 'thread')
   }
-  const turn = await zero3CodexAppServer.request('turn/start', {
-    threadId,
-    input: [{ type: 'text', text: zero3ApiAgentPrompt(text, request.history), textElements: [] }]
-  })
-  const turnId = zero3ApiAgentId(turn, 'turn')
-  const responseText = await zero3ApiAgentWaitForTurn(threadId, turnId)
+  const responseText = await zero3ApiAgentRunTurn(threadId, [
+    { type: 'text', text: zero3ApiAgentPrompt(text, request.history), textElements: [] }
+  ])
   return { text: responseText, model: profile.model, profileId: profile.id, threadId }
 }
 
