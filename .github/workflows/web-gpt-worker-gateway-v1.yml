@@ -12,6 +12,8 @@ on:
       - 'apps/zero3-desktop/workflow-runtime/**'
       - 'apps/zero3-desktop/gpt-web-runtime/chatgpt-wakeup.ts'
       - 'apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/overlay-patch.mjs'
+      - 'apps/zero3-desktop/tests/overlay-patch.test.mjs'
       - 'apps/zero3-desktop/artifact-runtime/**'
       - 'apps/zero3-desktop/scripts/apply-artifact-runtime.mjs'
       - 'apps/zero3-desktop/scripts/apply-shared-memory.mjs'
@@ -33,6 +35,8 @@ on:
       - 'apps/zero3-desktop/host-runtime/**'
       - 'apps/zero3-desktop/worker-runtime/v2/**'
       - 'apps/zero3-desktop/scripts/apply-agent-lifecycle-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/overlay-patch.mjs'
+      - 'apps/zero3-desktop/tests/overlay-patch.test.mjs'
       - 'apps/zero3-desktop/artifact-runtime/**'
       - 'apps/zero3-desktop/scripts/apply-artifact-runtime.mjs'
       - 'apps/zero3-desktop/scripts/apply-shared-memory.mjs'
@@ -62,6 +66,8 @@ jobs:
         run: git diff --check HEAD^...HEAD
       - name: Gateway architecture guard
         run: node scripts/check-web-gpt-worker-gateway-v1.mjs
+      - name: Worker Tunnel overlay replay guard
+        run: node --test apps/zero3-desktop/tests/overlay-patch.test.mjs
       - name: Worker Protocol v2 gateway guard
         run: node scripts/check-worker-protocol-v2-p2-p3.mjs
       - name: Worker Wakeup P5 guard

@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
+import { patchOverlaySource } from './overlay-patch.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'host-runtime')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'remote-host')
@@ -15,20 +16,16 @@ function write(file, content) {
   fs.writeFileSync(file, content)
 }
 
-function patchFile(relativePath, replacements) {
+function patchFile(relativePath, replacements, invariants = []) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
-  let source = read(file)
-  for (const replacement of replacements) {
-    if (source.includes(replacement.to) || (replacement.already && source.includes(replacement.already))) continue
-    if (!source.includes(replacement.from)) {
-      throw new Error(
-        `Zero3 Remote Host overlay drift in ${relativePath}: could not find ${replacement.label}. ` +
-          'Review the pinned Hermes/Codex desktop boundary before updating the upstream pin.'
-      )
-    }
-    source = source.replace(replacement.from, replacement.to)
-  }
-  write(file, source)
+  const patched = patchOverlaySource({
+    relativePath,
+    source: read(file),
+    replacements,
+    invariants,
+    driftPrefix: 'Zero3 Remote Host overlay'
+  })
+  write(file, patched)
 }
 
 function copyRuntimeSources() {
@@ -163,34 +160,91 @@ function applyCompletionGate() {
   ])
 }
 
+// The Remote Host node used to be constructed with the four Codex bridges and
+// no Worker RPC runtime provider. A generated tree can still hold that shape,
+// and the ready-boundary anchor below would then insert a second declaration
+// instead of upgrading the first one -- while that legacy tree already carries
+// the matching before-quit hook and the ready-boundary start, so the repair has
+// to rewrite the constructor alone. The candidate is the exact legacy text
+// (a shape, not a fuzzy span), so an already-upgraded tree never matches it and
+// no future line in the file can be swallowed by an open-ended match.
+const LEGACY_REMOTE_NODE_CONSTRUCTOR = [
+  'const zero3RemoteNode = new Zero3RemoteNode({',
+  "  startThread: params => zero3CodexAppServer.request('thread/start', params),",
+  "  startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs),",
+  "  readThread: params => zero3CodexAppServer.request('thread/read', params),",
+  "  execCommand: (params, timeoutMs) => zero3CodexAppServer.request('command/exec', params, timeoutMs)",
+  '})',
+  ''
+].join('\n')
+
+function zero3RemoteNodeConstructor() {
+  return (
+    "const zero3RemoteNode = new Zero3RemoteNode({\n" +
+    "  listSkills: params => zero3CodexAppServer.request('skills/list', params),\n" +
+    "  startThread: params => zero3CodexAppServer.request('thread/start', params),\n" +
+    "  startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs),\n" +
+    "  readThread: params => zero3CodexAppServer.request('thread/read', params),\n" +
+    "  execCommand: (params, timeoutMs) => zero3CodexAppServer.request('command/exec', params, timeoutMs)\n" +
+    "}, () => zero3WorkerAdmin())\n"
+  )
+}
+
+function zero3RemoteNodeRuntime() {
+  return (
+    zero3RemoteNodeConstructor() +
+    "app.on('before-quit', () => zero3RemoteNode.stop())\n\n" +
+    "app.whenReady().then(() => {\n" +
+    "  zero3RemoteNode.start()"
+  )
+}
+
 export function applyZero3RemoteHostRuntime() {
   copyRuntimeSources()
   applyCompletionGate()
 
-  patchFile('electron/main.ts', [
-    {
-      label: 'end of Electron import block',
-      already: "from './zero3/remote-host/index'",
-      from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
-      to:
-        "import { Zero3RemoteNode } from './zero3/remote-host/index'\n\n" +
-        "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
-    },
-    {
-      label: 'Electron ready boundary after Codex transport registration',
-      already: 'const zero3RemoteNode = new Zero3RemoteNode(',
-      from: "app.whenReady().then(() => {",
-      to:
-        "const zero3RemoteNode = new Zero3RemoteNode({\n" +
-        "  listSkills: params => zero3CodexAppServer.request('skills/list', params),\n" +
-        "  startThread: params => zero3CodexAppServer.request('thread/start', params),\n" +
-        "  startTurn: (params, timeoutMs) => zero3CodexAppServer.request('turn/start', params, timeoutMs),\n" +
-        "  readThread: params => zero3CodexAppServer.request('thread/read', params),\n" +
-        "  execCommand: (params, timeoutMs) => zero3CodexAppServer.request('command/exec', params, timeoutMs)\n" +
-        "}, () => zero3WorkerAdmin())\n" +
-        "app.on('before-quit', () => zero3RemoteNode.stop())\n\n" +
-        "app.whenReady().then(() => {\n" +
-        "  zero3RemoteNode.start()"
-    }
-  ])
+  patchFile(
+    'electron/main.ts',
+    [
+      {
+        label: 'end of Electron import block',
+        already: "from './zero3/remote-host/index'",
+        from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
+        to:
+          "import { Zero3RemoteNode } from './zero3/remote-host/index'\n\n" +
+          'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
+        hint: 'Review the pinned Hermes/Codex desktop boundary before updating the upstream pin.'
+      },
+      {
+        label: 'Electron ready boundary after Codex transport registration',
+        // The Agent Lifecycle overlay upgrades the provider argument from
+        // zero3WorkerAdmin() to the zero3WorkerRpcRuntime() composite, so both
+        // spellings mean this boundary is already wired. The provider-less
+        // legacy shape is neither, which is what routes it to the repair
+        // candidate instead of to a second insertion before the ready anchor.
+        alreadyAny: [zero3RemoteNodeConstructor(), '}, () => zero3WorkerRpcRuntime())'],
+        // A generated tree may still carry the provider-less constructor; that
+        // shape is repaired in place (it already owns the hook and the ready
+        // boundary start), otherwise the fresh-tree anchor inserts the whole
+        // composition before the ready boundary.
+        fromAny: [
+          { from: LEGACY_REMOTE_NODE_CONSTRUCTOR, to: zero3RemoteNodeConstructor() },
+          'app.whenReady().then(() => {'
+        ],
+        to: zero3RemoteNodeRuntime(),
+        hint:
+          'The Codex transport overlay must expose zero3CodexAppServer and the ready boundary before this overlay runs.'
+      }
+    ],
+    [
+      { label: 'Remote Host Runtime composition point', text: 'const zero3RemoteNode = new Zero3RemoteNode(', count: 1 },
+      {
+        label: 'Worker RPC runtime provider argument',
+        texts: ['}, () => zero3WorkerAdmin())', '}, () => zero3WorkerRpcRuntime())'],
+        count: 1
+      },
+      { label: 'Remote Host ready-boundary start', text: 'zero3RemoteNode.start()', count: 1 },
+      { label: 'Remote Host before-quit teardown', text: 'app.on(\'before-quit\', () => zero3RemoteNode.stop())', count: 1 }
+    ]
+  )
 }

@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
+import { patchOverlaySource } from './overlay-patch.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'worker-runtime', 'v2')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'worker-runtime', 'v2')
@@ -13,15 +14,16 @@ function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: tr
 function normalizeRelativeTypeScriptSpecifiers(source) {
   return source.replace(/(['"])(\.\.?\/[^'"\r\n]+)\.(?:ts|tsx)\1/gu, '$1$2$1')
 }
-function patchFile(relativePath, replacements) {
+function patchFile(relativePath, replacements, invariants = []) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
-  let source = read(file)
-  for (const replacement of replacements) {
-    if (source.includes(replacement.appliedMarker ?? replacement.to)) continue
-    if (!source.includes(replacement.from)) throw new Error(`Zero3 Agent Lifecycle overlay drift in ${relativePath}: missing ${replacement.label}`)
-    source = source.replace(replacement.from, replacement.to)
-  }
-  write(file, source)
+  const patched = patchOverlaySource({
+    relativePath,
+    source: read(file),
+    replacements,
+    invariants,
+    driftPrefix: 'Zero3 Agent Lifecycle overlay'
+  })
+  write(file, patched)
 }
 
 function copySources() {
@@ -180,28 +182,52 @@ const globalBridge = String.raw`    zero3WorkflowWorkers: {
     }
     hermesDesktop: {`
 
+// The Execution Runtime composition point is one statement, but the dispose
+// binding that holds it has been renamed more than once and the statement that
+// follows it keeps moving, so match the statement itself and insert after
+// whatever spelling the generated tree currently uses. Exactly one match is
+// required: no match means the Execution Runtime overlay never ran, and more
+// than one means a previous replay duplicated the composition point.
+const EXECUTION_RUNTIME_COMPOSITION = /const [A-Za-z0-9_$]+ = registerExecutionDesktopIpc\(zero3ExecutionRuntime[^\n]*\)\n/
+// The Remote Host overlay owns the constructor and this overlay upgrades its
+// runtime provider from the legacy admin port to the Worker RPC composite.
+const WORKER_RUNTIME_PROVIDER = /}, \(\) => zero3Worker[A-Za-z0-9_$]*\(\)\)/
+
 export function applyZero3AgentLifecycleRuntime() {
   copySources()
-  patchFile('electron/main.ts', [
-    {
-      label: 'Agent Lifecycle runtime import',
-      appliedMarker: "from './zero3/worker-runtime/v2/index'",
-      from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
-      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
-    },
-    {
-      label: 'Agent Lifecycle composition after Execution Runtime',
-      appliedMarker: 'const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(',
-      from: 'const disposeZero3ExecutionIpc = registerExecutionDesktopIpc(zero3ExecutionRuntime)\n',
-      to: 'const disposeZero3ExecutionIpc = registerExecutionDesktopIpc(zero3ExecutionRuntime)\n' + mainRuntime
-    },
-    {
-      label: 'Remote Worker RPC composite runtime provider',
-      appliedMarker: '}, () => zero3WorkerRpcRuntime())',
-      from: '}, () => zero3WorkerAdmin())',
-      to: '}, () => zero3WorkerRpcRuntime())'
-    }
-  ])
+  patchFile(
+    'electron/main.ts',
+    [
+      {
+        label: 'Agent Lifecycle runtime import',
+        appliedMarker: "from './zero3/worker-runtime/v2/index'",
+        from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
+        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      },
+      {
+        label: 'Agent Lifecycle composition after Execution Runtime',
+        appliedMarker: 'const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(',
+        fromAny: [EXECUTION_RUNTIME_COMPOSITION],
+        to: match => match + mainRuntime,
+        hint:
+          'The Execution Runtime bridge overlay (apply-execution-runtime-bridge.mjs) composes it and must run first; use prepare-codex-upstream.mjs instead of applying overlays by hand.'
+      },
+      {
+        label: 'Remote Worker RPC composite runtime provider',
+        appliedMarker: '}, () => zero3WorkerRpcRuntime())',
+        fromAny: ['}, () => zero3WorkerAdmin())', WORKER_RUNTIME_PROVIDER],
+        to: '}, () => zero3WorkerRpcRuntime())',
+        hint: 'The Remote Host overlay (apply-remote-host-runtime.mjs) composes the Zero3RemoteNode constructor and must run first.'
+      }
+    ],
+    [
+      { label: 'Agent Lifecycle composition point', text: 'const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(', count: 1 },
+      { label: 'Workflow Worker store composition point', text: 'const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(', count: 1 },
+      { label: 'Worker RPC composite runtime definition', text: 'async function zero3WorkerRpcRuntime(', count: 1 },
+      { label: 'Worker RPC composite runtime provider', text: '() => zero3WorkerRpcRuntime()', count: 1 },
+      { label: 'Agent Lifecycle teardown', text: 'zero3AgentLifecycleStore.close()', count: 1 }
+    ]
+  )
   patchFile('electron/preload.ts', [
     { label: 'Workflow Worker local admin preload', appliedMarker: "exposeInMainWorld('zero3WorkflowWorkers'", from: "contextBridge.exposeInMainWorld('hermesDesktop', {", to: preloadBridge }
   ])

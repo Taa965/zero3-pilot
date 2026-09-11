@@ -12,7 +12,8 @@ import {
   pinnedCodexBinary,
   repoRoot,
   resolveCodexHome,
-  resolveHermesHome
+  resolveHermesHome,
+  resolveZero3DataRoot
 } from './config.mjs'
 import { applyZero3DataDirectory } from './apply-data-directory.mjs'
 import { applyDevelopmentGroupBridge } from './apply-development-group-bridge.mjs'
@@ -43,6 +44,33 @@ function isDirectory(dir) {
     return fs.statSync(dir).isDirectory()
   } catch {
     return false
+  }
+}
+
+// Zero3 desktop configuration belongs to the operator, not to the build: the
+// packaged app reads process.env, so the development launcher has to hand it
+// the same environment instead of every launch inheriting whatever the last
+// shell exported. The file lives next to the app's data directory, accepts only
+// ZERO3_* keys, and never holds a secret value -- an explicit process
+// environment wins, and the Worker Tunnel names a separate token *file* that
+// the Electron main process reads itself.
+function applyZero3DesktopEnvironmentFile() {
+  const file = path.join(resolveZero3DataRoot(), 'zero3', 'desktop.env')
+  if (!isFile(file)) return
+  const applied = []
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/u)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const separator = trimmed.indexOf('=')
+    if (separator <= 0) continue
+    const key = trimmed.slice(0, separator).trim()
+    if (!/^ZERO3_[A-Z0-9_]+$/u.test(key)) continue
+    if ((process.env[key] ?? '').trim()) continue
+    process.env[key] = trimmed.slice(separator + 1).trim()
+    applied.push(key)
+  }
+  if (applied.length > 0) {
+    console.log(`[Zero3] Loaded desktop configuration from ${file}: ${applied.join(', ')}`)
   }
 }
 
@@ -316,6 +344,7 @@ function runHermesDesktop(script, env) {
 const externallyPrepared = ['1', 'true', 'yes', 'on'].includes(
   (process.env.ZERO3_DESKTOP_ALREADY_PREPARED ?? '').trim().toLowerCase()
 )
+applyZero3DesktopEnvironmentFile()
 if (!externallyPrepared) {
   runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-upstream.mjs'),
     ...(process.argv.includes('--desktop-reload') ? ['--refresh-generated'] : [])])
