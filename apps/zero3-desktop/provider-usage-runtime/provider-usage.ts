@@ -13,7 +13,7 @@ export type ProviderUsage = {
   checkedAt: string
   detail: string
 }
-export type UsageRequest = { provider: 'codex' | 'claude' | 'antigravity' | 'zero3'; profileId?: string | null; force?: boolean }
+export type UsageRequest = { provider: 'codex' | 'claude' | 'antigravity' | 'workbuddy' | 'zero3'; profileId?: string | null; force?: boolean }
 type Profile = { id: string; baseUrl: string; updatedAt: string; apiKey: string | null }
 type JsonFetch = (url: string, headers: Record<string, string>, env?: NodeJS.ProcessEnv) => Promise<unknown>
 const record = (value: unknown): Record<string, any> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {}
@@ -171,6 +171,7 @@ export function createProviderUsageService(deps: {
         if (request.provider === 'codex') result = codexUsage(await (deps.codex ?? readCodexUsage)())
         else if (request.provider === 'claude') result = claudeUsage(await (deps.claude ?? (() => readClaudeUsage(deps.fetchJson)))())
         else if (request.provider === 'antigravity') result = emptyUsage('当前 agy CLI 仅提供交互式 /usage 额度面板，未提供可读取的 5 小时与周额度接口', 'unsupported')
+        else if (request.provider === 'workbuddy') result = emptyUsage('CodeBuddy Code CLI 未提供可读取的额度接口，请在 WorkBuddy AI 中查看用量', 'unsupported')
         else {
           const endpoint = balanceEndpoint(profile!.baseUrl)
           if (!endpoint) result = emptyUsage('当前 API 服务商暂未接入余额查询，请在服务商控制台查看', 'unsupported')

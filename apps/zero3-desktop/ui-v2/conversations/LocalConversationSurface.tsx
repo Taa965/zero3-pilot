@@ -21,6 +21,7 @@ function providerLabel(provider: LocalSessionProvider) {
   if (provider === 'codex') return 'Codex Local'
   if (provider === 'claude') return 'Claude Code'
   if (provider === 'antigravity') return 'Antigravity'
+  if (provider === 'workbuddy') return 'WorkBuddy AI'
   return 'Zero3'
 }
 
@@ -54,6 +55,23 @@ async function runCodexTurn(session: LocalSessionRecord, project: Zero3ProjectRe
 
 async function runClaudeTurn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string) {
   const result = await window.zero3SessionProviders.claudeTurn({
+    text: prompt,
+    cwd: session.projectBinding?.rootPath ?? project?.rootPath ?? null,
+    sessionId: session.runtimeId,
+    model: session.model,
+    effort: session.thinkingEffort
+  })
+  if (result.sessionId && result.sessionId !== session.runtimeId) {
+    LocalSessionAdapter.setRuntimeId(session.id, result.sessionId)
+  }
+  return result.text
+}
+
+// WorkBuddy AI ships its own CodeBuddy Code CLI inside the desktop app. Like
+// Claude Code it is an external collaborator driven headlessly, but it resolves
+// from the WorkBuddy install rather than from PATH.
+async function runWorkbuddyTurn(session: LocalSessionRecord, project: Zero3ProjectRecord | null, prompt: string) {
+  const result = await window.zero3SessionProviders.workbuddyTurn({
     text: prompt,
     cwd: session.projectBinding?.rootPath ?? project?.rootPath ?? null,
     sessionId: session.runtimeId,
@@ -144,7 +162,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
     if (busy && provider === 'codex') codexProgressEndRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [busy, codexProgressLog.length, provider])
 
-  const requiresProject = provider === 'codex' || provider === 'claude' || provider === 'antigravity' || provider === 'zero3'
+  const requiresProject = provider === 'codex' || provider === 'claude' || provider === 'antigravity' || provider === 'workbuddy' || provider === 'zero3'
   const canSend = Boolean(session && input.trim() && !busy && (!requiresProject || project))
   const lastMessage = messages.at(-1)
   const savedFailure = lastMessage?.role === 'assistant' && lastMessage.content.startsWith('执行失败：')
@@ -200,6 +218,7 @@ export function LocalConversationSurface({ provider, session, project, onChanged
       if (provider === 'codex') response = await runCodexTurn(withUser, project, prompt, codexRequestId!)
       else if (provider === 'claude') response = await runClaudeTurn(withUser, project, prompt)
       else if (provider === 'antigravity') response = await runAntigravityTurn(withUser, project, prompt)
+      else if (provider === 'workbuddy') response = await runWorkbuddyTurn(withUser, project, prompt)
       else response = await runZero3Turn(withUser, project, prompt)
       providerReadiness.markReady(provider)
       const withAssistant = LocalSessionAdapter.appendMessage(session.id, 'assistant', response)
