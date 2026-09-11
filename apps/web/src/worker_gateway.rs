@@ -26,7 +26,7 @@ const MAX_WORKER_GATEWAY_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] = ["2025-03-26", "2025-06-18", "2025-11-25"];
 const WORKER_CAPABILITY: &str = "worker-protocol-v1";
-const WORKER_TOOLS: [&str; 14] = [
+const WORKER_TOOLS: [&str; 18] = [
     "register_worker",
     "claim_work",
     "report_progress",
@@ -41,6 +41,10 @@ const WORKER_TOOLS: [&str; 14] = [
     "task_complete",
     "memory_commit",
     "handoff_create",
+    "bootstrap_worker",
+    "commit_and_claim_next",
+    "report_blocked",
+    "recover_worker",
 ];
 #[derive(Clone)]
 pub struct WorkerGatewayRuntime {
@@ -845,28 +849,30 @@ fn worker_tool_catalog() -> Vec<Value> {
         ),
         tool_definition(
             "claim_work", "Claim Zero3 Work",
-            "Atomically claim the next available WorkUnits for this registered web GPT worker.",
+            "Claim the next V1 WorkUnits or Workflow Worker v2 StageRuns. Supply bindingTicket for v2; the old V1 identity fields remain compatible.",
             json!({
+                "bindingTicket": {"type":"string","minLength":1,"maxLength":16384},
                 "taskId": id_schema(), "stepId": id_schema(), "assignmentId": id_schema(),
                 "workerId": id_schema(), "sessionId": id_schema(),
                 "maxItems": {"type":"integer","minimum":1,"maximum":100},
-                "leaseSeconds": {"type":"integer","minimum":60,"maximum":86400},
+                "leaseSeconds": {"type":"integer","minimum":1,"maximum":86400},
                 "idempotencyKey": id_schema()
             }),
-            &["taskId","stepId","assignmentId","workerId","sessionId","idempotencyKey"], false,
+            &["idempotencyKey"], false,
         ),        tool_definition(
             "report_progress", "Report Zero3 Work Progress",
-            "Report progress for the active Claim and renew its lease without completing WorkUnits.",
+            "Report progress and renew a V1 Claim or a generation-fenced Workflow Worker v2 Claim. Supply bindingTicket for v2.",
             json!({
+                "bindingTicket": {"type":"string","minLength":1,"maxLength":16384},
                 "taskId": id_schema(), "stepId": id_schema(), "assignmentId": id_schema(),
                 "workerId": id_schema(), "sessionId": id_schema(), "claimId": id_schema(),
                 "progress": {"type":"number","minimum":0,"maximum":1},
                 "currentActivity": {"type":"string","maxLength":2048},
                 "runningUnitIds": {"type":"array","maxItems":100,"items":id_schema()},
-                "leaseSeconds": {"type":"integer","minimum":60,"maximum":86400},
+                "leaseSeconds": {"type":"integer","minimum":1,"maximum":86400},
                 "idempotencyKey": id_schema()
             }),
-            &["taskId","stepId","assignmentId","workerId","sessionId","claimId","progress","idempotencyKey"], false,
+            &["claimId","progress","idempotencyKey"], false,
         ),
         tool_definition(
             "complete_and_claim_next", "Complete Zero3 Batch And Claim Next",
@@ -986,6 +992,37 @@ fn worker_tool_catalog() -> Vec<Value> {
                 "decisions":{"type":"array","maxItems":100},"warnings":{"type":"array","maxItems":100},
                 "nextAction":{"type":"string","maxLength":4096},"idempotencyKey":id_schema()
             }), &["sessionId","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "bootstrap_worker", "Bootstrap Zero3 Workflow Worker",
+            "Validate a generation-fenced Worker Binding Ticket and restore the long-lived Workflow worker slot/session context.",
+            json!({"bindingTicket":{"type":"string","minLength":1,"maxLength":16384}}),
+            &["bindingTicket"], false,
+        ),
+        tool_definition(
+            "commit_and_claim_next", "Commit Zero3 Workflow Work And Claim Next",
+            "Atomically commit structured Artifacts for the active Workflow Claim, complete StageRuns, release dependent stages and claim the next available work.",
+            json!({
+                "bindingTicket":{"type":"string","minLength":1,"maxLength":16384},"claimId":id_schema(),
+                "artifacts":{"type":"array","maxItems":1000,"items":{"type":"object"}},
+                "maxItems":{"type":"integer","minimum":1,"maximum":100},
+                "leaseSeconds":{"type":"integer","minimum":1,"maximum":86400},"idempotencyKey":id_schema()
+            }), &["bindingTicket","claimId","artifacts","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "report_blocked", "Report Zero3 Workflow Claim Blocked",
+            "End the active Workflow Claim with retryable, human-waiting or terminal blocked semantics decided by Zero3.",
+            json!({
+                "bindingTicket":{"type":"string","minLength":1,"maxLength":16384},"claimId":id_schema(),
+                "disposition":{"type":"string","enum":["BLOCKED_RETRYABLE","WAITING_HUMAN","BLOCKED_TERMINAL"]},
+                "reason":{"type":"string","minLength":1,"maxLength":4096},"idempotencyKey":id_schema()
+            }), &["bindingTicket","claimId","disposition","reason","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "recover_worker", "Recover Zero3 Workflow Worker",
+            "Recover authoritative WorkerSlot, Physical Session, active Claim and ready-work state after page refresh or context loss.",
+            json!({"bindingTicket":{"type":"string","minLength":1,"maxLength":16384}}),
+            &["bindingTicket"], false,
         ),
     ]
 }

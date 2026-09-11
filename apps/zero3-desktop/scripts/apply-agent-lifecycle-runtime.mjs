@@ -31,6 +31,26 @@ function copySources() {
 }
 
 const mainRuntime = String.raw`
+function zero3WorkerBindingSecret() {
+  const file = path.join(app.getPath('userData'), 'zero3', 'worker-binding-secret')
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  try {
+    const existing = fs.readFileSync(file)
+    if (existing.byteLength < 32) throw new Error('worker binding secret is too short')
+    return existing
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  const created = crypto.randomBytes(48)
+  try { fs.writeFileSync(file, created, { flag: 'wx', mode: 0o600 }) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    return zero3WorkerBindingSecret()
+  }
+  return created
+}
+const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))
+const zero3WorkflowWorkerRuntime = new Zero3WorkflowWorkerRuntime(zero3WorkflowWorkerStore, { ticketSecret: zero3WorkerBindingSecret() })
 const zero3AgentLifecycleStore = new Zero3AgentLifecycleStore(path.join(app.getPath('userData'), 'zero3', 'agent-lifecycle.sqlite3'))
 const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(
   zero3AgentLifecycleStore,
@@ -70,12 +90,24 @@ const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(
   },
   { memoryForProject: projectId => zero3SharedMemoryForProject(projectId) }
 )
+function zero3WorkflowWorkerInput(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('workflow worker request must be an object')
+  return value as Record<string, unknown>
+}
+ipcMain.handle('zero3:workflow-worker:ensure-run', (_event, request: unknown) => zero3WorkflowWorkerRuntime.ensureWorkflowRun(zero3WorkflowWorkerInput(request)))
+ipcMain.handle('zero3:workflow-worker:ensure-binding', (_event, request: unknown) => zero3WorkflowWorkerRuntime.ensureWorkerBinding(zero3WorkflowWorkerInput(request)))
+ipcMain.handle('zero3:workflow-worker:add-items', (_event, request: unknown) => zero3WorkflowWorkerRuntime.addWorkItems(zero3WorkflowWorkerInput(request)))
+ipcMain.handle('zero3:workflow-worker:open-session', (_event, request: unknown) => zero3WorkflowWorkerRuntime.openPhysicalSession(zero3WorkflowWorkerInput(request)))
+ipcMain.handle('zero3:workflow-worker:rotate-session', (_event, request: unknown) => zero3WorkflowWorkerRuntime.rotatePhysicalSession(zero3WorkflowWorkerInput(request)))
+ipcMain.handle('zero3:workflow-worker:snapshot', (_event, workflowRunId: unknown) => zero3WorkflowWorkerRuntime.workflowSnapshot(workflowRunId))
+ipcMain.handle('zero3:workflow-worker:expire-leases', (_event, request: unknown) => zero3WorkflowWorkerRuntime.expireLeases(zero3WorkflowWorkerInput(request)))
+
 async function zero3WorkerRpcRuntime() {
   const v1 = await zero3WorkerAdmin()
   return {
     registerWorker: input => v1.registerWorker(input),
-    claimWork: input => v1.claimWork(input),
-    reportProgress: input => v1.reportProgress(input),
+    claimWork: input => ('bindingTicket' in input || 'ticket' in input) ? zero3WorkflowWorkerRuntime.claimWorkV2(input) : v1.claimWork(input),
+    reportProgress: input => ('bindingTicket' in input || 'ticket' in input) ? zero3WorkflowWorkerRuntime.reportProgressV2(input) : v1.reportProgress(input),
     completeAndClaimNext: input => v1.completeAndClaimNext(input),
     reportFailure: input => v1.reportFailure(input),
     getTaskContext: input => v1.getTaskContext(input),
@@ -86,11 +118,40 @@ async function zero3WorkerRpcRuntime() {
     artifactRegister: input => zero3AgentLifecycleRuntime.artifactRegister(input),
     taskComplete: input => zero3AgentLifecycleRuntime.taskComplete(input),
     memoryCommit: input => zero3AgentLifecycleRuntime.memoryCommit(input),
-    handoffCreate: input => zero3AgentLifecycleRuntime.handoffCreate(input)
+    handoffCreate: input => zero3AgentLifecycleRuntime.handoffCreate(input),
+    bootstrapWorker: input => zero3WorkflowWorkerRuntime.bootstrapWorker(input),
+    commitAndClaimNextV2: input => zero3WorkflowWorkerRuntime.commitAndClaimNext(input),
+    reportBlockedV2: input => zero3WorkflowWorkerRuntime.reportBlockedV2(input),
+    recoverWorker: input => zero3WorkflowWorkerRuntime.recoverWorker(input),
+    claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),
+    reportProgressV2: input => zero3WorkflowWorkerRuntime.reportProgressV2(input)
   }
 }
-app.on('before-quit', () => zero3AgentLifecycleStore.close())
+app.on('before-quit', () => { zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })
 `
+
+const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
+  ensureRun: input => ipcRenderer.invoke('zero3:workflow-worker:ensure-run', input),
+  ensureBinding: input => ipcRenderer.invoke('zero3:workflow-worker:ensure-binding', input),
+  addItems: input => ipcRenderer.invoke('zero3:workflow-worker:add-items', input),
+  openSession: input => ipcRenderer.invoke('zero3:workflow-worker:open-session', input),
+  rotateSession: input => ipcRenderer.invoke('zero3:workflow-worker:rotate-session', input),
+  snapshot: workflowRunId => ipcRenderer.invoke('zero3:workflow-worker:snapshot', workflowRunId),
+  expireLeases: input => ipcRenderer.invoke('zero3:workflow-worker:expire-leases', input)
+})
+
+contextBridge.exposeInMainWorld('hermesDesktop', {`
+
+const globalBridge = String.raw`    zero3WorkflowWorkers: {
+      ensureRun: (input: Record<string, unknown>) => Promise<unknown>
+      ensureBinding: (input: Record<string, unknown>) => Promise<unknown>
+      addItems: (input: Record<string, unknown>) => Promise<unknown>
+      openSession: (input: Record<string, unknown>) => Promise<unknown>
+      rotateSession: (input: Record<string, unknown>) => Promise<unknown>
+      snapshot: (workflowRunId: string) => Promise<unknown>
+      expireLeases: (input: Record<string, unknown>) => Promise<unknown>
+    }
+    hermesDesktop: {`
 
 export function applyZero3AgentLifecycleRuntime() {
   copySources()
@@ -99,7 +160,7 @@ export function applyZero3AgentLifecycleRuntime() {
       label: 'Agent Lifecycle runtime import',
       appliedMarker: "from './zero3/worker-runtime/v2/index'",
       from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
-      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore } from './zero3/worker-runtime/v2/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
     },
     {
       label: 'Agent Lifecycle composition after Execution Runtime',
@@ -113,5 +174,11 @@ export function applyZero3AgentLifecycleRuntime() {
       from: '}, () => zero3WorkerAdmin())',
       to: '}, () => zero3WorkerRpcRuntime())'
     }
+  ])
+  patchFile('electron/preload.ts', [
+    { label: 'Workflow Worker local admin preload', appliedMarker: "exposeInMainWorld('zero3WorkflowWorkers'", from: "contextBridge.exposeInMainWorld('hermesDesktop', {", to: preloadBridge }
+  ])
+  patchFile('src/global.d.ts', [
+    { label: 'Workflow Worker local admin renderer types', appliedMarker: '    zero3WorkflowWorkers: {', from: '    hermesDesktop: {', to: globalBridge }
   ])
 }

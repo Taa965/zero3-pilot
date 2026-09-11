@@ -15,6 +15,12 @@ export type Zero3WorkerRuntimePort = {
   taskComplete(input: Record<string, unknown>): unknown
   memoryCommit(input: Record<string, unknown>): unknown
   handoffCreate(input: Record<string, unknown>): unknown
+  bootstrapWorker(input: Record<string, unknown>): unknown
+  claimWorkV2(input: Record<string, unknown>): unknown
+  reportProgressV2(input: Record<string, unknown>): unknown
+  commitAndClaimNextV2(input: Record<string, unknown>): unknown
+  reportBlockedV2(input: Record<string, unknown>): unknown
+  recoverWorker(input: Record<string, unknown>): unknown
 }
 
 const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
@@ -31,7 +37,11 @@ const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
   'artifact_register',
   'task_complete',
   'memory_commit',
-  'handoff_create'
+  'handoff_create',
+  'bootstrap_worker',
+  'commit_and_claim_next',
+  'report_blocked',
+  'recover_worker'
 ])
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -56,9 +66,9 @@ export async function executeZero3WorkerRpc(
     case 'register_worker':
       return runtime.registerWorker(input)
     case 'claim_work':
-      return runtime.claimWork(input)
+      return ('bindingTicket' in input || 'ticket' in input) ? runtime.claimWorkV2(input) : runtime.claimWork(input)
     case 'report_progress':
-      return runtime.reportProgress(input)
+      return ('bindingTicket' in input || 'ticket' in input) ? runtime.reportProgressV2(input) : runtime.reportProgress(input)
     case 'complete_and_claim_next':
       return runtime.completeAndClaimNext(input)
     case 'report_failure':
@@ -81,5 +91,13 @@ export async function executeZero3WorkerRpc(
       return runtime.memoryCommit(input)
     case 'handoff_create':
       return runtime.handoffCreate(input)
+    case 'bootstrap_worker':
+      return runtime.bootstrapWorker(input)
+    case 'commit_and_claim_next':
+      return runtime.commitAndClaimNextV2(input)
+    case 'report_blocked':
+      return runtime.reportBlockedV2(input)
+    case 'recover_worker':
+      return runtime.recoverWorker(input)
   }
 }
