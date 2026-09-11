@@ -104,7 +104,7 @@ export function WorkspaceRouter({
             onExecutionChange={onLocalSessionExecutionChange}
           />
         ) : activeModule === 'tasks' ? (
-          <TaskWorkspace />
+          <TaskWorkspace project={activeProject} />
         ) : activeModule === 'groups' ? (
           <DevelopmentGroupWorkspace />
         ) : activeModule === 'projects' ? (

@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - 'apps/zero3-desktop/execution-runtime/**'
+      - 'apps/zero3-desktop/ui-v2/tasks/**'
+      - 'apps/zero3-desktop/tests/task-workspace*'
+      - 'apps/zero3-desktop/apply-zero3-ui-v2.mjs'
       - 'apps/zero3-desktop/worker-runtime/**'
       - 'apps/zero3-desktop/workflow-runtime/**'
       - 'apps/zero3-desktop/gpt-web-runtime/chatgpt-wakeup.ts'
@@ -40,6 +43,9 @@ on:
     branches: [main]
     paths:
       - 'apps/zero3-desktop/execution-runtime/**'
+      - 'apps/zero3-desktop/ui-v2/tasks/**'
+      - 'apps/zero3-desktop/tests/task-workspace*'
+      - 'apps/zero3-desktop/apply-zero3-ui-v2.mjs'
       - 'apps/zero3-desktop/worker-runtime/**'
       - 'apps/zero3-desktop/workflow-runtime/**'
       - 'apps/zero3-desktop/gpt-web-runtime/chatgpt-wakeup.ts'
@@ -93,7 +99,7 @@ jobs:
       - name: Repository architecture guard
         run: node scripts/check-architecture.mjs
       - name: Execution core and reporter behavior tests
-        run: node --experimental-transform-types --test apps/zero3-desktop/execution-runtime/execution-runtime.test.ts apps/zero3-desktop/execution-runtime/execution-reporter.test.ts apps/zero3-desktop/execution-runtime/execution-desktop-runtime.test.ts
+        run: node --experimental-transform-types --test apps/zero3-desktop/execution-runtime/execution-runtime.test.ts apps/zero3-desktop/execution-runtime/execution-reporter.test.ts apps/zero3-desktop/execution-runtime/execution-desktop-runtime.test.ts apps/zero3-desktop/tests/task-workspace.test.ts
       - name: Execution desktop bridge tests
         run: node --test apps/zero3-desktop/tests/execution-reporter-bridge.test.cjs
       - name: Reporter client syntax
