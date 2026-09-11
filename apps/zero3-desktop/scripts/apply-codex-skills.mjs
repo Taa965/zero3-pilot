@@ -99,7 +99,7 @@ function zero3CodexSkillRows(value: unknown): Array<Record<string, unknown>> {
 async function zero3InstallNativeSkill(value: unknown) {
   const request = zero3CodexSkillInstallParams(value)
   const listing = await zero3CodexAppServer.request('skills/list', { cwds: request.cwd ? [request.cwd] : [], forceReload: true })
-  const installer = zero3CodexSkillRows(listing).find(skill => skill.name === 'skill-installer' && typeof skill.path === 'string')
+  const installer = zero3CodexSkillRows(listing).find(skill => skill.name === 'skill-installer' && skill.scope === 'system' && skill.enabled !== false && typeof skill.path === 'string')
   if (!installer || typeof installer.path !== 'string') throw new Error('Codex native skill-installer is unavailable')
   const threadResponse = zero3CodexRecord(await zero3CodexAppServer.request('thread/start', {
     ...(request.cwd ? { cwd: request.cwd } : {}),
@@ -109,7 +109,8 @@ async function zero3InstallNativeSkill(value: unknown) {
   }))
   const thread = zero3CodexRecord(threadResponse.thread)
   const threadId = zero3CodexRequiredString(thread.id, 'skill installer thread id', 256)
-  const prompt = 'Install the Codex Skill from this source into the normal user Codex skills directory. Use the native skill-installer workflow and do not create a Zero3-specific copy or registry. Source: ' + request.source
+  const destination = zero3CodexSharedSkillRoot() ?? path.join(os.homedir(), '.codex', 'skills')
+  const prompt = 'Install the Codex Skill using the native skill-installer workflow. Pass --dest ' + JSON.stringify(destination) + ' explicitly to its install script; CODEX_HOME belongs to the isolated Zero3 kernel and is not the installation destination. Do not create a Zero3-specific copy or registry. Report the installed Skill path or the concrete failure. Source: ' + request.source
   const turn = await zero3CodexAppServer.request('turn/start', {
     threadId,
     input: [
@@ -117,7 +118,7 @@ async function zero3InstallNativeSkill(value: unknown) {
       { type: 'text', text: prompt, text_elements: [] }
     ]
   }, ZERO3_CODEX_TURN_TIMEOUT_MS)
-  return { threadId, source: request.source, turn }
+  return { threadId, source: request.source, destination, turn }
 }
 `
 
@@ -166,11 +167,28 @@ type Zero3CodexSkillsListRequest = { cwds?: string[]; forceReload?: boolean }
 type Zero3CodexSkillsListResponse = { data: Array<{ cwd: string; skills: Zero3CodexSkillMetadata[]; errors: Array<{ path: string; message: string }> }> }
 type Zero3CodexSkillConfigRequest = { path?: string; name?: string; enabled: boolean }
 type Zero3CodexSkillInstallRequest = { source: string; cwd?: string }
-type Zero3CodexSkillInstallResponse = { threadId: string; source: string; turn: unknown }
+type Zero3CodexSkillInstallResponse = { threadId: string; source: string; destination: string; turn: unknown }
 `
 
 export function applyZero3CodexSkills() {
   stageSkillRuntime()
+  // Prepared desktops may already contain an older version of this overlay.
+  // Replace the owned helper block before the general insert-if-missing patches
+  // so an upgrade cannot silently add duplicate function/type declarations.
+  const mainFile = path.join(hermesDesktopDir, 'electron', 'main.ts')
+  let mainSource = fs.readFileSync(mainFile, 'utf8')
+  const helperStart = mainSource.indexOf('\nfunction zero3CodexSkillsListParams(')
+  if (helperStart >= 0) {
+    const helperEnd = mainSource.indexOf('\nfunction zero3CodexThreadStartParams(', helperStart)
+    if (helperEnd < 0) throw new Error('Zero3 Codex native Skills drift: missing end of owned helper block')
+    mainSource = mainSource.slice(0, helperStart) + mainSkillHelpers + mainSource.slice(helperEnd)
+    fs.writeFileSync(mainFile, mainSource)
+  }
+  const typesFile = path.join(hermesDesktopDir, 'src', 'global.d.ts')
+  fs.writeFileSync(typesFile, fs.readFileSync(typesFile, 'utf8').replace(
+    'type Zero3CodexSkillInstallResponse = { threadId: string; source: string; turn: unknown }',
+    'type Zero3CodexSkillInstallResponse = { threadId: string; source: string; destination: string; turn: unknown }'
+  ))
   patchFile('electron/main.ts', [
     {
       label: 'Skill runtime import',

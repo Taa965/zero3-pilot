@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { SkillAdapter, type SkillBinding, type SkillRecord } from './SkillAdapter'
+import { SkillInstallPanel } from './SkillInstallPanel'
 
 export function SkillWorkspace({ cwd }: { cwd: string | null }) {
   const [items, setItems] = useState<SkillRecord[]>([])
   const [query, setQuery] = useState('')
-  const [source, setSource] = useState('')
   const [loading, setLoading] = useState(false)
-  const [installing, setInstalling] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
   const [bindings, setBindings] = useState<SkillBinding[]>([])
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [detail, setDetail] = useState('')
@@ -71,23 +69,7 @@ export function SkillWorkspace({ cwd }: { cwd: string | null }) {
     }
   }, [refresh])
 
-  const install = useCallback(async () => {
-    const value = source.trim()
-    if (!value || installing) return
-    setInstalling(true)
-    setError(null)
-    setNotice(null)
-    try {
-      const result = await SkillAdapter.install(value, cwd)
-      setNotice(`已交给 Codex 原生 skill-installer 执行 · Thread ${result.threadId}`)
-      setSource('')
-      await refresh(true)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setInstalling(false)
-    }
-  }, [cwd, installing, refresh, source])
+  const installationFinished = useCallback(() => { void refresh(true) }, [refresh])
 
   return (
     <div className="h-full overflow-y-auto bg-(--ui-pane-background) p-6">
@@ -100,15 +82,7 @@ export function SkillWorkspace({ cwd }: { cwd: string | null }) {
           <button className="rounded-md border border-(--ui-border) px-3 py-1.5 text-sm hover:bg-(--ui-control-hover-background)" onClick={() => void refresh(true)} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>
         </div>
 
-        <section className="rounded-lg border border-(--ui-border) bg-background p-4">
-          <div className="font-medium">安装 Skill（Codex 原生）</div>
-          <div className="mt-1 text-xs text-(--ui-text-secondary)">输入 GitHub Skill URL、仓库路径或 Codex skill-installer 支持的来源。安装动作由 Codex 自带的 <code>skill-installer</code> 执行，Zero3 不复制安装逻辑。</div>
-          <div className="mt-3 flex gap-2">
-            <input className="min-w-0 flex-1 rounded-md border border-(--ui-border) bg-(--ui-pane-background) px-3 py-2 text-sm outline-none focus:border-blue-500" placeholder="https://github.com/.../tree/main/path/to/skill" value={source} onChange={event => setSource(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void install() }} />
-            <button className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={!source.trim() || installing} onClick={() => void install()}>{installing ? '安装中…' : '安装'}</button>
-          </div>
-          {notice && <div className="mt-2 text-xs text-emerald-500">{notice}</div>}
-        </section>
+        <SkillInstallPanel cwd={cwd} onFinished={installationFinished} />
 
         <input className="w-full rounded-md border border-(--ui-border) bg-background px-3 py-2 text-sm outline-none focus:border-blue-500" placeholder="搜索 Skill 名称、说明或路径" value={query} onChange={event => setQuery(event.target.value)} />
         {error && <pre className="whitespace-pre-wrap rounded-md border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">{error}</pre>}
