@@ -16,6 +16,7 @@ import {
 } from '../workspace/workspace-entry-types'
 import { ChatGptSignedOutError, readChatGptProjectCatalog, withChatGptContents } from './chatgpt-project-catalog'
 import { chatGptProjectId, loadChatGptProject } from './chatgpt-project-navigation'
+import { sendChatGptWakeup } from './chatgpt-wakeup'
 import { chatGptConversationId, renameChatGptConversation, setChatGptConversationArchived } from './chatgpt-conversation-name'
 import {
   ZERO3_GPT_WEB_ACTIVITY_WINDOW_MS,
@@ -616,6 +617,20 @@ export class Zero3GptWebProvider {
     const detected = await this.readExecutionState(live)
     if (detected !== null) this.publishExecutionState(live.entryId, detected)
     return detected ?? this.executionStates.get(live.entryId) ?? stoppedExecutionStatus()
+  }
+
+  async sendWakeup(idValue: unknown, messageValue: unknown): Promise<{ sent: true }> {
+    const id = requiredText(idValue, 'workspace entry id', MAX_ENTRY_ID)
+    const entry = await this.requireEntry(id)
+    const live = await this.ensureLive(entry)
+    if (live.loadState === 'warming') await this.waitUntilRenderable(live)
+    if (live.loadState !== 'warm') throw new Error('GPT Web page is not ready for wakeup')
+    const status = await this.executionStatus(id)
+    if (status.executing) throw new Error(`GPT Web session is already executing (${status.health ?? 'active'})`)
+    const result = await sendChatGptWakeup(live.view.webContents, messageValue)
+    live.lastUsedAt = Date.now()
+    this.bump(id)
+    return result
   }
 
   snapshot(idValue: unknown): Zero3GptWebSnapshotResult {

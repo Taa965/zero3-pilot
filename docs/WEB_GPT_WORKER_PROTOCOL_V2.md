@@ -2,7 +2,7 @@
 
 ## Status
 
-Phases P1-P4 are implemented: contracts, long-lived Worker Runtime v2, Private Gateway v2 and the long-lived GPT Worker Skill. V1 remains fully supported for compatibility.
+Phases P1-P5 are implemented: contracts, long-lived Worker Runtime v2, Private Gateway v2, the long-lived GPT Worker Skill, and the local Worker Wakeup Controller. V1 remains fully supported for compatibility.
 
 ## Purpose
 
@@ -91,3 +91,12 @@ Zero3-only administration (`ensureRun`, `ensureBinding`, `addItems`, `openSessio
 ## P4 long-lived Worker Skill
 
 `skills/zero3-web-worker/SKILL.md` now requires bootstrap, bounded claim execution, structured Artifact commit, NO_WORK_AVAILABLE waiting behavior, generation rotation handling, blocked reporting and authoritative recovery after context loss.
+
+
+## P5 Worker Wakeup
+
+The Workflow Worker runtime persists READY-queue observations and creates a durable wakeup only on a `0 -> >0` transition for a waiting WorkerSlot. `(workerSlotId, queueGeneration)` is unique, so one queue transition cannot generate duplicate logical wakeups.
+
+`Zero3WorkerWakeupController` is local-only. It checks the existing GPT Web execution-health watchdog before delivery, never reads assistant output, and sends a bounded fixed prompt through the visible ChatGPT composer. Active turns are deferred with backoff; repeated stalled turns move the physical session to `ROTATING` instead of sending more prompts. If the ready work is claimed before delivery, the stale wakeup is suppressed.
+
+Wakeup is intentionally absent from the public MCP catalog. Web GPT cannot wake itself or another session through the plugin.

@@ -179,3 +179,36 @@ test('P2 expired lease requeues work for another worker slot', () => {
     assert.equal(reclaimed.claim.units[0].stageRunId, 'e-1-script')
   } finally { store.close() }
 })
+
+test('P5 READY queue 0->1 creates one deduped wakeup and claimed work suppresses it', () => {
+  const { store, worker } = runtime()
+  try {
+    worker.ensureWorkflowRun({ workflowRunId: 'run-001', taskId: 'task-001', moduleId: 'cognitive-store', moduleVersion: 'v2' })
+    worker.ensureWorkerBinding({ binding: binding('script-worker-01', 1) })
+    worker.ensureWorkerBinding({ binding: {
+      ...binding('visual-worker-01', 1), workerDefinitionId: 'visual-planner', requiredCapabilities: ['visual-plan']
+    } })
+    worker.addWorkItems({ workflowRunId: 'run-001', idempotencyKey: 'seed-wakeup', items: [{
+      workItemId: 'wake-item', title: 'Wake item', stages: [
+        { stageRunId: 'wake-script', stageKey: 'script-rewrite', workerDefinitionId: 'script-rewriter', requiredCapability: 'script-rewrite',
+          instruction: 'rewrite', inputs: [], expectedOutputs: [{ logicalName: '重构脚本.md', required: true }], policy: { maxAttempts: 3, leaseSeconds: 1800 }, metadata: {} },
+        { stageRunId: 'wake-visual', stageKey: 'visual-plan', workerDefinitionId: 'visual-planner', requiredCapability: 'visual-plan',
+          dependsOn: ['wake-script'], instruction: 'visual', inputs: [], expectedOutputs: [], policy: { maxAttempts: 3, leaseSeconds: 1800 }, metadata: {} }
+      ]
+    }] })
+    const visual = worker.openPhysicalSession({ workerSlotId: 'visual-worker-01', logicalSessionId: 'gpt-visual-entry' }) as any
+    assert.equal((worker.claimWorkV2({ bindingTicket: visual.ticket, idempotencyKey: 'visual-wait' }) as any).state, 'NO_WORK_AVAILABLE')
+    const script = worker.openPhysicalSession({ workerSlotId: 'script-worker-01', logicalSessionId: 'gpt-script-entry' }) as any
+    const scriptClaim = (worker.claimWorkV2({ bindingTicket: script.ticket, idempotencyKey: 'script-claim-wakeup' }) as any).claim
+    worker.commitAndClaimNext({ bindingTicket: script.ticket, claimId: scriptClaim.claimId,
+      artifacts: [artifactFor(scriptClaim, script.workerSessionId, '-wakeup')], idempotencyKey: 'script-complete-wakeup' })
+    const first = worker.pendingWakeups()
+    const second = worker.pendingWakeups()
+    assert.equal(first.length, 1)
+    assert.equal(second.length, 1)
+    assert.equal(first[0].wakeupId, second[0].wakeupId)
+    assert.equal(first[0].logicalSessionId, 'gpt-visual-entry')
+    assert.equal((worker.claimWorkV2({ bindingTicket: visual.ticket, idempotencyKey: 'visual-claims-ready' }) as any).state, 'CLAIMED')
+    assert.deepEqual(worker.pendingWakeups(), [])
+  } finally { store.close() }
+})

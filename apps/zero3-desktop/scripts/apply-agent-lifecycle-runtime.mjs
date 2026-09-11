@@ -5,6 +5,8 @@ import { hermesDesktopDir, overlayRuntimeSource, repoRoot } from './config.mjs'
 
 const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'worker-runtime', 'v2')
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'worker-runtime', 'v2')
+const workflowSourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'workflow-runtime')
+const workflowTargetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'workflow-runtime')
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
 function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
@@ -27,6 +29,11 @@ function copySources() {
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) continue
     write(path.join(targetDir, entry.name), overlayRuntimeSource(normalizeRelativeTypeScriptSpecifiers(read(path.join(sourceDir, entry.name)))))
+  }
+  fs.mkdirSync(workflowTargetDir, { recursive: true })
+  for (const entry of fs.readdirSync(workflowSourceDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) continue
+    write(path.join(workflowTargetDir, entry.name), overlayRuntimeSource(normalizeRelativeTypeScriptSpecifiers(read(path.join(workflowSourceDir, entry.name)))))
   }
 }
 
@@ -51,6 +58,11 @@ function zero3WorkerBindingSecret() {
 }
 const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))
 const zero3WorkflowWorkerRuntime = new Zero3WorkflowWorkerRuntime(zero3WorkflowWorkerStore, { ticketSecret: zero3WorkerBindingSecret() })
+const zero3WorkerWakeupController = new Zero3WorkerWakeupController(zero3WorkflowWorkerRuntime, {
+  executionStatus: entryId => zero3GptWeb.executionStatus(entryId),
+  sendWakeup: (entryId, message) => zero3GptWeb.sendWakeup(entryId, message)
+})
+zero3WorkerWakeupController.start()
 const zero3AgentLifecycleStore = new Zero3AgentLifecycleStore(path.join(app.getPath('userData'), 'zero3', 'agent-lifecycle.sqlite3'))
 const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(
   zero3AgentLifecycleStore,
@@ -127,7 +139,7 @@ async function zero3WorkerRpcRuntime() {
     reportProgressV2: input => zero3WorkflowWorkerRuntime.reportProgressV2(input)
   }
 }
-app.on('before-quit', () => { zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })
+app.on('before-quit', () => { zero3WorkerWakeupController.stop(); zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })
 `
 
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
@@ -160,7 +172,7 @@ export function applyZero3AgentLifecycleRuntime() {
       label: 'Agent Lifecycle runtime import',
       appliedMarker: "from './zero3/worker-runtime/v2/index'",
       from: "const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR",
-      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerWakeupController } from './zero3/workflow-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
     },
     {
       label: 'Agent Lifecycle composition after Execution Runtime',

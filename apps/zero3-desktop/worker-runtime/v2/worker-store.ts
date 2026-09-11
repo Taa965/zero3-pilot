@@ -85,6 +85,18 @@ function openDatabase(filename: string): DatabaseSync {
       scope_key TEXT NOT NULL, idempotency_key TEXT NOT NULL, operation TEXT NOT NULL,
       request_hash TEXT NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL,
       PRIMARY KEY(scope_key,idempotency_key));`)
+  db.exec(`CREATE TABLE IF NOT EXISTS workflow_worker_queue_state (
+      workflow_run_id TEXT NOT NULL, worker_definition_id TEXT NOT NULL,
+      ready_count INTEGER NOT NULL DEFAULT 0, queue_generation INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL, PRIMARY KEY(workflow_run_id,worker_definition_id));
+    CREATE TABLE IF NOT EXISTS workflow_worker_wakeups (
+      wakeup_id TEXT PRIMARY KEY, workflow_run_id TEXT NOT NULL, worker_definition_id TEXT NOT NULL,
+      worker_slot_id TEXT NOT NULL, worker_session_id TEXT NOT NULL, logical_session_id TEXT NOT NULL,
+      queue_generation INTEGER NOT NULL, state TEXT NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0,
+      message TEXT NOT NULL, last_error TEXT, next_attempt_at TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, delivered_at TEXT,
+      UNIQUE(worker_slot_id,queue_generation));
+    CREATE INDEX IF NOT EXISTS idx_workflow_wakeups_pending ON workflow_worker_wakeups(state,created_at,wakeup_id);`)
   return db
 }
 

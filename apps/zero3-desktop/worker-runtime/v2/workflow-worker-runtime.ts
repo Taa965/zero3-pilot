@@ -348,8 +348,12 @@ export class Zero3WorkflowWorkerRuntime {
           this.store.db.prepare('INSERT INTO stage_dependencies (stage_run_id,depends_on_stage_run_id) VALUES (?,?)').run(entry.stageRunId, parent)
         }
       }
-      for (const stageRunId of insertedStageIds) this.recalculateStageReadiness(stageRunId, this.now())
-      for (const workItemId of insertedItemIds) this.recalculateWorkItem(workflowRunId, workItemId, this.now())
+      const readinessAt = this.now()
+      for (const stageRunId of insertedStageIds) this.recalculateStageReadiness(stageRunId, readinessAt)
+      for (const workItemId of insertedItemIds) this.recalculateWorkItem(workflowRunId, workItemId, readinessAt)
+      for (const workerDefinitionId of this.workerDefinitionsForStages(insertedStageIds)) {
+        this.refreshWakeupsTx(workflowRunId, workerDefinitionId, readinessAt)
+      }
       this.event({ workflowRunId, type: 'work_items.added', payload: { workItemIds: insertedItemIds, stageRunIds: insertedStageIds } })
       return {
         addedWorkItems: insertedItemIds.length,
@@ -495,6 +499,7 @@ export class Zero3WorkflowWorkerRuntime {
       this.event({ workflowRunId, claimId: claim.claim_id, workerDefinitionId: claim.worker_definition_id,
         workerSlotId: claim.worker_slot_id, workerSessionId: claim.worker_session_id,
         type: 'claim.expired', payload: { generation: Number(claim.generation) }, at })
+      this.refreshWakeupsTx(workflowRunId, claim.worker_definition_id, at)
     }
     return expired
   }
@@ -624,6 +629,7 @@ export class Zero3WorkflowWorkerRuntime {
     this.event({ workflowRunId: verified.binding.workflowRunId, workerDefinitionId: verified.binding.workerDefinitionId,
       workerSlotId: verified.binding.workerSlotId, workerSessionId: verified.session.workerSessionId,
       claimId, type: 'claim.created', payload: { stageRunIds: eligible.map(row => row.stage_run_id), leaseUntil }, at })
+    this.refreshWakeupsTx(verified.binding.workflowRunId, verified.binding.workerDefinitionId, at)
     return this.claimView(claimId)
   }
 
@@ -767,6 +773,9 @@ export class Zero3WorkflowWorkerRuntime {
         }
         this.store.db.prepare("UPDATE workflow_claims SET status='COMPLETED',updated_at=?,completed_at=? WHERE claim_id=?")
           .run(at, at, claim.claim_id)
+        for (const workerDefinitionId of this.workerDefinitionsForStages(releasedStages)) {
+          this.refreshWakeupsTx(verified.binding.workflowRunId, workerDefinitionId, at)
+        }
         const processedDelta = completedWorkItems.size || new Set(stages.map(stage => stage.work_item_id)).size
         this.store.db.prepare('UPDATE physical_worker_sessions SET processed_item_count=processed_item_count+?,last_activity_at=? WHERE worker_session_id=?')
           .run(processedDelta, at, verified.session.workerSessionId)
@@ -836,6 +845,7 @@ export class Zero3WorkflowWorkerRuntime {
           .run(at, verified.session.workerSessionId)
         this.store.db.prepare("UPDATE worker_slots SET state='WAITING',updated_at=? WHERE worker_slot_id=?")
           .run(at, verified.binding.workerSlotId)
+        this.refreshWakeupsTx(verified.binding.workflowRunId, verified.binding.workerDefinitionId, at)
         this.event({ workflowRunId: verified.binding.workflowRunId, workerDefinitionId: verified.binding.workerDefinitionId,
           workerSlotId: verified.binding.workerSlotId, workerSessionId: verified.session.workerSessionId,
           claimId: claim.claim_id, type: 'claim.blocked', payload: { disposition, reason }, at })
@@ -914,5 +924,141 @@ export class Zero3WorkflowWorkerRuntime {
     const workflowRunId = id(input.workflowRunId, 'workflowRunId')
     const at = input.at == null ? this.now() : new Date(text(input.at, 'at', 128)).toISOString()
     return this.store.transaction(() => ({ expiredClaimIds: this.expireClaimsTx(workflowRunId, at), counts: this.workflowCounts(workflowRunId) }))
+  }
+  private readyCount(workflowRunId: string, workerDefinitionId: string): number {
+    return Number((this.store.db.prepare("SELECT COUNT(*) AS value FROM stage_runs WHERE workflow_run_id=? AND worker_definition_id=? AND status='READY'")
+      .get(workflowRunId, workerDefinitionId) as any).value)
+  }
+
+  private refreshWakeupsTx(workflowRunId: string, workerDefinitionId: string, at: string): string[] {
+    const readyCount = this.readyCount(workflowRunId, workerDefinitionId)
+    const prior = this.store.db.prepare('SELECT * FROM workflow_worker_queue_state WHERE workflow_run_id=? AND worker_definition_id=?')
+      .get(workflowRunId, workerDefinitionId) as any
+    const previousCount = prior ? Number(prior.ready_count) : 0
+    let generation = prior ? Number(prior.queue_generation) : 0
+    const created: string[] = []
+    if (previousCount === 0 && readyCount > 0) {
+      generation += 1
+      const slots = this.store.db.prepare(`SELECT s.*, p.logical_session_id, p.state AS session_state FROM worker_slots s
+        JOIN physical_worker_sessions p ON p.worker_session_id=s.active_worker_session_id
+        WHERE s.workflow_run_id=? AND s.worker_definition_id=? AND s.state IN ('WAITING','IDLE')
+          AND p.state IN ('WAITING','ACTIVE') ORDER BY s.worker_slot_id`)
+        .all(workflowRunId, workerDefinitionId) as any[]
+      for (const slot of slots) {
+        const activeClaim = this.store.db.prepare("SELECT 1 FROM workflow_claims WHERE worker_slot_id=? AND status='ACTIVE' LIMIT 1")
+          .get(slot.worker_slot_id)
+        if (activeClaim) continue
+        const wakeupId = `wake-${randomUUID()}`
+        const message = '继续执行当前工位任务。请先调用 recover_worker，然后调用 claim_work。'
+        this.store.db.prepare(`INSERT OR IGNORE INTO workflow_worker_wakeups
+          (wakeup_id,workflow_run_id,worker_definition_id,worker_slot_id,worker_session_id,logical_session_id,
+           queue_generation,state,attempt_count,message,next_attempt_at,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,'WAKE_PENDING',0,?,?,?,?)`).run(
+          wakeupId, workflowRunId, workerDefinitionId, slot.worker_slot_id, slot.active_worker_session_id,
+          slot.logical_session_id, generation, message, at, at, at)
+        const inserted = this.store.db.prepare('SELECT wakeup_id FROM workflow_worker_wakeups WHERE worker_slot_id=? AND queue_generation=?')
+          .get(slot.worker_slot_id, generation) as any
+        if (inserted?.wakeup_id === wakeupId) created.push(wakeupId)
+      }
+    }
+    this.store.db.prepare(`INSERT INTO workflow_worker_queue_state
+      (workflow_run_id,worker_definition_id,ready_count,queue_generation,updated_at)
+      VALUES (?,?,?,?,?) ON CONFLICT(workflow_run_id,worker_definition_id) DO UPDATE SET
+      ready_count=excluded.ready_count,queue_generation=excluded.queue_generation,updated_at=excluded.updated_at`)
+      .run(workflowRunId, workerDefinitionId, readyCount, generation, at)
+    return created
+  }
+
+  private workerDefinitionsForStages(stageRunIds: string[]): string[] {
+    const result = new Set<string>()
+    for (const stageRunId of stageRunIds) {
+      const row = this.store.db.prepare('SELECT worker_definition_id FROM stage_runs WHERE stage_run_id=?').get(stageRunId) as any
+      if (row?.worker_definition_id) result.add(String(row.worker_definition_id))
+    }
+    return [...result]
+  }
+  pendingWakeups(limit = 100): Array<Record<string, unknown>> {
+    const bounded = integer(limit, 'wakeup limit', 1, 1000)
+    const rows = this.store.db.prepare(`SELECT w.*, s.state AS slot_state, p.state AS session_state
+      FROM workflow_worker_wakeups w
+      JOIN worker_slots s ON s.worker_slot_id=w.worker_slot_id
+      JOIN physical_worker_sessions p ON p.worker_session_id=w.worker_session_id
+      WHERE w.state='WAKE_PENDING' AND w.next_attempt_at<=? ORDER BY w.created_at,w.wakeup_id LIMIT ?`).all(this.now(), bounded) as any[]
+    const results: Array<Record<string, unknown>> = []
+    for (const row of rows) {
+      const readyCount = this.readyCount(row.workflow_run_id, row.worker_definition_id)
+      const activeClaim = this.store.db.prepare("SELECT 1 FROM workflow_claims WHERE worker_slot_id=? AND status='ACTIVE' LIMIT 1")
+        .get(row.worker_slot_id)
+      const activeSession = this.store.db.prepare('SELECT active_worker_session_id FROM worker_slots WHERE worker_slot_id=?').get(row.worker_slot_id) as any
+      if (readyCount === 0 || activeClaim || activeSession?.active_worker_session_id !== row.worker_session_id ||
+          !['WAITING', 'IDLE'].includes(row.slot_state) || !['WAITING', 'ACTIVE'].includes(row.session_state)) {
+        this.store.db.prepare("UPDATE workflow_worker_wakeups SET state='SUPPRESSED',updated_at=?,last_error=? WHERE wakeup_id=?")
+          .run(this.now(), 'wakeup no longer eligible', row.wakeup_id)
+        continue
+      }
+      results.push({
+        wakeupId: row.wakeup_id,
+        workflowRunId: row.workflow_run_id,
+        workerDefinitionId: row.worker_definition_id,
+        workerSlotId: row.worker_slot_id,
+        workerSessionId: row.worker_session_id,
+        logicalSessionId: row.logical_session_id,
+        queueGeneration: Number(row.queue_generation),
+        attemptCount: Number(row.attempt_count),
+        message: row.message
+      })
+    }
+    return results
+  }
+  markWakeupDelivered(wakeupIdValue: unknown): void {
+    const wakeupId = id(wakeupIdValue, 'wakeupId')
+    const at = this.now()
+    this.store.transaction(() => {
+      const row = this.store.db.prepare("SELECT state FROM workflow_worker_wakeups WHERE wakeup_id=?").get(wakeupId) as any
+      if (!row) throw new Error('wakeup not found')
+      if (row.state === 'DELIVERED') return
+      if (row.state !== 'WAKE_PENDING') throw new Error(`wakeup is ${row.state}`)
+      this.store.db.prepare("UPDATE workflow_worker_wakeups SET state='DELIVERED',attempt_count=attempt_count+1,last_error=NULL,updated_at=?,delivered_at=? WHERE wakeup_id=?")
+        .run(at, at, wakeupId)
+    })
+  }
+
+  deferWakeup(wakeupIdValue: unknown, reasonValue: unknown): void {
+    const wakeupId = id(wakeupIdValue, 'wakeupId')
+    const reason = text(reasonValue, 'wakeup defer reason', 4096)
+    const at = this.now()
+    const row = this.store.db.prepare("SELECT attempt_count FROM workflow_worker_wakeups WHERE wakeup_id=? AND state='WAKE_PENDING'").get(wakeupId) as any
+    if (!row) return
+    const attempt = Number(row.attempt_count) + 1
+    const delaySeconds = Math.min(300, 15 * (2 ** Math.min(attempt - 1, 4)))
+    this.store.db.prepare("UPDATE workflow_worker_wakeups SET attempt_count=?,last_error=?,next_attempt_at=?,updated_at=? WHERE wakeup_id=? AND state='WAKE_PENDING'")
+      .run(attempt, reason, plusSeconds(at, delaySeconds), at, wakeupId)
+  }
+
+  suppressWakeup(wakeupIdValue: unknown, reasonValue: unknown): void {
+    const wakeupId = id(wakeupIdValue, 'wakeupId')
+    const reason = text(reasonValue, 'wakeup suppress reason', 4096)
+    const at = this.now()
+    this.store.db.prepare("UPDATE workflow_worker_wakeups SET state='SUPPRESSED',last_error=?,updated_at=? WHERE wakeup_id=? AND state='WAKE_PENDING'")
+      .run(reason, at, wakeupId)
+  }
+
+  requireRotationForWakeup(wakeupIdValue: unknown, reasonValue: unknown): void {
+    const wakeupId = id(wakeupIdValue, 'wakeupId')
+    const reason = text(reasonValue, 'wakeup rotation reason', 4096)
+    const at = this.now()
+    this.store.transaction(() => {
+      const row = this.store.db.prepare("SELECT * FROM workflow_worker_wakeups WHERE wakeup_id=? AND state='WAKE_PENDING'").get(wakeupId) as any
+      if (!row) return
+      this.store.db.prepare("UPDATE workflow_worker_wakeups SET state='SUPPRESSED',last_error=?,updated_at=? WHERE wakeup_id=?")
+        .run(reason, at, wakeupId)
+      this.store.db.prepare("UPDATE worker_slots SET state='ROTATING',updated_at=? WHERE worker_slot_id=? AND active_worker_session_id=?")
+        .run(at, row.worker_slot_id, row.worker_session_id)
+      this.store.db.prepare("UPDATE physical_worker_sessions SET state='ROTATING',last_activity_at=? WHERE worker_session_id=? AND state!='CLOSED'")
+        .run(at, row.worker_session_id)
+      this.event({ workflowRunId: row.workflow_run_id, workerDefinitionId: row.worker_definition_id,
+        workerSlotId: row.worker_slot_id, workerSessionId: row.worker_session_id,
+        type: 'wakeup.rotation_required', payload: { reason, wakeupId }, at })
+    })
   }
 }
