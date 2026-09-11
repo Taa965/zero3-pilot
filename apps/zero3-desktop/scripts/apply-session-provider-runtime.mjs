@@ -526,22 +526,37 @@ class Zero3ApiAgentResponsesBridge {
   }
 
   private async fetchOpenAiCompatible(profile: Zero3ApiAgentBridgeProfile, body: Record<string, unknown>, model: string) {
-    const messages = zero3GlmMessages(body.input, body.instructions)
-    if (!messages.length) throw new Error('OpenAI-Compatible 请求没有可转换的消息')
     const tools = zero3GlmTools(body.tools)
-    const upstreamBody: Record<string, unknown> = { model, messages, stream: false }
-    if (tools.length) upstreamBody.tools = tools
-    if (typeof body.temperature === 'number') upstreamBody.temperature = body.temperature
-    if (typeof body.max_output_tokens === 'number') upstreamBody.max_tokens = body.max_output_tokens
-    if (profile.baseUrl.includes('open.bigmodel.cn')) upstreamBody.thinking = { type: 'enabled' }
-    const upstream = await this.upstreamJson(zero3Endpoint(profile.baseUrl, 'chat/completions'), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(profile.apiKey ? { authorization: 'Bearer ' + profile.apiKey } : {})
-      },
-      body: JSON.stringify(upstreamBody)
-    })
+    const requestUpstream = async (reasoningFallback: boolean) => {
+      const messages = zero3GlmMessages(body.input, body.instructions, { reasoningFallback })
+      if (!messages.length) throw new Error('OpenAI-Compatible 请求没有可转换的消息')
+      const upstreamBody: Record<string, unknown> = { model, messages, stream: false }
+      if (tools.length) upstreamBody.tools = tools
+      if (typeof body.temperature === 'number') upstreamBody.temperature = body.temperature
+      if (typeof body.max_output_tokens === 'number') upstreamBody.max_tokens = body.max_output_tokens
+      if (profile.baseUrl.includes('open.bigmodel.cn')) upstreamBody.thinking = { type: 'enabled' }
+      return this.upstreamJson(zero3Endpoint(profile.baseUrl, 'chat/completions'), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(profile.apiKey ? { authorization: 'Bearer ' + profile.apiKey } : {})
+        },
+        body: JSON.stringify(upstreamBody)
+      })
+    }
+    let upstream: Record<string, unknown>
+    try {
+      upstream = await requestUpstream(false)
+    } catch (error) {
+      // A provider in thinking mode refuses the next request of a tool loop
+      // when the assistant message comes back without its reasoning, which is
+      // what the history recorded before the bridge started echoing it looks
+      // like. One retry with a stated placeholder repairs those sessions, and
+      // providers that do not run a thinking mode never see the extra call.
+      const message = error instanceof Error ? error.message : ''
+      if (!message.includes('reasoning_content')) throw error
+      upstream = await requestUpstream(true)
+    }
     return { items: zero3GlmResponseItems(upstream), usage: zero3GlmResponseUsage(upstream.usage) }
   }
 

@@ -242,23 +242,68 @@ function zero3GlmRole(value: unknown): 'assistant' | 'system' | 'tool' | 'user' 
 // per call id, and states the missing result instead of dropping the reply.
 const ZERO3_TOOL_OUTPUT_UNRECORDED = 'Zero3 bridge: the result of this tool call was not recorded in the conversation history.'
 const ZERO3_TOOL_OUTPUT_EMPTY = 'Zero3 bridge: the tool returned no output.'
+// A provider that runs a thinking mode (DeepSeek, GLM) refuses the next request
+// of a tool loop when the assistant message that asked for the tools comes back
+// without its reasoning ("The reasoning_content in the thinking mode must be
+// passed back to the API"). The kernel keeps whatever reasoning the bridge
+// reports, so the real text travels back on its own; this constant is only the
+// stand-in for a history recorded before the bridge reported any.
+const ZERO3_REASONING_UNRECORDED = 'Zero3 bridge: the reasoning of this tool call was not recorded in the conversation history.'
 
-function zero3GlmMessages(input: unknown, instructions: unknown): Array<Record<string, unknown>> {
+function zero3GlmReasoningText(value: unknown): string {
+  const item = zero3CodexRecord(value)
+  const parts: string[] = []
+  const collect = (input: unknown, types: string[]) => {
+    if (!Array.isArray(input)) return
+    for (const rawPart of input) {
+      const part = zero3CodexRecord(rawPart)
+      const type = typeof part.type === 'string' ? part.type : ''
+      if (types.includes(type) && typeof part.text === 'string' && part.text.trim()) {
+        parts.push(part.text.trim().slice(0, 100_000))
+      }
+    }
+  }
+  collect(item.content, ['reasoning_text', 'text'])
+  collect(item.summary, ['summary_text'])
+  return parts.join('\n')
+}
+
+function zero3GlmMessages(
+  input: unknown,
+  instructions: unknown,
+  options: { reasoningFallback?: boolean } = {}
+): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = []
   if (typeof instructions === 'string' && instructions.trim()) messages.push({ role: 'system', content: instructions })
   const items = Array.isArray(input) ? input : typeof input === 'string' ? [{ type: 'message', role: 'user', content: input }] : []
   let pending: Array<{ id: string; name: string; arguments: string }> = []
+  let reasoning = ''
   const results = new Map<string, string>()
   const written = new Set<string>()
+  const takeReasoning = () => {
+    const carried = reasoning
+    reasoning = ''
+    return carried
+  }
   const flush = () => {
     if (!pending.length) return
     const calls = pending
     pending = []
-    messages.push({
-      role: 'assistant',
-      content: null,
-      tool_calls: calls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } }))
-    })
+    const carried = takeReasoning() || (options.reasoningFallback ? ZERO3_REASONING_UNRECORDED : '')
+    const toolCalls = calls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } }))
+    // The text of a response and the calls it produced are one assistant
+    // message: splitting them loses the thinking that belongs to that response,
+    // which thinking-mode providers ask for on the next round trip.
+    const previous = messages.at(-1)
+    let target: Record<string, unknown>
+    if (previous && previous.role === 'assistant' && !Array.isArray(previous.tool_calls)) {
+      previous.tool_calls = toolCalls
+      target = previous
+    } else {
+      target = { role: 'assistant', content: null, tool_calls: toolCalls }
+      messages.push(target)
+    }
+    if (carried && typeof target.reasoning_content !== 'string') target.reasoning_content = carried
     for (const call of calls) {
       const result = results.get(call.id)
       results.delete(call.id)
@@ -269,10 +314,26 @@ function zero3GlmMessages(input: unknown, instructions: unknown): Array<Record<s
   for (const rawItem of items) {
     const item = zero3CodexRecord(rawItem)
     const type = typeof item.type === 'string' ? item.type : 'message'
+    if (type === 'reasoning') {
+      const text = zero3GlmReasoningText(item)
+      if (text) reasoning = reasoning ? reasoning + '\n' + text : text
+      continue
+    }
     if (type === 'message') {
       flush()
       const content = zero3GlmMessageContent(item.content)
-      if (content.length) messages.push({ role: zero3GlmRole(item.role), content })
+      if (!content.length) continue
+      const role = zero3GlmRole(item.role)
+      const message: Record<string, unknown> = { role, content }
+      if (role === 'assistant') {
+        const carried = takeReasoning()
+        if (carried) message.reasoning_content = carried
+      } else {
+        // Reasoning never belongs to a user turn; drop a stray buffer so it
+        // cannot attach itself to a later answer.
+        takeReasoning()
+      }
+      messages.push(message)
       continue
     }
     if (type === 'function_call' || type === 'custom_tool_call') {
@@ -333,6 +394,11 @@ function zero3GlmResponseItems(value: unknown): Array<Record<string, unknown>> {
   const choice = Array.isArray(payload.choices) ? zero3CodexRecord(payload.choices[0]) : {}
   const message = zero3CodexRecord(choice.message)
   const items: Array<Record<string, unknown>> = []
+  // A thinking-mode provider answers with its chain of thought next to the
+  // answer, and rejects the next request of a tool loop unless that thinking is
+  // echoed back. Report it so the kernel keeps it and hands it over again.
+  const reasoning = typeof message.reasoning_content === 'string' ? message.reasoning_content.trim() : ''
+  if (reasoning) items.push({ type: 'reasoning', summary: [{ type: 'summary_text', text: reasoning }] })
   const text = zero3GlmText(message.content)
   if (text) items.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] })
   const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []
@@ -1025,7 +1091,6 @@ type Zero3CodexEvent =
   | { kind: 'notification'; method: string; params: unknown }
   | { kind: 'request'; id: number | string; method: string; params: unknown }
 `
-
 export function applyZero3CodexTransport() {
   patchFile('electron/main.ts', [
     {

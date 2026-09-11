@@ -21,6 +21,12 @@ function convert(input, instructions) {
   return context.zero3GlmMessages(input, instructions)
 }
 
+function convertWith(input, instructions, options) {
+  const context = {}
+  vm.runInNewContext(stripTypeScriptTypes(conversion + runtime.slice(runtime.indexOf('function zero3GlmResponseItems('), runtime.indexOf('function zero3GlmSseEvent('))), context)
+  return { messages: context.zero3GlmMessages(input, instructions, options), items: context.zero3GlmResponseItems }
+}
+
 function message(role, text) {
   return { type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] }
 }
@@ -128,11 +134,66 @@ test('tool replies carry content even when the kernel recorded none', () => {
 
 test('the Zero3 API Agent bridge converts through the repaired helper', () => {
   const openAi = sessionProvider.slice(sessionProvider.indexOf('private async fetchOpenAiCompatible('), sessionProvider.indexOf('private async fetchAnthropic('))
-  assert.match(openAi, /zero3GlmMessages\(body\.input, body\.instructions\)/)
+  assert.match(openAi, /zero3GlmMessages\(body\.input, body\.instructions/)
   assert.doesNotMatch(sessionProvider, /function zero3GlmMessages\(/)
   // The constants that label an unrecorded result are shared by every protocol.
   assert.match(runtime, /const ZERO3_TOOL_OUTPUT_UNRECORDED = /)
   assert.match(sessionProvider, /ZERO3_TOOL_OUTPUT_UNRECORDED/)
+  // A thinking-mode provider that asks for its reasoning back is retried with
+  // the placeholder instead of surfacing as a failed turn.
+  assert.match(openAi, /zero3GlmMessages\(body\.input, body\.instructions, \{ reasoningFallback \}\)/)
+  assert.match(openAi, /message\.includes\('reasoning_content'\)/)
+  assert.match(openAi, /await requestUpstream\(true\)/)
+})
+
+const reasoningItem = text => ({ type: 'reasoning', summary: [{ type: 'summary_text', text }] })
+
+test('a recorded reasoning item travels back on the assistant message', () => {
+  // DeepSeek in thinking mode: "The `reasoning_content` in the thinking mode
+  // must be passed back to the API."
+  const messages = convert([
+    message('user', 'run it'),
+    reasoningItem('先看一下工作区状态，再决定要跑什么。'),
+    message('assistant', 'I will inspect the workspace first.'),
+    call('c1', 'shell'),
+    output('c1', 'clean')
+  ])
+  assertUpstreamValid(messages)
+  const assistant = messages.filter(item => item.role === 'assistant')
+  assert.equal(assistant.length, 1, 'the answer and its calls are one assistant message')
+  assert.equal(assistant[0].reasoning_content, '先看一下工作区状态，再决定要跑什么。')
+})
+
+test('an assistant answer and its calls are merged, keeping both', () => {
+  const messages = convert([message('user', 'go'), reasoningItem('思考'), message('assistant', '先跑一下'), call('c1', 'shell'), output('c1')])
+  assertUpstreamValid(messages)
+  const [assistant] = messages.filter(item => item.role === 'assistant')
+  assert.equal(assistant.reasoning_content, '思考')
+  assert.deepEqual([...assistant.content].map(part => part.text), ['先跑一下'])
+})
+
+test('reasoning never leaks from one turn into a later answer', () => {
+  const messages = convert([reasoningItem('旧思考'), message('user', 'hi'), message('assistant', 'answer without reasoning')])
+  const assistant = messages.filter(item => item.role === 'assistant')
+  assert.equal(assistant.length, 1)
+  assert.equal(assistant[0].reasoning_content, undefined)
+})
+
+test('history recorded before the bridge echoed reasoning is repaired on a retry', () => {
+  const history = [message('user', 'run it'), call('c1', 'shell'), output('c1', 'clean')]
+  assert.equal(convert(history).filter(item => item.role === 'assistant')[0].reasoning_content, undefined)
+  const retried = convertWith(history, undefined, { reasoningFallback: true }).messages
+  assertUpstreamValid(retried)
+  assert.match(retried.filter(item => item.role === 'assistant')[0].reasoning_content, /not recorded/)
+})
+
+test('a provider chain of thought is reported to the kernel as a reasoning item', () => {
+  const { items } = convertWith([], undefined, {})
+  const converted = items({ choices: [{ message: { reasoning_content: '先读文件', content: 'done' } }] })
+  assert.equal(converted[0].type, 'reasoning')
+  assert.equal(converted[0].summary[0].type, 'summary_text')
+  assert.equal(converted[0].summary[0].text, '先读文件')
+  assert.equal(converted[1].content[0].text, 'done')
 })
 
 // Anthropic and Gemini enforce the same pairing with their own vocabulary, so
