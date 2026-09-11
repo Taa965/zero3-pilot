@@ -45,3 +45,17 @@ ZERO3_WORKER_OAUTH_ISSUER_BUILD=https://pilot.example.com cargo build --release 
 ```
 
 A baked issuer enables OAuth even when the runtime enable/issuer variables are absent. A runtime `ZERO3_WORKER_OAUTH_ISSUER` still takes precedence. This is intended for deployment artifacts whose public hostname is already fixed; generic builds remain OAuth-disabled by default.
+
+## Production host
+
+Production (`pilot.03.336r.com`, `zero3-pilot.service` running `zero3-web`) configures OAuth at runtime in `/etc/zero3-pilot/zero3-pilot.env`, not through a baked issuer:
+
+```text
+ZERO3_WORKER_OAUTH_ENABLED=1
+ZERO3_WORKER_OAUTH_ISSUER=https://pilot.03.336r.com
+ZERO3_WORKER_OAUTH_OWNER_SECRET_FILE=/etc/zero3-pilot/secrets/worker-oauth-owner.secret
+```
+
+The owner secret file is `root:zero3pilot 0640`, is distinct from the Host, Control and Worker MCP tokens, and is never committed or printed. The owner enters it on the `/authorize` page during ChatGPT Connect.
+
+Do not rely on `ZERO3_WORKER_OAUTH_ISSUER_BUILD` for this host: release `e45e754` was built without it while the env had no OAuth keys, so every discovery/authorize/token route returned `404 {"error":"not_found","error_description":"Zero3 Worker OAuth is disabled"}` and ChatGPT could not reconnect. After any redeploy, `GET https://pilot.03.336r.com/.well-known/oauth-authorization-server` must return `200`.
