@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import type {
   AgentLifecycleClaim,
   AgentLifecycleSession,
+  AutonomousParentResumeReceipt,
   AutonomousTaskDispatchRecord,
   AutonomousTaskIntakeRecord,
   ContextChange,
@@ -79,7 +80,10 @@ function openDatabase(filename: string): DatabaseSync {
     CREATE TABLE IF NOT EXISTS autonomous_task_intake (
       source_key TEXT PRIMARY KEY, project_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
       source_task_id TEXT, source_version INTEGER NOT NULL, fingerprint TEXT NOT NULL, task_id TEXT,
-      detail_json TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
+      detail_json TEXT NOT NULL, category TEXT, severity TEXT, confidence REAL, affected_resources_json TEXT,
+      mainline_impact TEXT, disposition TEXT, decision_reason TEXT, root_task_id TEXT, parent_task_id TEXT,
+      attention_cost TEXT, source_refs_json TEXT, resolved_at TEXT, human_attention_reason TEXT,
+      first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_autonomous_intake_project ON autonomous_task_intake(project_id,last_seen_at);
     CREATE INDEX IF NOT EXISTS idx_autonomous_intake_task ON autonomous_task_intake(task_id);
     CREATE INDEX IF NOT EXISTS idx_autonomous_intake_fingerprint ON autonomous_task_intake(project_id,entity_type,fingerprint);
@@ -87,7 +91,19 @@ function openDatabase(filename: string): DatabaseSync {
       dispatch_key TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL, step_id TEXT NOT NULL,
       attempt INTEGER NOT NULL, state TEXT NOT NULL, session_id TEXT, last_error TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS idx_autonomous_dispatch_task ON autonomous_task_dispatch(task_id,step_id,state);`)
+    CREATE INDEX IF NOT EXISTS idx_autonomous_dispatch_task ON autonomous_task_dispatch(task_id,step_id,state);
+    CREATE TABLE IF NOT EXISTS autonomous_parent_resume (
+      child_task_id TEXT PRIMARY KEY, parent_task_id TEXT NOT NULL, parent_step_id TEXT,
+      state TEXT NOT NULL, reason TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`)
+  for (const [column, definition] of [
+    ['category','TEXT'],['severity','TEXT'],['confidence','REAL'],['affected_resources_json','TEXT'],
+    ['mainline_impact','TEXT'],['disposition','TEXT'],['decision_reason','TEXT'],['root_task_id','TEXT'],
+    ['parent_task_id','TEXT'],['attention_cost','TEXT'],['source_refs_json','TEXT'],['resolved_at','TEXT'],
+    ['human_attention_reason','TEXT']
+  ] as const) {
+    const columns = db.prepare('PRAGMA table_info(autonomous_task_intake)').all() as Array<{ name: string }>
+    if (!columns.some(item => item.name === column)) db.exec(`ALTER TABLE autonomous_task_intake ADD COLUMN ${column} ${definition}`)
+  }
   return db
 }
 
@@ -347,13 +363,24 @@ export class Zero3AgentLifecycleStore {
     const taskId = input.taskId == null ? existing?.taskId ?? null : id(input.taskId, 'taskId')
     if (existing && existing.projectId !== projectId) throw new Error('autonomous intake source belongs to a different project')
     this.db.prepare(`INSERT INTO autonomous_task_intake
-      (source_key,project_id,entity_type,entity_id,source_task_id,source_version,fingerprint,task_id,detail_json,first_seen_at,last_seen_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_key) DO UPDATE SET
+      (source_key,project_id,entity_type,entity_id,source_task_id,source_version,fingerprint,task_id,detail_json,
+       category,severity,confidence,affected_resources_json,mainline_impact,disposition,decision_reason,root_task_id,parent_task_id,
+       attention_cost,source_refs_json,resolved_at,human_attention_reason,first_seen_at,last_seen_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(source_key) DO UPDATE SET
       source_version=excluded.source_version,fingerprint=excluded.fingerprint,task_id=COALESCE(excluded.task_id,autonomous_task_intake.task_id),
-      detail_json=excluded.detail_json,last_seen_at=excluded.last_seen_at
+      detail_json=excluded.detail_json,category=excluded.category,severity=excluded.severity,confidence=excluded.confidence,
+      affected_resources_json=excluded.affected_resources_json,mainline_impact=excluded.mainline_impact,disposition=excluded.disposition,
+      decision_reason=excluded.decision_reason,root_task_id=excluded.root_task_id,parent_task_id=excluded.parent_task_id,
+      attention_cost=excluded.attention_cost,source_refs_json=excluded.source_refs_json,
+      resolved_at=COALESCE(excluded.resolved_at,autonomous_task_intake.resolved_at),
+      human_attention_reason=COALESCE(excluded.human_attention_reason,autonomous_task_intake.human_attention_reason),last_seen_at=excluded.last_seen_at
       WHERE excluded.source_version >= autonomous_task_intake.source_version`)
       .run(sourceKey, projectId, input.entityType.slice(0, 256), input.entityId.slice(0, 512), input.sourceTaskId ?? null,
-        input.sourceVersion, input.fingerprint, taskId, json(input.detail, 'autonomous intake detail'), existing?.firstSeenAt ?? input.at, input.at)
+        input.sourceVersion, input.fingerprint, taskId, json(input.detail, 'autonomous intake detail'), input.category ?? null,
+        input.severity ?? null, input.confidence ?? null, json(input.affectedResources ?? [], 'affected resources'), input.mainlineImpact ?? null,
+        input.disposition ?? null, input.decisionReason?.slice(0, 4096) ?? null, input.rootTaskId ?? null, input.parentTaskId ?? null,
+        input.attentionCost ?? null, json(input.sourceRefs ?? [], 'source refs'), input.resolvedAt ?? null,
+        input.humanAttentionReason?.slice(0, 4096) ?? null, existing?.firstSeenAt ?? input.at, input.at)
     return this.getAutonomousIntake(sourceKey)!
   }
 
@@ -363,6 +390,54 @@ export class Zero3AgentLifecycleStore {
     if (!this.getAutonomousIntake(sourceKey)) throw new Error('autonomous intake source not found')
     this.db.prepare('UPDATE autonomous_task_intake SET task_id=?,last_seen_at=? WHERE source_key=?').run(taskId, at, sourceKey)
     return this.getAutonomousIntake(sourceKey)!
+  }
+
+  listAutonomousIntakes(projectIdValue?: unknown): AutonomousTaskIntakeRecord[] {
+    const rows = projectIdValue == null
+      ? this.db.prepare('SELECT * FROM autonomous_task_intake ORDER BY first_seen_at,source_key').all() as any[]
+      : this.db.prepare('SELECT * FROM autonomous_task_intake WHERE project_id=? ORDER BY first_seen_at,source_key')
+        .all(id(projectIdValue, 'projectId')) as any[]
+    return rows.map(row => this.autonomousIntakeRow(row))
+  }
+
+  markAutonomousIntakeResolved(sourceKeyValue: unknown, at: string): AutonomousTaskIntakeRecord {
+    const sourceKey = id(sourceKeyValue, 'sourceKey')
+    if (!this.getAutonomousIntake(sourceKey)) throw new Error('autonomous intake source not found')
+    this.db.prepare('UPDATE autonomous_task_intake SET resolved_at=COALESCE(resolved_at,?),last_seen_at=? WHERE source_key=?')
+      .run(at, at, sourceKey)
+    return this.getAutonomousIntake(sourceKey)!
+  }
+
+  setAutonomousHumanAttention(sourceKeyValue: unknown, reason: string | null, at: string): AutonomousTaskIntakeRecord {
+    const sourceKey = id(sourceKeyValue, 'sourceKey')
+    if (!this.getAutonomousIntake(sourceKey)) throw new Error('autonomous intake source not found')
+    this.db.prepare('UPDATE autonomous_task_intake SET human_attention_reason=?,last_seen_at=? WHERE source_key=?')
+      .run(reason?.trim().slice(0, 4096) || null, at, sourceKey)
+    return this.getAutonomousIntake(sourceKey)!
+  }
+
+  getParentResumeReceipt(childTaskIdValue: unknown): AutonomousParentResumeReceipt | null {
+    const row = this.db.prepare('SELECT * FROM autonomous_parent_resume WHERE child_task_id=?')
+      .get(id(childTaskIdValue, 'childTaskId')) as any
+    return row ? this.parentResumeRow(row) : null
+  }
+
+  putParentResumeReceipt(input: { childTaskId: string; parentTaskId: string; parentStepId?: string | null; at: string }): AutonomousParentResumeReceipt {
+    const childTaskId = id(input.childTaskId, 'childTaskId')
+    const existing = this.getParentResumeReceipt(childTaskId)
+    if (existing) return existing
+    this.db.prepare(`INSERT INTO autonomous_parent_resume
+      (child_task_id,parent_task_id,parent_step_id,state,created_at,updated_at) VALUES (?,?,?,'PENDING',?,?)`)
+      .run(childTaskId, id(input.parentTaskId, 'parentTaskId'), input.parentStepId == null ? null : id(input.parentStepId, 'parentStepId'), input.at, input.at)
+    return this.getParentResumeReceipt(childTaskId)!
+  }
+
+  updateParentResumeReceipt(childTaskIdValue: unknown, state: AutonomousParentResumeReceipt['state'], reason: string | null, at: string): AutonomousParentResumeReceipt {
+    const childTaskId = id(childTaskIdValue, 'childTaskId')
+    if (!this.getParentResumeReceipt(childTaskId)) throw new Error('parent resume receipt not found')
+    this.db.prepare('UPDATE autonomous_parent_resume SET state=?,reason=?,updated_at=? WHERE child_task_id=?')
+      .run(state, reason?.trim().slice(0, 4096) || null, at, childTaskId)
+    return this.getParentResumeReceipt(childTaskId)!
   }
 
   getAutonomousDispatch(dispatchKeyValue: unknown): AutonomousTaskDispatchRecord | null {
@@ -419,7 +494,19 @@ export class Zero3AgentLifecycleStore {
     return {
       sourceKey: row.source_key, projectId: row.project_id, entityType: row.entity_type, entityId: row.entity_id,
       sourceTaskId: row.source_task_id ?? null, sourceVersion: Number(row.source_version), fingerprint: row.fingerprint,
-      taskId: row.task_id ?? null, detail: parse(row.detail_json), firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at
+      taskId: row.task_id ?? null, detail: parse(row.detail_json), category: row.category ?? null, severity: row.severity ?? null,
+      confidence: row.confidence == null ? null : Number(row.confidence), affectedResources: parse(row.affected_resources_json) ?? [],
+      mainlineImpact: row.mainline_impact ?? null, disposition: row.disposition ?? null, decisionReason: row.decision_reason ?? null,
+      rootTaskId: row.root_task_id ?? null, parentTaskId: row.parent_task_id ?? null, attentionCost: row.attention_cost ?? null,
+      sourceRefs: parse(row.source_refs_json) ?? [], resolvedAt: row.resolved_at ?? null,
+      humanAttentionReason: row.human_attention_reason ?? null, firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at
+    }
+  }
+
+  private parentResumeRow(row: any): AutonomousParentResumeReceipt {
+    return {
+      childTaskId: row.child_task_id, parentTaskId: row.parent_task_id, parentStepId: row.parent_step_id ?? null,
+      state: row.state, reason: row.reason ?? null, createdAt: row.created_at, updatedAt: row.updated_at
     }
   }
 
