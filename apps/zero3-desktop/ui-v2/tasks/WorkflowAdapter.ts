@@ -6,6 +6,7 @@ export type WorkflowRuntimeCapabilities = {
     REMOTE_COMPUTE?: { configured: boolean }
   }
   automaticInputIngest: boolean
+  handoffMaterialization?: boolean
 }
 
 export type WorkflowRunSummary = {
@@ -99,6 +100,7 @@ type WorkflowBridge = {
   resumeStage: (runId: string, stageRunId: string) => Promise<WorkflowSnapshot>
   pickInputFiles: () => Promise<{ path: string; name: string }[]>
   ingestInputs: (runId: string) => Promise<WorkflowSnapshot>
+  ingestHandoffs: (runId: string) => Promise<WorkflowSnapshot>
 }
 
 function bridge(): WorkflowBridge | null {
@@ -139,5 +141,10 @@ export const WorkflowAdapter = {
     const runtime = bridge()
     if (!runtime) throw new Error('Zero3 Workflow Runtime 尚未加载')
     return runtime.ingestInputs(runId)
+  },
+  ingestHandoffs: async (runId: string) => {
+    const runtime = bridge()
+    if (!runtime) throw new Error('Zero3 Workflow Runtime 尚未加载')
+    return runtime.ingestHandoffs(runId)
   }
 }

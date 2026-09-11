@@ -19,6 +19,7 @@ export interface WorkflowDesktopPort {
   blockStage(runId: string, stageRunId: string, reason: string, waitingHuman?: boolean): Promise<unknown> | unknown
   resumeStage(runId: string, stageRunId: string): Promise<unknown> | unknown
   ingestInputs(runId: string): Promise<unknown> | unknown
+  ingestHandoffs(runId: string): Promise<unknown> | unknown
 }
 
 export const WORKFLOW_DESKTOP_CHANNELS = {
@@ -39,5 +40,6 @@ export const WORKFLOW_DESKTOP_CHANNELS = {
   blockStage: 'zero3:workflow:block-stage',
   resumeStage: 'zero3:workflow:resume-stage',
   pickInputFiles: 'zero3:workflow:pick-input-files',
-  ingestInputs: 'zero3:workflow:ingest-inputs'
+  ingestInputs: 'zero3:workflow:ingest-inputs',
+  ingestHandoffs: 'zero3:workflow:ingest-handoffs'
 } as const

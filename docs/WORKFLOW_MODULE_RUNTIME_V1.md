@@ -72,3 +72,9 @@ Zero3 never exposes Drive tokens to the renderer. The desktop main process enabl
 `workflow_external_jobs` is the authoritative remote-job ledger for cloud stages. Zero3 persists a provider + request key intent before any submission. A returned remote execution id is immutable for that attempt and later polling reconciles that same id. A new request key is allowed only after a definite `FAILED` or `CANCELLED` outcome.
 
 `Zero3WorkflowRemoteRenderService` requires an idempotent provider adapter and first tries `resolveByRequestKey`. If a submission response is ambiguous, the job becomes `OUTCOME_UNKNOWN` and the StageRun moves to `WAITING_HUMAN`; the runtime will not blindly submit another GPU job. The concrete AIGate/cloud adapter is intentionally still outside the generic Workflow Runtime.
+
+## Local handoff materialization
+
+The cognitive-store image worker must create a ZIP whose root contains `handoff.json` with `protocol` (or compatibility `schema`) equal to `zero3.gpt-gpu-handoff/1.0`. `Zero3LocalHandoffIngestService` verifies the Drive file, downloads it into the Workflow cache, reads `handoff.json` directly from the ZIP central directory without extracting arbitrary files, checks WorkflowRun/WorkItem identity when present, and registers a verified `local-handoff` Artifact. Only then does the `cloud-render` StageRun become READY.
+
+The Task Center exposes a recovery action for pending/failed handoff materialization. Normal future Worker integration should call the same service from the artifact event path; Drive directory scanning remains a reconciliation/recovery mechanism rather than the authoritative scheduler.

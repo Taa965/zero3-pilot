@@ -4,21 +4,26 @@ import type { WorkflowArtifactSeed } from '../contracts.ts'
 import { Zero3WorkflowRuntime, type CreateWorkflowRunRequest } from '../runtime.ts'
 import { createGoogleDriveArtifactPortFromEnv } from '../google-drive-rest.ts'
 import { Zero3WorkflowInputIngestService } from '../input-ingest.ts'
+import { Zero3LocalHandoffIngestService } from '../local-handoff-ingest.ts'
 import { Zero3WorkflowStore } from '../store.ts'
 import { createBuiltinWorkflowRegistry } from '../../workflow-modules/index.ts'
 import type { WorkflowDesktopPort } from './desktop-port.ts'
 
 export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
+  readonly root: string
   readonly store: Zero3WorkflowStore
   readonly runtime: Zero3WorkflowRuntime
   readonly drivePort = createGoogleDriveArtifactPortFromEnv()
   readonly inputIngest: Zero3WorkflowInputIngestService | null
+  readonly handoffIngest: Zero3LocalHandoffIngestService | null
 
   constructor(root: string) {
     const absolute = path.resolve(root)
+    this.root = absolute
     this.store = new Zero3WorkflowStore(path.join(absolute, 'workflow-runtime.sqlite3'))
     this.runtime = new Zero3WorkflowRuntime(this.store, createBuiltinWorkflowRegistry())
     this.inputIngest = this.drivePort ? new Zero3WorkflowInputIngestService(this.runtime, this.drivePort) : null
+    this.handoffIngest = this.drivePort ? new Zero3LocalHandoffIngestService(this.runtime, this.drivePort, path.join(this.root, 'handoff-cache')) : null
   }
 
   runtimeCapabilities() {
@@ -29,7 +34,8 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
         LOCAL: { configured: true },
         REMOTE_COMPUTE: { configured: false }
       },
-      automaticInputIngest: Boolean(this.inputIngest)
+      automaticInputIngest: Boolean(this.inputIngest),
+      handoffMaterialization: Boolean(this.handoffIngest)
     }
   }
   listModules() { return this.runtime.listModules() }
@@ -67,6 +73,11 @@ export class Zero3WorkflowDesktopRuntime implements WorkflowDesktopPort {
   async ingestInputs(runId: string) {
     if (!this.inputIngest) throw new Error('Google Drive direct provider is not configured in Zero3 Desktop')
     await this.inputIngest.ingestRun(runId)
+    return this.runtime.getRun(runId)
+  }
+  async ingestHandoffs(runId: string) {
+    if (!this.handoffIngest) throw new Error('Google Drive direct provider is not configured in Zero3 Desktop')
+    await this.handoffIngest.ingestReady(runId)
     return this.runtime.getRun(runId)
   }
 

@@ -1,4 +1,7 @@
+export const COGNITIVE_STORE_HANDOFF_PROTOCOL = 'zero3.gpt-gpu-handoff/1.0' as const
+
 export interface CognitiveStoreHandoffManifest {
+  protocol: typeof COGNITIVE_STORE_HANDOFF_PROTOCOL
   workflow: string
   workflowRunId: string
   workItemId: string
@@ -29,6 +32,7 @@ export function validateCognitiveStoreHandoffManifest(value: unknown): string[] 
   const errors: string[] = []
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ['manifest must be an object']
   const manifest = value as Partial<CognitiveStoreHandoffManifest>
+  if (manifest.protocol !== COGNITIVE_STORE_HANDOFF_PROTOCOL) errors.push(`protocol must be ${COGNITIVE_STORE_HANDOFF_PROTOCOL}`)
   for (const field of ['workflowRunId', 'workItemId', 'title', 'scriptFile', 'visualPlanFile'] as const) {
     if (typeof manifest[field] !== 'string' || !String(manifest[field]).trim()) errors.push(`${field} is required`)
   }

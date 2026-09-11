@@ -26,11 +26,11 @@ test('cognitive-store module freezes prompts, workers and pipeline into each run
 })
 
 test('handoff manifest validation prevents image-count drift and blind remote resubmission', async () => {
-  const { cognitiveStoreDriveLayout, shouldSubmitRemoteRender, validateCognitiveStoreHandoffManifest } = await import('./handoff.ts')
+  const { COGNITIVE_STORE_HANDOFF_PROTOCOL, cognitiveStoreDriveLayout, shouldSubmitRemoteRender, validateCognitiveStoreHandoffManifest } = await import('./handoff.ts')
   const layout = cognitiveStoreDriveLayout('run-1', 'item-1')
   assert.match(layout.handoff, /40_handoff$/)
   const manifest = {
-    workflow: 'cognitive-store-video@1.0.0', workflowRunId: 'run-1', workItemId: 'item-1', title: '资本论',
+    protocol: COGNITIVE_STORE_HANDOFF_PROTOCOL, workflow: 'cognitive-store-video@1.0.0', workflowRunId: 'run-1', workItemId: 'item-1', title: '资本论',
     imageCount: 2, images: ['U001.png', 'U002.png'], scriptFile: '重构脚本.md', visualPlanFile: '视觉内容.md', remoteExecutionId: null
   }
   assert.deepEqual(validateCognitiveStoreHandoffManifest(manifest), [])

@@ -52,6 +52,8 @@ jobs:
           apps/zero3-desktop/workflow-runtime/input-ingest.test.ts
           apps/zero3-desktop/workflow-runtime/external-job-ledger.test.ts
           apps/zero3-desktop/workflow-runtime/remote-render.test.ts
+          apps/zero3-desktop/workflow-runtime/handoff-package.test.ts
+          apps/zero3-desktop/workflow-runtime/local-handoff-ingest.test.ts
           apps/zero3-desktop/workflow-runtime/worker-v2-adapter.test.ts
           apps/zero3-desktop/workflow-modules/cognitive-store-video/cognitive-store-video.test.ts
       - name: Task Center static UI contract

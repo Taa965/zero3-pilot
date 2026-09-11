@@ -66,6 +66,8 @@ export function registerWorkflowDesktopIpc(port: WorkflowDesktopPort): () => voi
     port.resumeStage(id(runId, 'workflowRunId'), id(stageRunId, 'stageRunId')))
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.ingestInputs, (_event, runId: unknown) =>
     port.ingestInputs(id(runId, 'workflowRunId')))
+  ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.ingestHandoffs, (_event, runId: unknown) =>
+    port.ingestHandoffs(id(runId, 'workflowRunId')))
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.pickInputFiles, async () => {
     const result = await dialog.showOpenDialog({
       title: '选择工作流输入脚本',

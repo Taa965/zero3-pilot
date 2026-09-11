@@ -97,7 +97,8 @@ contextBridge.exposeInMainWorld('zero3Workflow', {
   blockStage: (runId, stageRunId, reason, waitingHuman) => ipcRenderer.invoke('zero3:workflow:block-stage', runId, stageRunId, reason, waitingHuman),
   resumeStage: (runId, stageRunId) => ipcRenderer.invoke('zero3:workflow:resume-stage', runId, stageRunId),
   pickInputFiles: () => ipcRenderer.invoke('zero3:workflow:pick-input-files'),
-  ingestInputs: runId => ipcRenderer.invoke('zero3:workflow:ingest-inputs', runId)
+  ingestInputs: runId => ipcRenderer.invoke('zero3:workflow:ingest-inputs', runId),
+  ingestHandoffs: runId => ipcRenderer.invoke('zero3:workflow:ingest-handoffs', runId)
 })
 
 contextBridge.exposeInMainWorld('hermesDesktop', {`
@@ -135,6 +136,7 @@ const globalBridgeProperty = String.raw`    zero3Execution: {
       resumeStage: (runId: string, stageRunId: string) => Promise<unknown>
       pickInputFiles: () => Promise<{ path: string; name: string }[]>
       ingestInputs: (runId: string) => Promise<unknown>
+      ingestHandoffs: (runId: string) => Promise<unknown>
     }
     hermesDesktop: {`
 
