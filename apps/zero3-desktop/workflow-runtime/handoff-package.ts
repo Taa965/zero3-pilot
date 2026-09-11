@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import { inflateRawSync } from 'node:zlib'
 
@@ -13,6 +14,7 @@ export interface Zero3HandoffPackageInspection {
   manifest: Readonly<Record<string, unknown>>
   manifestEntry: string
   packageSizeBytes: number
+  packageSha256: string
 }
 
 function findEocd(buffer: Buffer): number {
@@ -88,5 +90,5 @@ export async function inspectZero3GptGpuHandoffPackage(file: string, expected?: 
   if (expected?.workItemId && manifest.workItemId != null && String(manifest.workItemId) !== expected.workItemId) {
     throw new Error('handoff workItemId does not match the current WorkItem')
   }
-  return { protocol: ZERO3_GPT_GPU_HANDOFF_V1, manifest, manifestEntry: 'handoff.json', packageSizeBytes: info.size }
+  return { protocol: ZERO3_GPT_GPU_HANDOFF_V1, manifest, manifestEntry: 'handoff.json', packageSizeBytes: info.size, packageSha256: createHash('sha256').update(data).digest('hex') }
 }

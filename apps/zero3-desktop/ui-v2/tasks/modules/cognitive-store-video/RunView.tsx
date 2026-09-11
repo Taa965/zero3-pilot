@@ -31,6 +31,10 @@ export function CognitiveStoreVideoRunView({ snapshot }: { snapshot: WorkflowSna
   const [ingestError, setIngestError] = useState<string | null>(null)
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [handoffError, setHandoffError] = useState<string | null>(null)
+  const [remoteBusy, setRemoteBusy] = useState(false)
+  const [remoteError, setRemoteError] = useState<string | null>(null)
+  const [pullbackBusy, setPullbackBusy] = useState(false)
+  const [pullbackError, setPullbackError] = useState<string | null>(null)
   const workers = snapshot.plan.workers.map(worker => {
     const stages = snapshot.stages.filter(stage => stage.workerDefinitionId === worker.workerDefinitionId)
     const active = stages.find(stage => ['RUNNING', 'CLAIMED', 'VERIFYING', 'FIX_REQUIRED'].includes(stage.status))
@@ -40,6 +44,10 @@ export function CognitiveStoreVideoRunView({ snapshot }: { snapshot: WorkflowSna
   const pendingInputCount = inputStages.filter(stage => ['READY', 'FIX_REQUIRED', 'BLOCKED', 'WAITING_HUMAN'].includes(stage.status)).length
   const handoffStages = snapshot.stages.filter(stage => stage.stageId === 'local-ingest')
   const pendingHandoffCount = handoffStages.filter(stage => ['READY', 'FIX_REQUIRED', 'BLOCKED', 'WAITING_HUMAN'].includes(stage.status)).length
+  const remoteStages = snapshot.stages.filter(stage => stage.stageId === 'cloud-render')
+  const pendingRemoteCount = remoteStages.filter(stage => ['READY', 'CLAIMED', 'RUNNING', 'FIX_REQUIRED', 'BLOCKED', 'WAITING_HUMAN'].includes(stage.status)).length
+  const pullbackStages = snapshot.stages.filter(stage => stage.stageId === 'pullback')
+  const pendingPullbackCount = pullbackStages.filter(stage => ['READY', 'FIX_REQUIRED', 'VERIFYING', 'BLOCKED', 'WAITING_HUMAN'].includes(stage.status)).length
   const retryInputIngest = async () => {
     setIngestBusy(true); setIngestError(null)
     try { await WorkflowAdapter.ingestInputs(snapshot.run.workflowRunId) }
@@ -54,6 +62,20 @@ export function CognitiveStoreVideoRunView({ snapshot }: { snapshot: WorkflowSna
     finally { setHandoffBusy(false) }
   }
 
+  const reconcileRemote = async () => {
+    setRemoteBusy(true); setRemoteError(null)
+    try { await WorkflowAdapter.reconcileRemote(snapshot.run.workflowRunId) }
+    catch (reason) { setRemoteError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setRemoteBusy(false) }
+  }
+
+  const pullbackVideos = async () => {
+    setPullbackBusy(true); setPullbackError(null)
+    try { await WorkflowAdapter.pullbackVideos(snapshot.run.workflowRunId) }
+    catch (reason) { setPullbackError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setPullbackBusy(false) }
+  }
+
   const stagesByItem = new Map<string, Map<string, WorkflowStage>>()
   for (const stage of snapshot.stages) {
     const map = stagesByItem.get(stage.itemId) ?? new Map<string, WorkflowStage>()
@@ -65,6 +87,8 @@ export function CognitiveStoreVideoRunView({ snapshot }: { snapshot: WorkflowSna
     <div className="h-full overflow-y-auto p-6">
       {pendingInputCount > 0 && <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs"><div><div className="font-medium text-amber-500">有 {pendingInputCount} 个输入脚本尚未进入 Google Drive</div>{ingestError && <div className="mt-1 text-red-500">{ingestError}</div>}</div><button disabled={ingestBusy} onClick={() => { void retryInputIngest() }} className="rounded border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background) disabled:opacity-50">{ingestBusy ? '处理中…' : '重试输入上传'}</button></div>}
       {pendingHandoffCount > 0 && <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-blue-500/30 bg-blue-500/5 p-3 text-xs"><div><div className="font-medium text-blue-500">有 {pendingHandoffCount} 个交接包等待本地接包</div>{handoffError && <div className="mt-1 text-red-500">{handoffError}</div>}</div><button disabled={handoffBusy} onClick={() => { void retryHandoffIngest() }} className="rounded border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background) disabled:opacity-50">{handoffBusy ? '处理中…' : '下载并校验交接包'}</button></div>}
+      {pendingRemoteCount > 0 && <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 text-xs"><div><div className="font-medium text-violet-500">有 {pendingRemoteCount} 个云端生产任务待提交或对账</div>{remoteError && <div className="mt-1 text-red-500">{remoteError}</div>}</div><button disabled={remoteBusy} onClick={() => { void reconcileRemote() }} className="rounded border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background) disabled:opacity-50">{remoteBusy ? '对账中…' : '提交 / 对账云端任务'}</button></div>}
+      {pendingPullbackCount > 0 && <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-green-500/30 bg-green-500/5 p-3 text-xs"><div><div className="font-medium text-green-500">有 {pendingPullbackCount} 个视频结果等待拉回或恢复</div>{pullbackError && <div className="mt-1 text-red-500">{pullbackError}</div>}</div><button disabled={pullbackBusy} onClick={() => { void pullbackVideos() }} className="rounded border border-(--ui-border) px-3 py-1.5 hover:bg-(--ui-control-hover-background) disabled:opacity-50">{pullbackBusy ? '拉取中…' : '拉取并技术 QC'}</button></div>}
       <div className="grid grid-cols-4 gap-3">
         <Metric label="WorkItem" value={String(snapshot.items.length)} />
         <Metric label="总进度" value={`${Math.round(snapshot.run.progress * 100)}%`} />

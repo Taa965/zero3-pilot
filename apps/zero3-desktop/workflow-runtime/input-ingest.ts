@@ -30,17 +30,23 @@ function inputArtifact(snapshot: WorkflowRunSnapshot, stage: WorkflowStageRunRec
 export class Zero3WorkflowInputIngestService {
   constructor(private readonly runtime: Zero3WorkflowRuntime, private readonly drive: GoogleDriveWritableArtifactPort) {}
 
-  async ingestRun(runId: string): Promise<WorkflowInputIngestResult> {
+  async ingestRun(runId: string, options: { recoverBlocked?: boolean } = {}): Promise<WorkflowInputIngestResult> {
     const ingested: string[] = []
     const skipped: string[] = []
     const failed: { stageRunId: string; reason: string }[] = []
     let snapshot = this.runtime.getRun(runId)
-    const stages = snapshot.stages.filter(stage => stage.stageId === 'input-ingest' && stage.status !== 'COMPLETED')
+    const eligible = options.recoverBlocked ? ['READY', 'FIX_REQUIRED', 'BLOCKED', 'WAITING_HUMAN'] : ['READY', 'FIX_REQUIRED']
+    const stages = snapshot.stages.filter(stage => stage.stageId === 'input-ingest' && eligible.includes(stage.status))
     for (const originalStage of stages) {
       try {
         snapshot = this.runtime.getRun(runId)
-        const stage = snapshot.stages.find(value => value.stageRunId === originalStage.stageRunId)
+        let stage = snapshot.stages.find(value => value.stageRunId === originalStage.stageRunId)
         if (!stage || stage.status === 'COMPLETED') { skipped.push(originalStage.stageRunId); continue }
+        if (options.recoverBlocked && (stage.status === 'BLOCKED' || stage.status === 'WAITING_HUMAN')) {
+          this.runtime.resumeStage(runId, stage.stageRunId)
+          snapshot = this.runtime.getRun(runId)
+          stage = snapshot.stages.find(value => value.stageRunId === originalStage.stageRunId)!
+        }
         let artifact = inputArtifact(snapshot, stage)
         if (!artifact) throw new Error('input-ingest has no 原始脚本 Artifact')
 

@@ -91,7 +91,7 @@ test('remote render persists intent before submit and reconciles the same extern
     port.statusResult = {
       externalId: 'remote-001',
       state: 'SUCCEEDED',
-      output: { storage: { provider: 'REMOTE_COMPUTE', uri: 'remote://gpu/result.mp4' }, mimeType: 'video/mp4', sizeBytes: 1234 }
+      output: { logicalName: '云端视频结果集', kind: 'remote-video-set', storage: { provider: 'REMOTE_COMPUTE', uri: 'remote://gpu/result-set' }, sizeBytes: 1234 }
     }
     const second = await service.dispatchOrReconcile(target.runId, target.stageRunId)
     assert.equal(second.state, 'COMPLETED')

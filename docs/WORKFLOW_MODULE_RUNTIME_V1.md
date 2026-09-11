@@ -78,3 +78,40 @@ Zero3 never exposes Drive tokens to the renderer. The desktop main process enabl
 The cognitive-store image worker must create a ZIP whose root contains `handoff.json` with `protocol` (or compatibility `schema`) equal to `zero3.gpt-gpu-handoff/1.0`. `Zero3LocalHandoffIngestService` verifies the Drive file, downloads it into the Workflow cache, reads `handoff.json` directly from the ZIP central directory without extracting arbitrary files, checks WorkflowRun/WorkItem identity when present, and registers a verified `local-handoff` Artifact. Only then does the `cloud-render` StageRun become READY.
 
 The Task Center exposes a recovery action for pending/failed handoff materialization. Normal future Worker integration should call the same service from the artifact event path; Drive directory scanning remains a reconciliation/recovery mechanism rather than the authoritative scheduler.
+
+## Deployed GPT → GPU runner integration
+
+The generic `REMOTE_COMPUTE` boundary now has a concrete adapter for the existing production GPT→GPU runner instead of a hypothetical AIGate shim. `Zero3GptGpuRunnerPort` speaks the deployed API directly:
+
+- `POST /api/handoff/v1/runs` uploads the raw reviewed ZIP.
+- `GET /api/handoff/v1/runs/{run_id}` reconciles the same remote run.
+- `GET /api/handoff/v1/runs/{run_id}/files/{job_id}` pulls each generated MP4.
+
+The request identity is `gptgpu:<package-sha256>` and the expected remote `run_id` is the first 24 hex characters of that SHA256. The runtime persists this request intent before network submission, resolves it before any retry, and never creates a second job after an ambiguous outcome. The production handoff manifest uses `schema: "zero3.gpt-gpu-handoff/1.0"`, requires `package_id`, `project_id`, and 1–500 Wan jobs, and the cognitive-store image-worker prompt now emits that exact contract.
+
+Desktop configuration stays outside Renderer state:
+
+```text
+ZERO3_GPT_GPU_RUNNER_BASE_URL=https://03.336r.com
+ZERO3_GPT_GPU_RUNNER_TOKEN_FILE=<absolute secret file path>
+ZERO3_FFPROBE_BIN=<optional absolute ffprobe path>
+```
+
+The remote token is read only in Electron main/runtime. HTTP redirects are refused so an Authorization header cannot be forwarded to an unexpected host.
+
+## Automatic local/cloud tail
+
+Once the GPT image Worker commits `交接包.zip`, the non-GPT tail is driven by `Zero3WorkflowAutomationController`:
+
+```text
+Drive handoff Artifact
+  -> local materialize + schema/identity validation
+  -> cloud-render idempotent submit/reconcile
+  -> remote result-set Artifact
+  -> download every manifest job MP4
+  -> ffprobe technical QC per MP4
+  -> local video Artifacts + 视频回传清单.json
+  -> WorkItem / WorkflowRun completed
+```
+
+The controller processes only safe READY/RUNNING states automatically. A local/Drive/pullback failure is left in human recovery instead of being retried forever. An `OUTCOME_UNKNOWN` cloud submission may be polled automatically because reconciliation by the stable package hash cannot create a duplicate remote job. Task UI actions remain as explicit recovery controls.

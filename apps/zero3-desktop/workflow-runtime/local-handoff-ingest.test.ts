@@ -62,7 +62,8 @@ test('Drive handoff materializes locally, validates protocol identity and releas
       protocol: ZERO3_GPT_GPU_HANDOFF_V1,
       manifest: { protocol: ZERO3_GPT_GPU_HANDOFF_V1, workflowRunId: expected?.workflowRunId, workItemId: expected?.workItemId },
       manifestEntry: 'handoff.json',
-      packageSizeBytes: 42
+      packageSizeBytes: 42,
+      packageSha256: 'a'.repeat(64)
     })
     const result = await new Zero3LocalHandoffIngestService(runtime, new FakeDrive(packageFile), join(dir, 'cache'), inspect).ingestReady(runId)
     assert.equal(result.failed.length, 0)

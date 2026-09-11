@@ -17,23 +17,26 @@ export type WorkflowRemoteRenderStatus = {
   metadata?: Readonly<Record<string, unknown>>
 }
 
+export type WorkflowRemoteRenderRequest = {
+  workflowRunId: string
+  workItemId: string
+  stageRunId: string
+  inputArtifact: {
+    artifactId: string
+    logicalName: string
+    storage: WorkflowArtifactLocator
+    sha256: string | null
+    sizeBytes: number | null
+  }
+  metadata: Readonly<Record<string, unknown>>
+}
+
 export interface WorkflowRemoteRenderPort {
   readonly provider: string
+  /** Optional provider-specific stable request key (for example, a content hash). */
+  requestKeyFor?(request: WorkflowRemoteRenderRequest): Promise<string> | string
   /** Must treat requestKey as an idempotency key at the remote boundary. */
-  submitIdempotent(request: {
-    requestKey: string
-    workflowRunId: string
-    workItemId: string
-    stageRunId: string
-    inputArtifact: {
-      artifactId: string
-      logicalName: string
-      storage: WorkflowArtifactLocator
-      sha256: string | null
-      sizeBytes: number | null
-    }
-    metadata: Readonly<Record<string, unknown>>
-  }): Promise<WorkflowRemoteRenderStatus>
+  submitIdempotent(request: WorkflowRemoteRenderRequest & { requestKey: string }): Promise<WorkflowRemoteRenderStatus>
   resolveByRequestKey(requestKey: string): Promise<WorkflowRemoteRenderStatus | null>
   getStatus(externalId: string): Promise<WorkflowRemoteRenderStatus>
 }
@@ -92,9 +95,24 @@ export class Zero3WorkflowRemoteRenderService {
       if (blockedJob?.state !== 'OUTCOME_UNKNOWN') return { state: 'BLOCKED', externalId: blockedJob?.externalId ?? undefined, detail: stage.currentActivity ?? undefined }
     }
 
+    const renderRequest: WorkflowRemoteRenderRequest = {
+      workflowRunId: runId,
+      workItemId: stage.itemId,
+      stageRunId,
+      inputArtifact: {
+        artifactId: handoff.artifactId,
+        logicalName: handoff.logicalName,
+        storage: handoff.storage,
+        sha256: handoff.sha256,
+        sizeBytes: handoff.sizeBytes
+      },
+      metadata: stage.metadata
+    }
     let job = this.runtime.externalJob(runId, stageRunId)
     if (!job || ['FAILED', 'CANCELLED'].includes(job.state)) {
-      const requestKey = `${runId}:${stageRunId}:attempt-${Math.max(1, stage.attempt)}`
+      const requestKey = this.port.requestKeyFor
+        ? await this.port.requestKeyFor(renderRequest)
+        : `${runId}:${stageRunId}:attempt-${Math.max(1, stage.attempt)}`
       job = this.runtime.ensureExternalJobIntent(runId, stageRunId, this.port.provider, requestKey, {
         inputArtifactId: handoff.artifactId,
         inputSha256: handoff.sha256
@@ -112,20 +130,7 @@ export class Zero3WorkflowRemoteRenderService {
         return { state: 'OUTCOME_UNKNOWN', detail: 'remote submission outcome is still unknown; Zero3 will not resubmit blindly' }
       } else {
         try {
-          remote = await this.port.submitIdempotent({
-            requestKey: job.requestKey,
-            workflowRunId: runId,
-            workItemId: stage.itemId,
-            stageRunId,
-            inputArtifact: {
-              artifactId: handoff.artifactId,
-              logicalName: handoff.logicalName,
-              storage: handoff.storage,
-              sha256: handoff.sha256,
-              sizeBytes: handoff.sizeBytes
-            },
-            metadata: stage.metadata
-          })
+          remote = await this.port.submitIdempotent({ ...renderRequest, requestKey: job.requestKey })
           this.runtime.recordExternalJobSubmitted(runId, stageRunId, remote.externalId, remote.metadata ?? {})
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error)
@@ -167,7 +172,7 @@ export class Zero3WorkflowRemoteRenderService {
         ...(remote.output.sha256 ? { sha256: remote.output.sha256 } : {}),
         ...(remote.output.sizeBytes == null ? {} : { sizeBytes: remote.output.sizeBytes }),
         state: 'AVAILABLE',
-        metadata: { externalId: remote.externalId, provider: this.port.provider }
+        metadata: { externalId: remote.externalId, provider: this.port.provider, ...(remote.metadata ?? {}) }
       }])
       this.runtime.gatePassed(runId, stageRunId, { externalId: remote.externalId, provider: this.port.provider })
       return { state: 'COMPLETED', externalId: remote.externalId }

@@ -19,17 +19,18 @@ export class Zero3LocalHandoffIngestService {
     private readonly inspect: typeof inspectZero3GptGpuHandoffPackage = inspectZero3GptGpuHandoffPackage
   ) {}
 
-  async ingestReady(runId: string): Promise<LocalHandoffIngestResult> {
+  async ingestReady(runId: string, options: { recoverBlocked?: boolean } = {}): Promise<LocalHandoffIngestResult> {
     const completed: string[] = []
     const failed: { stageRunId: string; reason: string }[] = []
     let snapshot = this.runtime.getRun(runId)
-    const candidates = snapshot.stages.filter(stage => stage.stageId === 'local-ingest' && ['READY', 'FIX_REQUIRED', 'BLOCKED', 'WAITING_HUMAN'].includes(stage.status))
+    const eligible = options.recoverBlocked ? ['READY', 'FIX_REQUIRED', 'BLOCKED', 'WAITING_HUMAN'] : ['READY', 'FIX_REQUIRED']
+    const candidates = snapshot.stages.filter(stage => stage.stageId === 'local-ingest' && eligible.includes(stage.status))
     for (const candidate of candidates) {
       try {
         snapshot = this.runtime.getRun(runId)
         let stage = snapshot.stages.find(value => value.stageRunId === candidate.stageRunId)
         if (!stage) continue
-        if (stage.status === 'BLOCKED' || stage.status === 'WAITING_HUMAN') {
+        if (options.recoverBlocked && (stage.status === 'BLOCKED' || stage.status === 'WAITING_HUMAN')) {
           this.runtime.resumeStage(runId, stage.stageRunId)
           snapshot = this.runtime.getRun(runId)
           stage = snapshot.stages.find(value => value.stageRunId === candidate.stageRunId)!
@@ -60,6 +61,7 @@ export class Zero3LocalHandoffIngestService {
           kind: 'local-package',
           mimeType: 'application/zip',
           storage: { provider: 'LOCAL', path: materialized.path },
+          sha256: inspection.packageSha256,
           sizeBytes: inspection.packageSizeBytes,
           state: 'VERIFIED',
           metadata: {

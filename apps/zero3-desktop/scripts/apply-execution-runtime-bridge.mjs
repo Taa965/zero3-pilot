@@ -58,7 +58,9 @@ app.on('before-quit', () => {
 })
 const zero3WorkflowRuntime = createWorkflowDesktopRuntime(path.join(app.getPath('userData'), 'workflow'))
 const disposeZero3WorkflowIpc = registerWorkflowDesktopIpc(zero3WorkflowRuntime)
+zero3WorkflowRuntime.startAutomation()
 app.on('before-quit', () => {
+  zero3WorkflowRuntime.stopAutomation()
   disposeZero3WorkflowIpc()
   zero3WorkflowRuntime.close()
 })
@@ -98,7 +100,9 @@ contextBridge.exposeInMainWorld('zero3Workflow', {
   resumeStage: (runId, stageRunId) => ipcRenderer.invoke('zero3:workflow:resume-stage', runId, stageRunId),
   pickInputFiles: () => ipcRenderer.invoke('zero3:workflow:pick-input-files'),
   ingestInputs: runId => ipcRenderer.invoke('zero3:workflow:ingest-inputs', runId),
-  ingestHandoffs: runId => ipcRenderer.invoke('zero3:workflow:ingest-handoffs', runId)
+  ingestHandoffs: runId => ipcRenderer.invoke('zero3:workflow:ingest-handoffs', runId),
+  reconcileRemote: runId => ipcRenderer.invoke('zero3:workflow:reconcile-remote', runId),
+  pullbackVideos: runId => ipcRenderer.invoke('zero3:workflow:pullback-videos', runId)
 })
 
 contextBridge.exposeInMainWorld('hermesDesktop', {`
@@ -137,6 +141,8 @@ const globalBridgeProperty = String.raw`    zero3Execution: {
       pickInputFiles: () => Promise<{ path: string; name: string }[]>
       ingestInputs: (runId: string) => Promise<unknown>
       ingestHandoffs: (runId: string) => Promise<unknown>
+      reconcileRemote: (runId: string) => Promise<unknown>
+      pullbackVideos: (runId: string) => Promise<unknown>
     }
     hermesDesktop: {`
 

@@ -102,6 +102,9 @@ export function CognitiveStoreVideoCreateRun({ moduleVersion }: { moduleVersion:
         <div className={`rounded-lg border p-3 text-xs ${capabilities?.artifactProviders.GOOGLE_DRIVE?.configured ? 'border-green-500/30 bg-green-500/5 text-green-500' : 'border-amber-500/30 bg-amber-500/5 text-amber-500'}`}>
           Google Drive 直连：{capabilities?.artifactProviders.GOOGLE_DRIVE?.configured ? '已配置，可自动上传本地脚本并验证 fileId' : '未配置；本地脚本不会自动进入流水线，只能使用已有 Drive fileId'}
         </div>
+        <div className={`rounded-lg border p-3 text-xs ${capabilities?.artifactProviders.REMOTE_COMPUTE?.configured ? 'border-green-500/30 bg-green-500/5 text-green-500' : 'border-amber-500/30 bg-amber-500/5 text-amber-500'}`}>
+          GPT→GPU 云端执行：{capabilities?.artifactProviders.REMOTE_COMPUTE?.configured ? `已配置 ${capabilities.artifactProviders.REMOTE_COMPUTE.provider ?? ''}，本地接包后可自动提交、对账和拉回视频` : `未配置${capabilities?.artifactProviders.REMOTE_COMPUTE?.error ? `：${capabilities.artifactProviders.REMOTE_COMPUTE.error}` : '；云端阶段会等待配置'}`}
+        </div>
 
         <div className="grid grid-cols-3 gap-3 text-sm">
           {[['脚本 Worker', scriptWorkers, setScriptWorkers], ['视觉 Worker', visualWorkers, setVisualWorkers], ['图片 Worker', imageWorkers, setImageWorkers]].map(([label, value, setter]) => (

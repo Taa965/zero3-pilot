@@ -180,8 +180,8 @@ test('a fully gated single-item cognitive-store run reaches COMPLETED only after
       ],
       'image-production': [{ logicalName: 'overview.png', kind: 'image' }, { logicalName: '交接包.zip', kind: 'handoff-package' }],
       'local-ingest': [{ logicalName: 'local-handoff', kind: 'local-package' }],
-      'cloud-render': [{ logicalName: '云端视频', kind: 'video' }],
-      pullback: [{ logicalName: 'final.mp4', kind: 'video' }]
+      'cloud-render': [{ logicalName: '云端视频结果集', kind: 'remote-video-set' }],
+      pullback: [{ logicalName: '视频回传清单.json', kind: 'video-result-manifest' }]
     }
     for (const stageId of ['script-rewrite', 'visual-plan', 'image-production', 'local-ingest', 'cloud-render', 'pullback']) {
       snapshot = runtime.getRun(runId)

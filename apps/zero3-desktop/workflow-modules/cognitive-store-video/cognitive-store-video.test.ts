@@ -25,16 +25,39 @@ test('cognitive-store module freezes prompts, workers and pipeline into each run
   assert.deepEqual(plan.items[0].completedStageIds, ['input-ingest'])
 })
 
-test('handoff manifest validation prevents image-count drift and blind remote resubmission', async () => {
-  const { COGNITIVE_STORE_HANDOFF_PROTOCOL, cognitiveStoreDriveLayout, shouldSubmitRemoteRender, validateCognitiveStoreHandoffManifest } = await import('./handoff.ts')
+test('handoff manifest matches the deployed GPT-GPU runner schema and blocks blind resubmission', async () => {
+  const {
+    COGNITIVE_STORE_HANDOFF_SCHEMA,
+    COGNITIVE_STORE_WAN_WORKFLOW,
+    cognitiveStoreDriveLayout,
+    shouldSubmitRemoteRender,
+    validateCognitiveStoreHandoffManifest
+  } = await import('./handoff.ts')
   const layout = cognitiveStoreDriveLayout('run-1', 'item-1')
   assert.match(layout.handoff, /40_handoff$/)
   const manifest = {
-    protocol: COGNITIVE_STORE_HANDOFF_PROTOCOL, workflow: 'cognitive-store-video@1.0.0', workflowRunId: 'run-1', workItemId: 'item-1', title: '资本论',
-    imageCount: 2, images: ['U001.png', 'U002.png'], scriptFile: '重构脚本.md', visualPlanFile: '视觉内容.md', remoteExecutionId: null
+    schema: COGNITIVE_STORE_HANDOFF_SCHEMA,
+    package_id: 'RUN-1-ITEM-1',
+    project_id: 'project-1',
+    workflowRunId: 'run-1',
+    workItemId: 'item-1',
+    title: '资本论',
+    execution: { max_parallel: 2 },
+    jobs: [{
+      id: 'QWEN-B01-U01',
+      workflow: COGNITIVE_STORE_WAN_WORKFLOW,
+      start_image: 'assets/QWEN-B01-U01.png',
+      prompt: 'Slow camera push-in.',
+      negative_prompt: 'blur, flicker',
+      seed: 2026091101,
+      width: 1248,
+      height: 704,
+      timeout_seconds: 7200
+    }]
   }
   assert.deepEqual(validateCognitiveStoreHandoffManifest(manifest), [])
   assert.equal(shouldSubmitRemoteRender(manifest), true)
-  assert.ok(validateCognitiveStoreHandoffManifest({ ...manifest, imageCount: 3 }).some(error => error.includes('does not match')))
-  assert.equal(shouldSubmitRemoteRender({ ...manifest, remoteExecutionId: 'aigate-123' }), false)
+  assert.equal(shouldSubmitRemoteRender({ ...manifest, remoteExecutionId: 'remote-1' }), false)
+  assert.ok(validateCognitiveStoreHandoffManifest({ ...manifest, schema: 'wrong' }).some(error => error.includes('schema')))
+  assert.ok(validateCognitiveStoreHandoffManifest({ ...manifest, jobs: [{ ...manifest.jobs[0], width: 1000 }] }).some(error => error.includes('width')))
 })

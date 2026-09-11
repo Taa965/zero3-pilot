@@ -68,6 +68,10 @@ export function registerWorkflowDesktopIpc(port: WorkflowDesktopPort): () => voi
     port.ingestInputs(id(runId, 'workflowRunId')))
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.ingestHandoffs, (_event, runId: unknown) =>
     port.ingestHandoffs(id(runId, 'workflowRunId')))
+  ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.reconcileRemote, (_event, runId: unknown) =>
+    port.reconcileRemote(id(runId, 'workflowRunId')))
+  ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.pullbackVideos, (_event, runId: unknown) =>
+    port.pullbackVideos(id(runId, 'workflowRunId')))
   ipcMain.handle(WORKFLOW_DESKTOP_CHANNELS.pickInputFiles, async () => {
     const result = await dialog.showOpenDialog({
       title: '选择工作流输入脚本',

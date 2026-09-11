@@ -3,10 +3,12 @@ export type WorkflowRuntimeCapabilities = {
   artifactProviders: {
     GOOGLE_DRIVE?: { configured: boolean; mode?: string }
     LOCAL?: { configured: boolean }
-    REMOTE_COMPUTE?: { configured: boolean }
+    REMOTE_COMPUTE?: { configured: boolean; provider?: string | null; error?: string | null }
   }
   automaticInputIngest: boolean
   handoffMaterialization?: boolean
+  remoteRender?: boolean
+  videoPullback?: boolean
 }
 
 export type WorkflowRunSummary = {
@@ -101,6 +103,8 @@ type WorkflowBridge = {
   pickInputFiles: () => Promise<{ path: string; name: string }[]>
   ingestInputs: (runId: string) => Promise<WorkflowSnapshot>
   ingestHandoffs: (runId: string) => Promise<WorkflowSnapshot>
+  reconcileRemote: (runId: string) => Promise<{ snapshot: WorkflowSnapshot; results: unknown[] }>
+  pullbackVideos: (runId: string) => Promise<{ snapshot: WorkflowSnapshot; results: unknown[] }>
 }
 
 function bridge(): WorkflowBridge | null {
@@ -146,5 +150,15 @@ export const WorkflowAdapter = {
     const runtime = bridge()
     if (!runtime) throw new Error('Zero3 Workflow Runtime 尚未加载')
     return runtime.ingestHandoffs(runId)
+  },
+  reconcileRemote: async (runId: string) => {
+    const runtime = bridge()
+    if (!runtime) throw new Error('Zero3 Workflow Runtime 尚未加载')
+    return runtime.reconcileRemote(runId)
+  },
+  pullbackVideos: async (runId: string) => {
+    const runtime = bridge()
+    if (!runtime) throw new Error('Zero3 Workflow Runtime 尚未加载')
+    return runtime.pullbackVideos(runId)
   }
 }
