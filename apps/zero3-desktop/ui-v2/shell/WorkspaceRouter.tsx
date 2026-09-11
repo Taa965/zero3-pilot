@@ -36,6 +36,7 @@ const PROVIDERS: Array<{ id: WorkspaceProvider; label: string }> = [
   { id: 'codex', label: 'Codex' },
   { id: 'claude', label: 'Claude' },
   { id: 'antigravity', label: 'Antigravity' },
+  { id: 'workbuddy', label: 'WorkBuddy' },
   { id: 'zero3', label: 'Zero3' }
 ]
 

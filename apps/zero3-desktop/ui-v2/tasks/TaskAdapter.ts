@@ -19,6 +19,8 @@ export type CreateWorkflowTaskInput = {
 
 export interface TaskBridge {
   listTasks(): Promise<unknown>
+  setTaskArchived(taskId: string, archived: boolean): Promise<unknown>
+  deleteTask(taskId: string): Promise<unknown>
   listTaskWorkflows(): Promise<unknown>
   createWorkflowTask(input: CreateWorkflowTaskInput): Promise<unknown>
   skillCapabilities(): Promise<unknown>
@@ -57,6 +59,7 @@ export function readTaskSnapshots(value: unknown): ExecutionTaskSnapshot[] {
   for (const item of value) {
     if (item?.definition?.task?.contract !== 'zero3.pilot.execution-task.v1' ||
         item?.definition?.task?.taskId !== item?.runtime?.task?.taskId ||
+        typeof item?.archived !== 'boolean' ||
         !Array.isArray(item?.definition?.steps) || !Array.isArray(item?.runtime?.steps) ||
         !Array.isArray(item?.runtime?.assignments) || !Array.isArray(item?.runtime?.sessionBindings) || !Array.isArray(item?.events)) {
       throw new Error('任务数据不完整，请检查任务服务版本')

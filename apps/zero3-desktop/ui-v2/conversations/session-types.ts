@@ -1,4 +1,4 @@
-export type WorkspaceProvider = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'zero3'
+export type WorkspaceProvider = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'workbuddy' | 'zero3'
 export type WorkspaceExecutionHealth =
   | 'active'
   | 'idle'

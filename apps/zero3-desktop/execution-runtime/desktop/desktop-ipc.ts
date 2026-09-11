@@ -33,6 +33,10 @@ function text(value: unknown, label: string, max = 4096): string {
   if (!result || result.length > max || result.includes('\0')) throw new Error(`${label} is invalid`)
   return result
 }
+function flag(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`${label} must be a boolean`)
+  return value
+}
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`)
   return value as Record<string, unknown>
@@ -77,6 +81,9 @@ export function registerExecutionDesktopIpc(port: ExecutionDesktopPort): () => v
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.reconcileReadiness, (_event, taskId: unknown) => port.reconcileReadiness(id(taskId, 'taskId')))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.listTasks, () => port.listTasks())
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.getTask, (_event, taskId: unknown) => port.getTask(id(taskId, 'taskId')))
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.setTaskArchived, (_event, taskId: unknown, archived: unknown) =>
+    port.setTaskArchived(id(taskId, 'taskId'), flag(archived, 'archived')))
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.deleteTask, (_event, taskId: unknown) => port.deleteTask(id(taskId, 'taskId')))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.listTaskWorkflows, () => port.listTaskWorkflows())
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.createWorkflowTask, (_event, input: unknown) =>
     port.createWorkflowTask(record(input, 'task workflow input') as unknown as TaskWorkflowCreateInput))

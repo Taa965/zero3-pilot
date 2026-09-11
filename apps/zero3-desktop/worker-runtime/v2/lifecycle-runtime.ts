@@ -147,8 +147,11 @@ export class Zero3AgentLifecycleRuntime {
       if (snapshot.definition?.task?.projectId !== projectId) throw new Error('task does not belong to project')
       return snapshot
     }
+    // Archived tasks are not resumable: the operator archived them to stop scheduling, and the
+    // task id can still be addressed explicitly when history has to be inspected.
     const candidates = (await this.execution.listTasks()).filter(snapshot =>
-      snapshot?.definition?.task?.projectId === projectId && !TERMINAL_TASKS.has(snapshot?.runtime?.task?.status)
+      snapshot?.archived !== true
+      && snapshot?.definition?.task?.projectId === projectId && !TERMINAL_TASKS.has(snapshot?.runtime?.task?.status)
     )
     if (candidates.length === 1) return candidates[0]
     if (candidates.length > 1) throw new Error('multiple active project tasks exist; taskId is required')

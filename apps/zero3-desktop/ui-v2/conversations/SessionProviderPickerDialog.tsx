@@ -16,7 +16,7 @@ interface SessionProviderPickerDialogProps {
   onCancel: () => void
 }
 
-type RuntimeProvider = Extract<WorkspaceProvider, 'codex' | 'claude' | 'antigravity'>
+type RuntimeProvider = Extract<WorkspaceProvider, 'codex' | 'claude' | 'antigravity' | 'workbuddy'>
 type RuntimeDraft = {
   model: string
   thinkingEffort: LocalSessionThinkingEffort | ''
@@ -32,7 +32,15 @@ const MODEL_SUGGESTIONS: Record<RuntimeProvider, Array<{ value: string; label: s
     { value: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
     { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' }
   ],
-  antigravity: []
+  antigravity: [],
+  // CodeBuddy Code publishes model tiers rather than raw model ids, so the
+  // suggestions are the aliases its own --model flag documents.
+  workbuddy: [
+    { value: 'primary-model', label: '主模型（primary-model）' },
+    { value: 'deep-model', label: '深度模型（deep-model）' },
+    { value: 'balanced-model', label: '均衡模型（balanced-model）' },
+    { value: 'fast-model', label: '快速模型（fast-model）' }
+  ]
 }
 
 const EFFORT_OPTIONS: Record<RuntimeProvider, Array<{ value: LocalSessionThinkingEffort; label: string }>> = {
@@ -53,11 +61,18 @@ const EFFORT_OPTIONS: Record<RuntimeProvider, Array<{ value: LocalSessionThinkin
     { value: 'low', label: '低（Low）' },
     { value: 'medium', label: '中（Medium）' },
     { value: 'high', label: '高（High）' }
+  ],
+  workbuddy: [
+    { value: 'low', label: '低（Low）' },
+    { value: 'medium', label: '中（Medium）' },
+    { value: 'high', label: '高（High）' },
+    { value: 'xhigh', label: '超高（XHigh）' },
+    { value: 'max', label: '最大（Max）' }
   ]
 }
 
 function isRuntimeProvider(provider: WorkspaceProvider): provider is RuntimeProvider {
-  return provider === 'codex' || provider === 'claude' || provider === 'antigravity'
+  return provider === 'codex' || provider === 'claude' || provider === 'antigravity' || provider === 'workbuddy'
 }
 
 const PROVIDERS: Array<{
@@ -72,6 +87,7 @@ const PROVIDERS: Array<{
   { id: 'codex', title: '本地 Codex', icon: 'terminal', description: '调用本机官方 Codex 客户端（codex exec），复用它的 ChatGPT 登录。', requiresProject: true },
   { id: 'claude', title: 'Claude Code', icon: 'terminal', description: '调用本机 Claude Code CLI，复用官方 Claude 登录。', requiresProject: true },
   { id: 'antigravity', title: 'Antigravity', icon: 'rocket', description: '调用本机官方 agy CLI，并保留 Antigravity 会话绑定。', requiresProject: true },
+  { id: 'workbuddy', title: 'WorkBuddy AI', icon: 'sparkle', description: '调用 WorkBuddy AI 内置的 CodeBuddy Code CLI（cbc），复用它的官方登录。', requiresProject: true },
   { id: 'zero3', title: 'Zero3 本体', icon: 'hubot', description: '使用你配置的 API 模型驱动 Zero3 的 Codex Agent Kernel，保留项目文件、终端与工具能力。', requiresProject: true }
 ]
 
@@ -113,7 +129,8 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
   const [runtimeDrafts, setRuntimeDrafts] = useState<Record<RuntimeProvider, RuntimeDraft>>({
     codex: { model: '', thinkingEffort: '' },
     claude: { model: '', thinkingEffort: '' },
-    antigravity: { model: '', thinkingEffort: '' }
+    antigravity: { model: '', thinkingEffort: '' },
+    workbuddy: { model: '', thinkingEffort: '' }
   })
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -321,7 +338,7 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
             >
               打开官方 CLI 授权
             </button>
-            <span className="text-xs text-(--ui-text-tertiary)">Zero3 不保存 Codex / Claude / Antigravity 的账号密码，只复用官方 CLI 登录。</span>
+            <span className="text-xs text-(--ui-text-tertiary)">Zero3 不保存 Codex / Claude / Antigravity / WorkBuddy 的账号密码，只复用官方 CLI 登录。</span>
           </div>
         )}
 
@@ -343,7 +360,13 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
                     ...current,
                     [selected]: { ...current[selected], model: event.target.value }
                   }))}
-                  placeholder={selected === 'antigravity' ? '官方默认；或输入 agy models 中的模型名' : '官方默认；或选择 / 输入模型名'}
+                  placeholder={
+                    selected === 'antigravity'
+                      ? '官方默认；或输入 agy models 中的模型名'
+                      : selected === 'workbuddy'
+                        ? '官方默认；或选择 primary-model / deep-model 等'
+                        : '官方默认；或选择 / 输入模型名'
+                  }
                   className="h-9 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-sm text-foreground"
                 />
                 <datalist id={`zero3-${selected}-model-suggestions`}>
@@ -376,6 +399,7 @@ export function SessionProviderPickerDialog({ project, onCreate, onCancel }: Ses
               {selected === 'codex' && 'Codex 会把选择写入 --model 与 model_reasoning_effort，并在 resume 时继续覆盖。'}
               {selected === 'claude' && 'Claude Code 会通过 --model 与 --effort 执行；具体可用强度仍取决于所选 Claude 模型。'}
               {selected === 'antigravity' && 'Antigravity 当前官方 agy CLI 的 --effort 只支持 low / medium / high。'}
+              {selected === 'workbuddy' && 'WorkBuddy AI 通过内置的 CodeBuddy Code CLI 执行，会写入 --model 与 --effort，并在 resume 时继续沿用。'}
             </div>
           </div>
         )}

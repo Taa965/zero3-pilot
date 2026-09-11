@@ -52,6 +52,11 @@ export function SkillInstallPanel({ cwd, onFinished }: { cwd: string | null; onF
     try { await controller.install(source, cwd) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
   }
+  const run = async (action: () => Promise<void>) => {
+    setError(null)
+    try { await action() }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+  }
   const labels = { idle: '', starting: '正在创建安装任务…', running: '安装任务运行中', completed: '安装任务已结束，请查看安装器结果和下方 Skill 列表。', failed: '安装任务失败，可检查原因后重试。', interrupted: '安装任务已取消。' }
   return <section className="space-y-3 rounded-lg border border-(--ui-border) bg-background p-4">
     <div className="font-medium">安装 Skill（Codex 原生）</div>
@@ -60,6 +65,14 @@ export function SkillInstallPanel({ cwd, onFinished }: { cwd: string | null; onF
       <input aria-label="Skill 安装来源" className="min-w-0 flex-1 rounded-md border border-(--ui-border) bg-(--ui-pane-background) px-3 py-2 text-sm" placeholder="https://github.com/.../tree/main/path/to/skill" value={source} maxLength={4096} disabled={busy} onChange={event => setSource(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void install() }} />
       <button className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" disabled={!source.trim() || busy} onClick={() => void install()}>{busy ? '安装中…' : '安装'}</button>
     </div>
+    {state.recoverable.length > 0 && <div className="space-y-2 rounded border border-amber-500/40 p-3 text-xs" role="alert">
+      <div className="text-sm font-medium">检测到上次未完成的安装任务（应用重启被中断）</div>
+      {state.recoverable.map(job => <div className="flex flex-wrap items-center gap-2" key={job.threadId}>
+        <span className="min-w-0 flex-1 truncate" title={job.error ?? job.source}>来源：{job.source}{job.error ? `（${job.error}）` : ''}</span>
+        <button className={buttonClass} disabled={busy} onClick={() => void run(() => controller.reinstall(job))}>重新安装</button>
+        {' '}<button className={buttonClass} disabled={busy} onClick={() => void run(() => controller.dismissRecoverable(job))}>忽略</button>
+      </div>)}
+    </div>}
     {state.status !== 'idle' && <div role="status" className="space-y-1 text-xs">
       <div>{state.requests.length ? '等待处理安装请求' : labels[state.status]}</div>
       <div>来源：{state.source}</div>

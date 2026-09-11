@@ -1,6 +1,6 @@
 import type { ExecutionStepDefinition, ExecutionTaskDefinition, ExecutionTaskSnapshot } from '../../execution-runtime/contracts.ts'
 
-export type TaskFilter = 'all' | 'running' | 'review' | 'error' | 'completed'
+export type TaskFilter = 'all' | 'running' | 'review' | 'error' | 'completed' | 'archived'
 export type StepDraft = Omit<ExecutionStepDefinition, 'contract' | 'taskId' | 'createdAt'>
 export type TaskInput = { task: Omit<ExecutionTaskDefinition, 'contract' | 'createdAt'>; steps: StepDraft[] }
 export const STATUS_LABELS: Record<string, string> = {
@@ -15,6 +15,9 @@ export function matchesTask(task: ExecutionTaskSnapshot, filter: TaskFilter, que
   const definition = task.definition.task
   if (projectId && (definition.projectId ?? '') !== projectId) return false
   if (!`${definition.taskId} ${definition.title} ${definition.goal}`.toLowerCase().includes(query.trim().toLowerCase())) return false
+  // 归档任务只出现在「归档」筛选中，避免已收尾的工作持续占据日常列表。
+  if (filter === 'archived') return task.archived === true
+  if (task.archived === true) return false
   const states = [task.runtime.task.status, ...task.runtime.steps.map(step => step.status)]
   if (filter === 'review') return states.some(state => ['verifying', 'waiting_human'].includes(state))
   if (filter === 'error') return states.some(state => ['blocked', 'failed', 'fix_required', 'outcome_unknown'].includes(state))

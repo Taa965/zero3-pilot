@@ -1,5 +1,5 @@
-import { mkdir, readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readdir, rm } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 
 import {
   DurableStoreCorruptionError,
@@ -8,7 +8,13 @@ import {
   stableJson,
   writeDurableJson
 } from '../group-runtime/store/atomic-file.ts'
-import type { ExecutionEvent, ExecutionRuntimeState, ExecutionWorkflowDefinition } from './contracts.ts'
+import {
+  ZERO3_EXECUTION_TASK_ARCHIVE,
+  type ExecutionEvent,
+  type ExecutionRuntimeState,
+  type ExecutionTaskArchiveState,
+  type ExecutionWorkflowDefinition
+} from './contracts.ts'
 import { appendExecutionEvent, readExecutionEventLedger } from './event-ledger.ts'
 import { validateExecutionWorkflowDefinition } from './validators.ts'
 
@@ -23,6 +29,10 @@ export interface ExecutionStoreReconcileResult {
   stateEventSequence: number
   needsSemanticReplay: boolean
   recoveredFiles: readonly string[]
+}
+
+function notArchived(): ExecutionTaskArchiveState {
+  return { contract: ZERO3_EXECUTION_TASK_ARCHIVE, archived: false, archivedAt: null, updatedAt: '' }
 }
 
 function safeId(value: string, label: string): string {
@@ -141,6 +151,49 @@ export class Zero3ExecutionStore {
       throw error
     }
     return entries.filter(entry => entry.isDirectory()).map(entry => entry.name).sort()
+  }
+
+  /**
+   * 归档标记保存在任务目录内的独立侧车里，不进入受校验的快照契约，
+   * 这样归档不会改变任务定义版本，也不会与执行状态互相覆盖。
+   */
+  async readArchive(taskId: string): Promise<ExecutionTaskArchiveState> {
+    let record: ExecutionTaskArchiveState
+    try {
+      record = await readDurableJson<ExecutionTaskArchiveState>(this.path(taskId, 'archive.json'))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return notArchived()
+      throw error
+    }
+    if (record?.contract !== ZERO3_EXECUTION_TASK_ARCHIVE || typeof record.archived !== 'boolean') {
+      throw new DurableStoreCorruptionError(`Execution Task ${taskId} archive record is invalid`)
+    }
+    if (record.archived && typeof record.archivedAt !== 'string') {
+      throw new DurableStoreCorruptionError(`Execution Task ${taskId} archive record has no archivedAt`)
+    }
+    return record
+  }
+
+  async writeArchive(taskId: string, archived: boolean, at: string): Promise<ExecutionTaskArchiveState> {
+    const record: ExecutionTaskArchiveState = {
+      contract: ZERO3_EXECUTION_TASK_ARCHIVE,
+      archived,
+      archivedAt: archived ? at : null,
+      updatedAt: at
+    }
+    await writeDurableJson(this.path(taskId, 'archive.json'), record)
+    return record
+  }
+
+  /**
+   * 物理删除整个任务目录（快照、事件账本与归档侧车）。调用方负责判断任务是否允许删除；
+   * 这里只做路径与存在性防护，拒绝删除执行库根目录之外的任何内容。
+   */
+  async deleteTask(taskId: string): Promise<void> {
+    const directory = this.taskDir(taskId)
+    if (dirname(directory) !== resolve(this.rootDir)) throw new Error('refusing to delete outside the execution store root')
+    await this.loadSnapshotRecord(taskId)
+    await rm(directory, { recursive: true, force: false })
   }
 
   async reconcile(taskId: string): Promise<ExecutionStoreReconcileResult> {

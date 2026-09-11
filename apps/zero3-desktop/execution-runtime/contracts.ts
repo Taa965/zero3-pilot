@@ -3,6 +3,7 @@ export const ZERO3_EXECUTION_STEP = 'zero3.pilot.execution-step.v1' as const
 export const ZERO3_EXECUTION_ASSIGNMENT = 'zero3.pilot.execution-assignment.v1' as const
 export const ZERO3_EXECUTION_SESSION_BINDING = 'zero3.pilot.execution-session-binding.v1' as const
 export const ZERO3_EXECUTION_EVENT = 'zero3.pilot.execution-event.v1' as const
+export const ZERO3_EXECUTION_TASK_ARCHIVE = 'zero3.pilot.execution-task-archive.v1' as const
 
 export type ExecutionExecutorTarget =
   | 'GPT_WEB'
@@ -178,6 +179,8 @@ export type ExecutionEventType =
   | 'waiting_human'
   | 'outcome_unknown'
   | 'task.completed'
+  | 'task.archived'
+  | 'task.unarchived'
 
 export interface ExecutionEvent {
   contract: typeof ZERO3_EXECUTION_EVENT
@@ -204,8 +207,17 @@ export interface ExecutionRuntimeState {
   sessionBindings: readonly ExecutionSessionBinding[]
 }
 
+export interface ExecutionTaskArchiveState {
+  contract: typeof ZERO3_EXECUTION_TASK_ARCHIVE
+  archived: boolean
+  archivedAt: string | null
+  updatedAt: string
+}
+
 export interface ExecutionTaskSnapshot {
   definition: ExecutionWorkflowDefinition
   runtime: ExecutionRuntimeState
   events: readonly ExecutionEvent[]
+  /** 任务归档标记。归档只影响列表呈现与自动调度，不改变任务自身的执行状态。 */
+  archived: boolean
 }

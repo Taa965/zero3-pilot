@@ -117,6 +117,52 @@ test('resuming a paused assignment respects capacity and submits an auditable co
   })
 })
 
+test('archiving a task persists across restart, is auditable, and hides it from active filters', async () => {
+  await withRuntime(async (runtime, dir) => {
+    const step = makeStep('实现变更', 'CODEX')
+    const input = makeTask('归档验收', '验证归档语义', null, [step]), id = input.task.taskId
+    await runtime.createTask(input)
+    assert.equal((await runtime.snapshot(id)).archived, false)
+    const archived = await runtime.setTaskArchived(id, true)
+    assert.equal(archived.archived, true)
+    assert.equal(archived.events.at(-1)?.type, 'task.archived')
+    assert.equal(matchesTask(archived, 'archived', '', ''), true)
+    for (const filter of ['all', 'running', 'review', 'error', 'completed'] as const) {
+      assert.equal(matchesTask(archived, filter, '', ''), false, `archived task must not appear under ${filter}`)
+    }
+    // A restarted runtime reads the sidecar, not in-memory state.
+    const reopened = new Zero3ExecutionRuntime(new Zero3ExecutionStore(dir))
+    const restored = await reopened.snapshot(id)
+    assert.equal(restored.archived, true)
+    assert.equal(readTaskSnapshots([restored])[0].archived, true)
+    // Archiving does not change the task definition or its execution state.
+    assert.equal(restored.definition.revision, archived.definition.revision)
+    assert.equal(restored.runtime.steps[0].status, archived.runtime.steps[0].status)
+    const unarchived = await reopened.setTaskArchived(id, false)
+    assert.equal(unarchived.archived, false)
+    assert.equal(unarchived.events.at(-1)?.type, 'task.unarchived')
+    assert.equal(matchesTask(unarchived, 'all', '', ''), true)
+    // Repeating the same archive state is idempotent and writes no extra event.
+    const events = (await reopened.snapshot(id)).events.length
+    await reopened.setTaskArchived(id, false)
+    assert.equal((await reopened.snapshot(id)).events.length, events)
+  })
+})
+
+test('deleting a task erases its durable directory and is refused while a step is active', async () => {
+  await withRuntime(async (runtime, dir) => {
+    const step = makeStep('实现变更', 'CODEX')
+    const input = makeTask('删除验收', '验证删除语义', null, [step]), id = input.task.taskId
+    await runtime.createTask(input)
+    await runtime.createAssignment(id, step.stepId, 'CODEX')
+    await assert.rejects(runtime.deleteTask(id), /执行中/)
+    await runtime.transitionStep(id, step.stepId, 'cancelled', '不再需要')
+    await runtime.deleteTask(id)
+    assert.deepEqual(await new Zero3ExecutionStore(dir).listTaskIds(), [])
+    await assert.rejects(runtime.snapshot(id))
+  })
+})
+
 test('task workflow adapter accepts registry summaries and rejects malformed data', () => {
   assert.deepEqual(readTaskWorkflows([{
     id: 'generic-task', name: 'Generic', description: 'Generic workflow', category: 'test', revision: 1

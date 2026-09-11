@@ -15,7 +15,8 @@ const eventLabels: Record<string, string> = {
   'step.state_changed': '步骤状态更新', 'assignment.created': '创建执行分配', 'skill.preflight': 'Skill 能力预检', 'session.bound': '绑定会话',
   'session.state_changed': '会话状态更新', 'progress.updated': '进度回报', 'artifact.produced': '产物回报',
   'completion.requested': '提交审核', 'gate.passed': '审核通过', 'gate.failed': '要求修改',
-  blocked: '标记阻塞', waiting_human: '转人工', outcome_unknown: '结果未知', 'task.completed': '任务完成'
+  blocked: '标记阻塞', waiting_human: '转人工', outcome_unknown: '结果未知', 'task.completed': '任务完成',
+  'task.archived': '归档任务', 'task.unarchived': '取消归档'
 }
 function JsonDetail({ value }: { value: unknown }) {
   return <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-(--ui-pane-background) p-3 text-xs">{JSON.stringify(value, null, 2)}</pre>
@@ -168,7 +169,13 @@ export function TaskWorkspace({ project = null }: { project?: Zero3ProjectRecord
   const changes = artifacts.filter(event => /diff|patch|code.?change/i.test(String(event.payload?.kind ?? '')) || typeof event.payload?.diff === 'string' || Array.isArray(event.payload?.changedFiles))
   return <div className="flex h-full min-w-0 flex-col bg-background">
     <header className="shrink-0 space-y-2 border-b border-(--ui-border) px-6 py-4">
-      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-lg font-medium">{task.title}</h2><span className="text-sm text-blue-500">{statusLabel(snapshot.runtime.task.status)} · {percent(snapshot.runtime.task.progress)}</span></div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h2 className="text-lg font-medium">{task.title}</h2>
+          {snapshot.archived && <span className="rounded bg-(--ui-control-active-background) px-1.5 py-0.5 text-[11px] text-(--ui-text-secondary)">已归档</span>}
+        </div>
+        <span className="text-sm text-blue-500">{statusLabel(snapshot.runtime.task.status)} · {percent(snapshot.runtime.task.progress)}</span>
+      </div>
       <div className="break-all text-xs text-(--ui-text-tertiary)">{task.taskId}</div>
     </header>
     <nav aria-label="任务详情页签" className="flex shrink-0 gap-5 overflow-x-auto border-b border-(--ui-border) px-6">{tabs.map(([id, label]) => <button type="button" key={id} aria-current={activeTab === id ? 'page' : undefined} onClick={() => setActiveTab(id)} className={`whitespace-nowrap border-b-2 py-3 text-sm ${activeTab === id ? 'border-blue-500 text-blue-500' : 'border-transparent text-(--ui-text-secondary)'}`}>{label}</button>)}</nav>

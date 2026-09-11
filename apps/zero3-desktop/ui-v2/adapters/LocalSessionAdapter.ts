@@ -37,6 +37,7 @@ function providerLabel(provider: LocalSessionProvider) {
   if (provider === 'codex') return 'Codex'
   if (provider === 'claude') return 'Claude Code'
   if (provider === 'antigravity') return 'Antigravity'
+  if (provider === 'workbuddy') return 'WorkBuddy AI'
   return 'Zero3'
 }
 
@@ -68,7 +69,7 @@ function normalizeRecord(value: unknown): LocalSessionRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
   const provider = raw.provider
-  if (provider !== 'codex' && provider !== 'claude' && provider !== 'antigravity' && provider !== 'zero3') return null
+  if (provider !== 'codex' && provider !== 'claude' && provider !== 'antigravity' && provider !== 'workbuddy' && provider !== 'zero3') return null
   const id = typeof raw.id === 'string' ? raw.id.trim() : ''
   if (!id) return null
   const messages = Array.isArray(raw.messages)

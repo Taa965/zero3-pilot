@@ -24,7 +24,7 @@ const CONTEXT_MENU_WIDTH = 184
 const CONTEXT_MENU_HEIGHT = 152
 const GPT_PREWARM_DELAY_MS = 150
 type SessionFilter = 'all' | 'archived' | WorkspaceProvider
-const FILTERS: SessionFilter[] = ['all', 'gpt', 'gemini', 'codex', 'claude', 'antigravity', 'zero3', 'archived']
+const FILTERS: SessionFilter[] = ['all', 'gpt', 'gemini', 'codex', 'claude', 'antigravity', 'workbuddy', 'zero3', 'archived']
 
 const PROVIDER_MARKS: Record<WorkspaceProvider, { symbol: string; color: string; label: string }> = {
   gpt: { symbol: '◎', color: 'text-blue-500', label: 'GPT' },
@@ -32,6 +32,7 @@ const PROVIDER_MARKS: Record<WorkspaceProvider, { symbol: string; color: string;
   codex: { symbol: '⌘', color: 'text-green-500', label: 'Codex' },
   claude: { symbol: 'C', color: 'text-orange-500', label: 'Claude' },
   antigravity: { symbol: 'A', color: 'text-fuchsia-500', label: 'Antigravity' },
+  workbuddy: { symbol: 'W', color: 'text-sky-500', label: 'WorkBuddy' },
   zero3: { symbol: 'Z', color: 'text-blue-600', label: 'Zero3' }
 }
 
