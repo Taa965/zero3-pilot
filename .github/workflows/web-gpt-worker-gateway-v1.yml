@@ -21,6 +21,7 @@ on:
       - 'apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs'
       - 'scripts/check-web-gpt-worker-gateway-v1.mjs'
       - 'scripts/check-zero3-remote-capability-p0.mjs'
+      - 'scripts/check-zero3-remote-capability-p1.mjs'
       - 'scripts/check-worker-protocol-v2-p2-p3.mjs'
       - 'scripts/check-worker-wakeup-p5.mjs'
       - 'docs/WEB_GPT_*'
@@ -47,6 +48,7 @@ on:
       - 'apps/zero3-desktop/scripts/apply-remote-host-runtime.mjs'
       - 'scripts/check-web-gpt-worker-gateway-v1.mjs'
       - 'scripts/check-zero3-remote-capability-p0.mjs'
+      - 'scripts/check-zero3-remote-capability-p1.mjs'
       - 'scripts/check-worker-protocol-v2-p2-p3.mjs'
       - 'scripts/check-worker-wakeup-p5.mjs'
       - 'docs/WEB_GPT_*'
@@ -74,6 +76,8 @@ jobs:
         run: node scripts/check-web-gpt-worker-gateway-v1.mjs
       - name: Zero3 Remote Capability Protocol P0 guard
         run: node scripts/check-zero3-remote-capability-p0.mjs
+      - name: Zero3 Remote Capability Protocol P1 guard
+        run: node scripts/check-zero3-remote-capability-p1.mjs
       - name: Worker Tunnel overlay replay guard
         run: node --test apps/zero3-desktop/tests/overlay-patch.test.mjs
       - name: Worker Protocol v2 gateway guard
@@ -94,6 +98,10 @@ jobs:
         run: node --experimental-transform-types --test apps/zero3-desktop/host-runtime/remote-worker-rpc.test.ts apps/zero3-desktop/host-runtime/remote-config.test.ts
       - name: Remote Capability P0 tests
         run: node --experimental-transform-types --test apps/zero3-desktop/capability-runtime/capability-runtime.test.ts
+      - name: Remote Capability P1 filesystem tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/capability-runtime/filesystem-capabilities.test.ts
+      - name: Remote Capability P1 Git tests
+        run: node --experimental-transform-types --test apps/zero3-desktop/capability-runtime/git-capabilities.test.ts
       - name: Workflow Worker v2 runtime tests
         run: node --experimental-transform-types --test apps/zero3-desktop/worker-runtime/v2/workflow-worker-runtime.test.ts
       - name: Worker Wakeup P5 tests
