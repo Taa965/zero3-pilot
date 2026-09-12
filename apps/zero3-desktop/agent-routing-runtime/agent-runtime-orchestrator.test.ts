@@ -393,6 +393,22 @@ test('critical importance strengthens verification and forces a reviewer distinc
   assert.equal(captured.tasks[0].reviewPolicy.reviewer, 'GPT_WEB', 'a CODEX execution must not be reviewed by CODEX at critical importance')
 })
 
+test('Web GPT fast-path telemetry is persisted on the authoritative task record', async () => {
+  const { orchestrator, taskStore } = await buildOrchestrator('fast-path-telemetry', {
+    codex: async task => resultFor(task, 'CODEX', 'CODEX_LOCAL', 'COMPLETE')
+  })
+  const task = taskSpec({ taskId: 'task-tm-1', executionId: 'task-tm-1-exec-1' })
+  await orchestrator.dispatch(task, DISPATCH_CONTEXT)
+  const telemetry = {
+    timingMs: { bootstrap: 4, routing: 2, queue: null, executor: null, verification: null, total: 12 },
+    counts: { toolCalls: null, failovers: 0 }
+  }
+
+  await orchestrator.recordFastPathTelemetry(task.taskId, telemetry)
+  const stored = await taskStore.get(task.taskId)
+  assert.deepEqual(stored?.fastPathTelemetry, telemetry)
+})
+
 test('legacy dispatch without intelligent routing stays single-shot and compatible', async () => {
   const taskStore = new Zero3AgentTaskStore(await tempDir('legacy'))
   const orchestrator = new Zero3AgentRuntimeOrchestrator({

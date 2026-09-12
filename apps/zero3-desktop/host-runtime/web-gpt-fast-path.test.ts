@@ -5,21 +5,22 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { dispatchZero3CodexTask, verifyZero3Commit } from './web-gpt-fast-path.ts'
+import { dispatchZero3CodexTask, resolveZero3AgentWorkspace, summarizeZero3AgentFastPathTelemetry, verifyZero3Commit } from './web-gpt-fast-path.ts'
 import type { Zero3RemoteHostConfig } from './remote-types.ts'
 
-function config(workspace: string): Zero3RemoteHostConfig {
+function config(workspace: string | string[]): Zero3RemoteHostConfig {
+  const allowedWorkspaces = Array.isArray(workspace) ? workspace : [workspace]
   return {
     enabled: true,
     workerTunnelEnabled: true,
     skillTunnelEnabled: false,
     baseUrl: 'https://control.invalid',
-    tokenFile: path.join(workspace, '.token'),
+    tokenFile: path.join(allowedWorkspaces[0], '.token'),
     nodeId: 'node-1',
-    allowedWorkspaces: [workspace],
+    allowedWorkspaces,
     developmentAllowHttp: false,
-    mappingStateFile: path.join(workspace, '.mapping.json'),
-    outboxDir: path.join(workspace, '.outbox')
+    mappingStateFile: path.join(allowedWorkspaces[0], '.mapping.json'),
+    outboxDir: path.join(allowedWorkspaces[0], '.outbox')
   }
 }
 
@@ -49,6 +50,87 @@ test('dispatch_codex_task builds deterministic typed tasks and enforces the work
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true })
   }
+})
+
+test('workspace inference uses the unique authoritative project binding and still enforces the allow-list', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zero3-fast-workspace-'))
+  const one = path.join(root, 'one')
+  const two = path.join(root, 'two')
+  fs.mkdirSync(one)
+  fs.mkdirSync(two)
+  try {
+    const projects = [
+      { id: 'project-one', name: 'zero3-pilot', rootPath: one },
+      { id: 'project-two', name: 'other', rootPath: two }
+    ]
+    const lifecycleContext = { task: { definition: { task: { projectId: 'zero3-pilot' } }, runtime: { sessionBindings: [] } } }
+    assert.deepEqual(resolveZero3AgentWorkspace(undefined, {
+      config: config([one, two]), sessionId: 'session-1', lifecycleContext, projects, workspaceEntries: []
+    }), { workspace: one, source: 'project_binding' })
+    assert.throws(() => resolveZero3AgentWorkspace(undefined, {
+      config: config(two), sessionId: 'session-1', lifecycleContext, projects, workspaceEntries: []
+    }), /not in ZERO3_REMOTE_HOST_WORKSPACES/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('workspace inference supports session binding, explicit override, and fails closed on missing or ambiguous bindings', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zero3-fast-binding-'))
+  const one = path.join(root, 'one')
+  const two = path.join(root, 'two')
+  fs.mkdirSync(one)
+  fs.mkdirSync(two)
+  try {
+    const projects = [
+      { id: 'project-one', name: 'duplicate', rootPath: one },
+      { id: 'project-two', name: 'duplicate', rootPath: two }
+    ]
+    const conversationUrl = 'https://chatgpt.com/c/session-bound'
+    const sessionContext = { task: { definition: { task: { projectId: 'missing' } }, runtime: {
+      sessionBindings: [{ logicalSessionId: 'session-1', conversationUrl }]
+    } } }
+    const workspaceEntries = [{ kind: 'gpt_web', projectId: 'project-two', conversationUrl, currentUrl: conversationUrl }]
+    assert.deepEqual(resolveZero3AgentWorkspace(undefined, {
+      config: config([one, two]), sessionId: 'session-1', lifecycleContext: sessionContext, projects, workspaceEntries
+    }), { workspace: two, source: 'session_binding' })
+    const ambiguousContext = { task: { definition: { task: { projectId: 'duplicate' } }, runtime: { sessionBindings: [] } } }
+    assert.throws(() => resolveZero3AgentWorkspace(undefined, {
+      config: config([one, two]), sessionId: 'session-1', lifecycleContext: ambiguousContext, projects, workspaceEntries: []
+    }), /ambiguous/)
+    assert.deepEqual(resolveZero3AgentWorkspace(one, {
+      config: config([one, two]), sessionId: 'session-1', lifecycleContext: ambiguousContext, projects, workspaceEntries: []
+    }), { workspace: one, source: 'explicit' })
+    assert.throws(() => resolveZero3AgentWorkspace(undefined, {
+      config: config([one, two]), sessionId: 'session-1', lifecycleContext: {}, projects, workspaceEntries: []
+    }), /could not be inferred/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('timing telemetry is derived from authoritative ledger fields and keeps unknown values null', () => {
+  const record = {
+    attempts: [
+      { startedAt: new Date(1_200).toISOString(), finishedAt: new Date(1_500).toISOString(), failoverReason: 'retry elsewhere' },
+      { startedAt: new Date(1_700).toISOString(), finishedAt: new Date(2_100).toISOString(), failoverReason: null }
+    ],
+    result: { timing: { queueLatencyMs: 30, executionLatencyMs: 400, verificationLatencyMs: null, totalLatencyMs: 430 } }
+  }
+  assert.deepEqual(summarizeZero3AgentFastPathTelemetry(record, {
+    startedAtMs: 1_000, dispatchStartedAtMs: 1_150, completedAtMs: 2_200
+  }), {
+    timingMs: { bootstrap: 150, routing: 250, queue: 30, executor: 400, verification: null, total: 1_200 },
+    counts: { toolCalls: null, failovers: 1 }
+  })
+  const unknown = summarizeZero3AgentFastPathTelemetry({ attempts: [], result: {} }, {
+    startedAtMs: 10, dispatchStartedAtMs: 20, completedAtMs: 30
+  })
+  assert.equal(unknown.timingMs.routing, null)
+  assert.equal(unknown.timingMs.queue, null)
+  assert.equal(unknown.timingMs.executor, null)
+  assert.equal(unknown.timingMs.verification, null)
+  assert.equal(unknown.counts.toolCalls, null)
 })
 
 test('verify_commit runs fixed checks, commits only task-owned paths, pushes, and replays idempotently', async () => {

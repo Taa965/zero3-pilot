@@ -8,6 +8,7 @@ import type {
   Zero3CrossAgentBinding,
   Zero3ExecutionResultV2,
   Zero3ExecutorFailureClass,
+  Zero3FastPathTelemetry,
   Zero3ResolvedAgentTarget,
   Zero3ReviewState,
   Zero3TaskImportance,
@@ -72,6 +73,7 @@ export type Zero3AgentTaskRecord = {
   verificationProfile?: Zero3VerificationProfileName
   routingDecisions?: Zero3IntelligentRouteDecision[]
   attempts?: Zero3TaskAttemptRecord[]
+  fastPathTelemetry?: Zero3FastPathTelemetry | null
 }
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -233,6 +235,10 @@ export class Zero3AgentTaskStore {
 
   // Updated when failover moves work authority to a different executor so the
   // record always reflects the executor that owns (or last owned) the task.
+  setFastPathTelemetry(taskId: string, telemetry: Zero3FastPathTelemetry): Promise<Zero3AgentTaskRecord> {
+    return this.update(taskId, current => ({ ...current, fastPathTelemetry: structuredClone(telemetry) }))
+  }
+
   setResolvedTarget(taskId: string, resolvedTarget: Zero3ResolvedAgentTarget): Promise<Zero3AgentTaskRecord> {
     return this.update(taskId, current => ({ ...current, resolvedTarget }))
   }

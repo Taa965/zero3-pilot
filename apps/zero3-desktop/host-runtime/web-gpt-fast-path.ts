@@ -55,6 +55,165 @@ function allowedWorkspace(config: Zero3RemoteHostConfig, value: unknown): string
   return allowed
 }
 
+export type Zero3AgentWorkspaceResolution = {
+  workspace: string
+  source: 'explicit' | 'project_binding' | 'session_binding' | 'project_session_binding'
+}
+
+export type Zero3AgentFastPathTelemetry = {
+  timingMs: {
+    bootstrap: number | null
+    routing: number | null
+    queue: number | null
+    executor: number | null
+    verification: number | null
+    total: number
+  }
+  counts: { toolCalls: number | null; failovers: number }
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function optionalBindingText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function lifecycleProjectBinding(contextValue: unknown): string | null {
+  const context = recordValue(contextValue)
+  const task = recordValue(context.task)
+  const definition = recordValue(task.definition)
+  const definitionTask = recordValue(definition.task)
+  return optionalBindingText(definitionTask.projectId) ?? optionalBindingText(context.projectId)
+}
+
+function lifecycleSessionUrls(contextValue: unknown, sessionId: string): Set<string> {
+  const context = recordValue(contextValue)
+  const task = recordValue(context.task)
+  const runtime = recordValue(task.runtime)
+  const bindings = Array.isArray(runtime.sessionBindings) ? runtime.sessionBindings : []
+  const urls = new Set<string>()
+  for (const value of bindings) {
+    const binding = recordValue(value)
+    if (optionalBindingText(binding.logicalSessionId) !== sessionId) continue
+    const url = optionalBindingText(binding.conversationUrl)
+    if (url) urls.add(url)
+  }
+  return urls
+}
+
+export function resolveZero3AgentWorkspace(
+  value: unknown,
+  options: {
+    config: Zero3RemoteHostConfig
+    sessionId: string
+    lifecycleContext: unknown
+    projects: readonly unknown[]
+    workspaceEntries: readonly unknown[]
+  }
+): Zero3AgentWorkspaceResolution {
+  if (value != null && value !== '') {
+    return { workspace: allowedWorkspace(options.config, value), source: 'explicit' }
+  }
+
+  const candidates = new Map<string, Set<'project_binding' | 'session_binding'>>()
+  const add = (rootValue: unknown, source: 'project_binding' | 'session_binding') => {
+    const root = optionalBindingText(rootValue)
+    if (!root || !path.isAbsolute(root)) return
+    const resolved = path.resolve(root)
+    const sources = candidates.get(resolved) ?? new Set<'project_binding' | 'session_binding'>()
+    sources.add(source)
+    candidates.set(resolved, sources)
+  }
+  const projects = options.projects.map(recordValue)
+  const projectId = lifecycleProjectBinding(options.lifecycleContext)
+  if (projectId) {
+    for (const project of projects) {
+      if (optionalBindingText(project.id) === projectId || optionalBindingText(project.name) === projectId) {
+        add(project.rootPath, 'project_binding')
+      }
+    }
+  }
+
+  const sessionUrls = lifecycleSessionUrls(options.lifecycleContext, options.sessionId)
+  if (sessionUrls.size > 0) {
+    for (const entryValue of options.workspaceEntries) {
+      const entry = recordValue(entryValue)
+      if (optionalBindingText(entry.kind) !== 'gpt_web') continue
+      const conversationUrl = optionalBindingText(entry.conversationUrl)
+      const currentUrl = optionalBindingText(entry.currentUrl)
+      if ((!conversationUrl || !sessionUrls.has(conversationUrl)) && (!currentUrl || !sessionUrls.has(currentUrl))) continue
+      const entryProjectId = optionalBindingText(entry.projectId)
+      if (!entryProjectId) continue
+      for (const project of projects) {
+        if (optionalBindingText(project.id) === entryProjectId) add(project.rootPath, 'session_binding')
+      }
+    }
+  }
+
+  if (candidates.size === 0) {
+    throw new Error('workspace could not be inferred from an authoritative Zero3 project/session binding')
+  }
+  if (candidates.size !== 1) {
+    throw new Error('workspace inference is ambiguous across authoritative Zero3 project/session bindings')
+  }
+  const [candidate, sources] = [...candidates.entries()][0]
+  const workspace = allowedWorkspace(options.config, candidate)
+  const source = sources.has('project_binding') && sources.has('session_binding')
+    ? 'project_session_binding'
+    : sources.has('session_binding')
+      ? 'session_binding'
+      : 'project_binding'
+  return { workspace, source }
+}
+
+function finiteNonNegative(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function isoMs(value: unknown): number | null {
+  const text = optionalBindingText(value)
+  if (!text) return null
+  const parsed = Date.parse(text)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+export function summarizeZero3AgentFastPathTelemetry(
+  recordValueInput: unknown,
+  marks: { startedAtMs: number; dispatchStartedAtMs: number; completedAtMs: number }
+): Zero3AgentFastPathTelemetry {
+  const record = recordValue(recordValueInput)
+  const attempts = Array.isArray(record.attempts) ? record.attempts.map(recordValue) : []
+  let routing: number | null = attempts.length > 0 ? 0 : null
+  let cursor = marks.dispatchStartedAtMs
+  for (const attempt of attempts) {
+    const startedAt = isoMs(attempt.startedAt)
+    if (startedAt == null) { routing = null; break }
+    if (routing != null) routing += Math.max(0, startedAt - cursor)
+    const finishedAt = isoMs(attempt.finishedAt)
+    cursor = finishedAt == null ? startedAt : Math.max(startedAt, finishedAt)
+  }
+
+  const result = recordValue(record.result)
+  const timing = recordValue(result.timing)
+  const queue = finiteNonNegative(timing.queueLatencyMs)
+  const executor = finiteNonNegative(timing.executionLatencyMs)
+  const verification = finiteNonNegative(timing.verificationLatencyMs)
+  const failovers = attempts.filter(attempt => optionalBindingText(attempt.failoverReason) != null).length
+  return {
+    timingMs: {
+      bootstrap: Math.max(0, marks.dispatchStartedAtMs - marks.startedAtMs),
+      routing,
+      queue,
+      executor,
+      verification,
+      total: Math.max(0, marks.completedAtMs - marks.startedAtMs)
+    },
+    counts: { toolCalls: null, failovers }
+  }
+}
+
 function stableExecutionId(sessionId: string, key: string, suffix: string): string {
   const digest = createHash('sha256').update(`${sessionId}\0${key}\0${suffix}`).digest('hex').slice(0, 24)
   return `web-gpt-${suffix}-${digest}`

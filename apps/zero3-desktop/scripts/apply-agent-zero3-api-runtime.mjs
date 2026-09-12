@@ -163,21 +163,10 @@ function zero3AgentTaskList(value, label) {
   if (!Array.isArray(value) || value.length > 64) throw new Error(label + ' must be an array of at most 64 strings')
   return value.map((entry, index) => zero3AgentTaskRequiredText(entry, label + '[' + String(index) + ']', 4096))
 }
-// The Remote Host allow-list is the only workspace authority: exact resolved
-// paths, never a wildcard, a drive root or an unlisted directory.
-function zero3AgentTaskWorkspace(value) {
-  const requested = zero3AgentTaskOptionalText(value, 'workspace', 4096)
-  if (!requested) return null
-  const resolved = path.resolve(requested)
-  const allowed = (process.env.ZERO3_REMOTE_HOST_WORKSPACES ?? '')
-    .split(';')
-    .map(entry => entry.trim())
-    .filter(Boolean)
-    .map(entry => path.resolve(entry))
-  if (!allowed.includes(resolved)) throw new Error('workspace is not in the Zero3 Remote Host allow-list')
-  return resolved
-}
+// Workspace resolution is imported from the Remote Host Fast Path so explicit
+// overrides and inferred project/session bindings share one allow-list gate.
 async function zero3DispatchAgentTask(inputValue) {
+  const startedAtMs = Date.now()
   const input = zero3AgentTaskInput(inputValue)
   const sessionId = zero3AgentTaskRequiredText(input.sessionId, 'sessionId', 256)
   const idempotencyKey = zero3AgentTaskRequiredText(input.idempotencyKey, 'idempotencyKey', 256)
@@ -188,15 +177,6 @@ async function zero3DispatchAgentTask(inputValue) {
     : zero3AgentTaskEnum(input.preferredExecutor, ZERO3_AGENT_TASK_EXECUTORS, 'preferredExecutor', null)
   if (routingMode !== 'AUTO' && !preferredExecutor) throw new Error(routingMode + ' routing requires preferredExecutor')
   const importance = zero3AgentTaskEnum(input.importance, ZERO3_AGENT_TASK_IMPORTANCE, 'importance', 'normal')
-  const workspace = zero3AgentTaskWorkspace(input.workspace)
-  const constraints = zero3AgentTaskList(input.constraints, 'constraints')
-  const acceptanceCriteria = zero3AgentTaskList(input.acceptanceCriteria, 'acceptanceCriteria')
-  const taskType = zero3AgentTaskEnum(
-    input.taskType,
-    ZERO3_AGENT_TASK_TYPES,
-    'taskType',
-    workspace ? 'IMPLEMENT' : 'RESEARCH'
-  )
   const context = await zero3AgentLifecycleRuntime.contextResolve({ sessionId })
   const taskContext = (context && typeof context === 'object' ? context : {}) as Record<string, any>
   const definition = (taskContext.task && typeof taskContext.task === 'object' ? taskContext.task : {}) as Record<string, any>
@@ -205,6 +185,18 @@ async function zero3DispatchAgentTask(inputValue) {
     ?? (definitionTask && typeof definitionTask.projectId === 'string' ? definitionTask.projectId : null)
     ?? (typeof taskContext.projectId === 'string' ? taskContext.projectId : null)
   if (!projectId || !/^[A-Za-z0-9._:-]+$/.test(projectId)) throw new Error('projectId could not be resolved for this session')
+  const workspaceResolution = resolveZero3AgentWorkspace(input.workspace, {
+    config: loadZero3RemoteHostConfig(),
+    sessionId,
+    lifecycleContext: context,
+    projects: await zero3Projects.list(),
+    workspaceEntries: await zero3WorkspaceEntries.list()
+  })
+  const workspace = workspaceResolution.workspace
+  const constraints = zero3AgentTaskList(input.constraints, 'constraints')
+  const acceptanceCriteria = zero3AgentTaskList(input.acceptanceCriteria, 'acceptanceCriteria')
+  const taskType = zero3AgentTaskEnum(input.taskType, ZERO3_AGENT_TASK_TYPES, 'taskType', workspace ? 'IMPLEMENT' : 'RESEARCH')
+  const dispatchStartedAtMs = Date.now()
   const contextVersion = Number.isSafeInteger(taskContext.contextVersion) && taskContext.contextVersion > 0
     ? taskContext.contextVersion
     : 1
@@ -244,12 +236,19 @@ async function zero3DispatchAgentTask(inputValue) {
     ...(routingMode === 'AUTO' ? {} : { routingMode: routingMode as 'AUTO' | 'PINNED' | 'PREFERRED' }),
     ...(preferredExecutor ? { preferredExecutor: preferredExecutor as 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' } : {})
   })
+  const completedAtMs = Date.now()
+  const telemetry = summarizeZero3AgentFastPathTelemetry(record, { startedAtMs, dispatchStartedAtMs, completedAtMs })
+  await zero3AgentRuntime.recordFastPathTelemetry(taskId, telemetry)
   const decisions = Array.isArray(record.routingDecisions) ? record.routingDecisions : []
   const attempts = Array.isArray(record.attempts) ? record.attempts : []
   const result = record.result && typeof record.result === 'object' ? record.result : null
   return {
     taskId,
     executionId,
+    workspace,
+    workspaceSource: workspaceResolution.source,
+    timingMs: telemetry.timingMs,
+    counts: telemetry.counts,
     state: record.state,
     resolvedTarget: record.resolvedTarget,
     verificationProfile: record.verificationProfile ?? null,

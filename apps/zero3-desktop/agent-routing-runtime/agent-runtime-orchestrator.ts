@@ -4,6 +4,7 @@ import {
   type Zero3CrossAgentBinding,
   type Zero3ExecutionResultV2,
   type Zero3ExecutorFailureClass,
+  type Zero3FastPathTelemetry,
   type Zero3ResolvedAgentTarget,
   type Zero3ReviewDecision,
   type Zero3TaskImportance,
@@ -738,6 +739,10 @@ export class Zero3AgentRuntimeOrchestrator {
     const state: Zero3AgentTaskState = review.state
     await this.deps.taskStore.setState(taskId, state)
     return (await this.deps.taskStore.get(taskId))!
+  }
+
+  recordFastPathTelemetry(taskId: string, telemetry: Zero3FastPathTelemetry): Promise<Zero3AgentTaskRecord> {
+    return this.deps.taskStore.setFastPathTelemetry(taskId, telemetry)
   }
 
   task(taskId: string): Promise<Zero3AgentTaskRecord | null> {

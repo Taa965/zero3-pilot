@@ -74,7 +74,23 @@ export type Zero3ExecutionUsage = {
 export type Zero3ExecutionTiming = {
   queueLatencyMs?: number | null
   executionLatencyMs?: number | null
+  verificationLatencyMs?: number | null
   totalLatencyMs: number
+}
+
+export type Zero3FastPathTelemetry = {
+  timingMs: {
+    bootstrap: number | null
+    routing: number | null
+    queue: number | null
+    executor: number | null
+    verification: number | null
+    total: number
+  }
+  counts: {
+    toolCalls: number | null
+    failovers: number
+  }
 }
 
 export type Zero3TaskSpecV2 = {

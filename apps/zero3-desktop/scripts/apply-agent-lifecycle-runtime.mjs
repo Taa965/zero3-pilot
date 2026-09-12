@@ -269,7 +269,7 @@ export function applyZero3AgentLifecycleRuntime() {
         label: 'Agent Lifecycle runtime import',
         appliedMarker: "from './zero3/worker-runtime/v2/index'",
         from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
-        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\nimport { dispatchZero3CodexTask, verifyZero3Commit } from './zero3/remote-host/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\nimport { dispatchZero3CodexTask, loadZero3RemoteHostConfig, resolveZero3AgentWorkspace, summarizeZero3AgentFastPathTelemetry, verifyZero3Commit } from './zero3/remote-host/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
       },
       {
         label: 'Capability Runtime import',
