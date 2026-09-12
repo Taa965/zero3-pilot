@@ -407,7 +407,7 @@ async fn handle_message(
             return Ok(());
         }
         if let Some(remaining) = approval.lockout_remaining() {
-            let minutes = (remaining.as_secs() + 59) / 60;
+            let minutes = remaining.as_secs().div_ceil(60);
             weixin
                 .send_text(
                     &from,
