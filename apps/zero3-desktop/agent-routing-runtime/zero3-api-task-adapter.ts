@@ -94,25 +94,6 @@ function recommendedActionOf(value: unknown): Zero3ExecutionResultV2['recommende
   return value === 'GPT_REVIEW' || value === 'HUMAN_REVIEW' || value === 'CODEX_IMPLEMENT' || value === 'RETRY' ? value : null
 }
 
-function verificationOf(value: unknown): Zero3ExecutionResultV2['verification'] {
-  if (!Array.isArray(value)) return []
-  const out: Zero3ExecutionResultV2['verification'] = []
-  for (const item of value.slice(0, 200)) {
-    const entry = record(item)
-    const id = text(entry.id, 256)
-    const state = text(entry.state, 32)
-    if (!id || !['PASSED', 'FAILED', 'NOT_RUN', 'BLOCKED'].includes(state)) continue
-    out.push({
-      id,
-      state: state as Zero3ExecutionResultV2['verification'][number]['state'],
-      command: text(entry.command, 2_000) || null,
-      evidence: text(entry.evidence, 4_000) || null,
-      reason: text(entry.reason, 4_000) || null
-    })
-  }
-  return out
-}
-
 function artifactRefsOf(value: unknown): Zero3ArtifactRef[] {
   if (!Array.isArray(value)) return []
   const out: Zero3ArtifactRef[] = []
@@ -289,7 +270,10 @@ export class Zero3Zero3ApiTaskAdapter {
       git: task.baseSha || task.branch
         ? { baseSha: task.baseSha ?? null, branch: task.branch ?? null }
         : null,
-      verification: verificationOf(structured?.verification),
+      // Provider-claimed verification is never authoritative: like the Codex and
+      // Claude adapters, the Zero3 API executor reports none and the verification
+      // collector derives the real evidence from the worktree.
+      verification: [],
       knownIssues,
       blockers,
       recommendedAction: recommendedActionOf(structured?.recommendedAction) ?? (status === 'COMPLETE' || status === 'PARTIAL' ? 'GPT_REVIEW' : 'HUMAN_REVIEW'),
