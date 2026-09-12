@@ -60,7 +60,7 @@ export function TaskList() {
   }
   return <div ref={paneRef} className="flex h-full flex-col">
     <div className="flex items-center justify-between border-b border-(--ui-border) p-3 text-sm">
-      <span>任务 · {tasks.length}</span>
+      <span>任务看板 · {tasks.length}</span>
       <div className="flex gap-3">
         <button type="button" disabled={busy} onClick={() => { setCreatingMode('goal'); setCreating(true) }} className="text-emerald-600 disabled:opacity-50">◎ 自主目标</button>
         <button type="button" disabled={busy} onClick={() => { setCreatingMode('task'); setCreating(true) }} className="text-blue-500 disabled:opacity-50">＋ 新建任务</button>

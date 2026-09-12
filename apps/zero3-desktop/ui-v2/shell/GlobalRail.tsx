@@ -11,7 +11,7 @@ interface GlobalRailProps {
 export function GlobalRail({ activeModule, onModuleChange }: GlobalRailProps) {
   const navItems = [
     { id: 'conversations', icon: 'comment-discussion', label: '工作台' },
-    { id: 'tasks', icon: 'check', label: '任务' },
+    { id: 'tasks', icon: 'check', label: '任务看板' },
     { id: 'groups', icon: 'organization', label: '开发组' },
     { id: 'projects', icon: 'repo', label: '项目' },
     { id: 'skills', icon: 'extensions', label: 'Skills' },

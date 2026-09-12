@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { hermesDesktopDir, repoRoot } from './scripts/config.mjs'
 
@@ -73,7 +74,8 @@ export function applyZero3UiV2() {
   console.log('Zero3 UI v2 Mount Seam applied successfully.')
 }
 
-// If run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// If run directly. `import.meta.url` is always a full file URL, so on Windows the
+// naive `file://${process.argv[1]}` comparison never matches a `C:\...` argv path.
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   applyZero3UiV2()
 }

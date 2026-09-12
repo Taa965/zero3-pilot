@@ -53,7 +53,7 @@ export function ContextPane({
 }: ContextPaneProps) {
   const titles: Record<string, string> = {
     conversations: '工作台',
-    tasks: '任务',
+    tasks: '任务看板',
     groups: '开发组',
     projects: '项目',
     skills: 'Skills',
