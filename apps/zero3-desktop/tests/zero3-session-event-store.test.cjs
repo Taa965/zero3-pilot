@@ -10,9 +10,10 @@ let source = fs.readFileSync(sourcePath, 'utf8')
 source = source.replace(/^import type .*\r?\n/, '')
 source = source.replace(/\bexport\s+(?=(?:type|const|function)\b)/g, '')
 
-function createStore() {
+function createStore(bridge = undefined) {
   const values = new Map()
   const window = {
+    zero3SessionProviders: bridge,
     localStorage: { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) },
     dispatchEvent: () => true, addEventListener: () => {}, removeEventListener: () => {}
   }
@@ -53,4 +54,69 @@ test('provider switch follows pending -> verifying -> switching -> active and ad
   assert.equal(completed.binding.generation, 2)
   assert.equal(completed.pendingHandoff, null)
   assert.throws(() => store.beginProviderSwitch('session-b', { token: 'bad', targetGeneration: 4, targetProfileId: 'profile-c' }), /target generation is stale/)
+})
+
+test('persisted session state restores into a fresh renderer cache before use', async () => {
+  let persisted = null
+  const bridge = {
+    writeZero3SessionState: async request => {
+      persisted = JSON.parse(JSON.stringify({ revision: request.revision, state: request.state }))
+      return persisted
+    },
+    readZero3SessionState: async () => persisted
+  }
+  const first = createStore(bridge)
+  first.appendUser('session-persisted', 'restored goal')
+  first.setBinding('session-persisted', { profileId: 'profile-a', projectId: 'project-a', runtimeThreadId: 'thread-a' })
+  first.ingestCodexEvent('session-persisted', { kind: 'notification', method: 'item/started', params: { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'reason-1', type: 'reasoning' } } })
+  first.ingestCodexEvent('session-persisted', { kind: 'notification', method: 'item/reasoning/summaryTextDelta', params: { threadId: 'thread-a', turnId: 'turn-a', itemId: 'reason-1', delta: 'thinking' } })
+  first.ingestCodexEvent('session-persisted', { kind: 'notification', method: 'item/started', params: { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'cmd-1', type: 'commandExecution', command: 'echo ok' } } })
+  first.ingestCodexEvent('session-persisted', { kind: 'notification', method: 'item/commandExecution/outputDelta', params: { threadId: 'thread-a', turnId: 'turn-a', itemId: 'cmd-1', delta: 'ok' } })
+  first.ingestCodexEvent('session-persisted', { kind: 'notification', method: 'item/started', params: { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'file-1', type: 'fileChange' } } })
+  first.ingestCodexEvent('session-persisted', { kind: 'notification', method: 'item/fileChange/patchUpdated', params: { threadId: 'thread-a', turnId: 'turn-a', itemId: 'file-1', changes: [{ path: 'a.ts' }] } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(persisted.state.schemaVersion, 2)
+  const fresh = createStore(bridge)
+  const restored = await fresh.restorePersisted('session-persisted')
+  assert.equal(restored.events[0].payload.text, 'restored goal')
+  assert.equal(restored.binding.runtimeThreadId, 'thread-a')
+  const restoredTypes = new Set(restored.events.map(event => event.type))
+  assert.equal(restoredTypes.has('reasoning'), true)
+  assert.equal(restoredTypes.has('commandExecution'), true)
+  assert.equal(restoredTypes.has('fileChange'), true)
+  assert.equal(fresh.snapshot('session-persisted').revision, restored.revision)
+})
+
+test('recovery handoff carries persisted logical-session context without changing generation', () => {
+  const store = createStore()
+  store.appendUser('session-recovery', 'continue this work')
+  store.appendAssistant('session-recovery', 'last known result')
+  store.setBinding('session-recovery', { generation: 3, profileId: 'profile-a', projectId: 'project-a', runtimeThreadId: 'dead-thread' })
+  const handoff = store.buildRecoveryHandoff('session-recovery')
+  assert.equal(handoff.protocol, 'zero3.session-recovery-handoff.v1')
+  assert.equal(handoff.generation, 3)
+  assert.equal(handoff.failed_runtime_thread_id, 'dead-thread')
+  assert.equal(handoff.runtime_state.current_goal, 'continue this work')
+  assert.ok(handoff.session_delta.events.length >= 2)
+})
+
+test('legacy messages migrate once while the legacy source remains unchanged for rollback', () => {
+  const store = createStore()
+  const legacy = {
+    id: 'legacy-session', projectId: 'project-a', zero3ProfileId: 'profile-a', model: 'model-a', thinkingEffort: 'high', runtimeId: null,
+    messages: [
+      { id: 'legacy-u', role: 'user', content: 'legacy question', createdAt: '2026-09-11T00:00:00.000Z' },
+      { id: 'legacy-a', role: 'assistant', content: 'legacy answer', createdAt: '2026-09-11T00:00:01.000Z' }
+    ]
+  }
+  const original = JSON.stringify(legacy.messages)
+  const migrated = store.ensureMigrated(legacy)
+  assert.equal(migrated.schemaVersion, 2)
+  assert.equal(migrated.migrationVersion, 1)
+  assert.equal(migrated.events.length, 2)
+  assert.equal(migrated.events[0].eventId, 'legacy-legacy-u')
+  assert.equal(migrated.events[1].payload.text, 'legacy answer')
+  assert.equal(JSON.stringify(legacy.messages), original)
+  const again = store.ensureMigrated(legacy)
+  assert.equal(again.events.length, 2)
 })

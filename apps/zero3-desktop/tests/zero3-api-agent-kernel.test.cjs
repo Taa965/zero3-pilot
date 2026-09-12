@@ -111,3 +111,13 @@ test('a turn failure reports what the CLI said, not what it happened to print fi
   const stderrAt = summary.indexOf('stderr.trim()')
   assert.ok(reportedAt > 0 && stderrAt > reportedAt, 'the streamed failure message must win over stderr')
 })
+
+test('runtime resume failure can rotate inside the same logical session using a recovery handoff', () => {
+  const nativeSurface = fs.readFileSync(path.join(root, 'ui-v2', 'conversations', 'Zero3NativeConversationSurface.tsx'), 'utf8')
+  assert.match(runtime, /const recoveryHandoff = zero3RecoveryHandoff\(request\.recoveryHandoff\)/)
+  assert.match(runtime, /recoveryHandoff && request\.allowRuntimeRecovery === true/)
+  assert.match(runtime, /Zero3 recovery handoff identity is stale/)
+  assert.match(runtime, /developerInstructions: recoveryDeveloperInstructions/)
+  assert.match(nativeSurface, /Zero3SessionEventStore\.buildRecoveryHandoff\(session\.id\)/)
+  assert.match(nativeSurface, /allowRuntimeRecovery: Boolean\(recoveryHandoff\)/)
+})

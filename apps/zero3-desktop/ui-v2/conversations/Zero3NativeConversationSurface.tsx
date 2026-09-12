@@ -80,6 +80,7 @@ async function runZero3Turn(session: LocalSessionRecord, project: Zero3ProjectRe
   if (!session.zero3ProfileId) throw new Error('该 Zero3 会话没有绑定 API Profile')
   const runtime = Zero3SessionEventStore.snapshot(session.id)
   const pendingHandoff = runtime.pendingHandoff
+  const recoveryHandoff = pendingHandoff || !session.runtimeId ? null : Zero3SessionEventStore.buildRecoveryHandoff(session.id)
   const migrationHistory = session.runtimeId ? [] : session.messages.slice(0, -1).map(message => ({ role: message.role, content: message.content }))
   const result = await window.zero3SessionProviders.zero3Turn({
     profileId: session.zero3ProfileId,
@@ -94,6 +95,8 @@ async function runZero3Turn(session: LocalSessionRecord, project: Zero3ProjectRe
     effort: effort(session.thinkingEffort),
     handoff: pendingHandoff,
     allowRuntimeRotation: Boolean(pendingHandoff),
+    recoveryHandoff,
+    allowRuntimeRecovery: Boolean(recoveryHandoff),
     history: migrationHistory
   })
   if (result.threadId && result.threadId !== session.runtimeId) LocalSessionAdapter.setRuntimeId(session.id, result.threadId)
@@ -119,35 +122,48 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
   const [modelOptions, setModelOptions] = useState<string[]>([])
   const [modelDraft, setModelDraft] = useState('')
   const [effortDraft, setEffortDraft] = useState<LocalSessionThinkingEffort | ''>('')
+  const [restoredSessionId, setRestoredSessionId] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!session) { setEvents([]); return }
-    const state = Zero3SessionEventStore.ensureMigrated(session)
-    Zero3SessionEventStore.setBinding(session.id, {
-      profileId: session.zero3ProfileId, model: session.model, thinkingEffort: session.thinkingEffort,
-      runtimeThreadId: session.runtimeId, projectId: session.projectId
+    if (!session) { setEvents([]); setRestoredSessionId(null); return }
+    let cancelled = false
+    setRestoredSessionId(null)
+    const unsubscribe = Zero3SessionEventStore.subscribe(session.id, () => {
+      if (!cancelled) setEvents(Zero3SessionEventStore.events(session.id))
     })
-    setEvents(state.events)
-    setModelDraft(session.model ?? '')
-    setEffortDraft(session.thinkingEffort ?? '')
-    setError(null)
-    setNotice(null)
-    if (session.runtimeId && typeof window.zero3Codex?.thread?.read === 'function') {
-      void window.zero3Codex.thread.read({ threadId: session.runtimeId, includeTurns: true }).then(read => {
-        Zero3SessionEventStore.hydrateFromThread(session.id, read, session.runtimeId)
-      }).catch(() => {})
-    }
-    return Zero3SessionEventStore.subscribe(session.id, () => setEvents(Zero3SessionEventStore.events(session.id)))
+    void (async () => {
+      try { await Zero3SessionEventStore.restorePersisted(session.id) }
+      catch (restoreError) {
+        if (!cancelled) setNotice(`会话持久化恢复失败，已使用本地缓存：${localTurnFailureMessage(restoreError)}`)
+      }
+      if (cancelled) return
+      const state = Zero3SessionEventStore.ensureMigrated(session)
+      Zero3SessionEventStore.setBinding(session.id, {
+        profileId: session.zero3ProfileId, model: session.model, thinkingEffort: session.thinkingEffort,
+        runtimeThreadId: session.runtimeId, projectId: session.projectId
+      })
+      setEvents(state.events)
+      setModelDraft(session.model ?? '')
+      setEffortDraft(session.thinkingEffort ?? '')
+      setError(null)
+      setRestoredSessionId(session.id)
+      if (session.runtimeId && typeof window.zero3Codex?.thread?.read === 'function') {
+        void window.zero3Codex.thread.read({ threadId: session.runtimeId, includeTurns: true }).then(read => {
+          Zero3SessionEventStore.hydrateFromThread(session.id, read, session.runtimeId)
+        }).catch(() => {})
+      }
+    })()
+    return () => { cancelled = true; unsubscribe() }
   }, [session?.id])
   useEffect(() => {
-    if (!session) return
+    if (!session || restoredSessionId !== session.id) return
     setModelDraft(session.model ?? '')
     setEffortDraft(session.thinkingEffort ?? '')
     Zero3SessionEventStore.setBinding(session.id, {
       profileId: session.zero3ProfileId, model: session.model, thinkingEffort: session.thinkingEffort,
       runtimeThreadId: session.runtimeId, projectId: session.projectId
     })
-  }, [session?.updatedAt])
+  }, [session?.updatedAt, restoredSessionId])
 
   useEffect(() => {
     if (!session || typeof window.zero3SessionProviders?.onZero3Event !== 'function') return
@@ -179,7 +195,7 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
     return () => { cancelled = true }
   }, [profiles, session?.zero3ProfileId])
   const currentProfile = useMemo(() => profiles.find(profile => profile.id === session?.zero3ProfileId), [profiles, session?.zero3ProfileId])
-  const canSend = Boolean(session && project && session.zero3ProfileId && input.trim() && !busy && !switching && !['HANDOFF_PENDING','HANDOFF_VERIFYING'].includes(Zero3SessionEventStore.switchState(session.id).phase))
+  const canSend = Boolean(session && restoredSessionId === session.id && project && session.zero3ProfileId && input.trim() && !busy && !switching && !['HANDOFF_PENDING','HANDOFF_VERIFYING'].includes(Zero3SessionEventStore.switchState(session.id).phase))
 
   const switchProfile = async (profileId: string) => {
     if (!session || !project || switching || profileId === session.zero3ProfileId) return

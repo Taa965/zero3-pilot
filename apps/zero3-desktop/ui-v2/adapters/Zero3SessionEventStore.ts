@@ -63,6 +63,18 @@ export type Zero3SessionTransferBatch = {
   events: Array<Record<string, unknown>>
 }
 
+export type Zero3RecoveryHandoff = {
+  protocol: 'zero3.session-recovery-handoff.v1'
+  logical_session_id: string
+  project_id: string | null
+  generation: number
+  profile_id: string | null
+  failed_runtime_thread_id: string | null
+  session_delta: { start_seq: number | null; end_seq: number | null; events: Array<Record<string, unknown>> }
+  runtime_state: Record<string, unknown>
+  recovery: { generated_at: string }
+}
+
 export type Zero3ProviderHandoff = {
   protocol: 'zero3.session-provider-handoff.v1'
   logical_session_id: string
@@ -77,6 +89,9 @@ export type Zero3ProviderHandoff = {
 }
 
 type StoredSession = {
+  schemaVersion: 2
+  migrationVersion: 1
+  revision: number
   version: 1
   nextSeq: number
   events: Zero3SessionEvent[]
@@ -110,7 +125,7 @@ function emptySwitchState(generation = 1): Zero3ProviderSwitchState {
   return { phase: 'ACTIVE', sourceGeneration: generation, targetGeneration: null, token: null, targetProfileId: null, error: null, updatedAt: now() }
 }
 function emptySession(): StoredSession {
-  return { version: 1, nextSeq: 1, events: [], binding: emptyBinding(), coverage: { coveredSessionSeq: 0, coveredRanges: [] }, switchState: emptySwitchState(), pendingHandoff: null }
+  return { schemaVersion: 2, migrationVersion: 1, revision: 0, version: 1, nextSeq: 1, events: [], binding: emptyBinding(), coverage: { coveredSessionSeq: 0, coveredRanges: [] }, switchState: emptySwitchState(), pendingHandoff: null }
 }
 function normalizeRanges(value: unknown): Array<[number, number]> {
   if (!Array.isArray(value)) return []
@@ -158,6 +173,9 @@ function normalizeSession(value: unknown): StoredSession {
   const switchPhase = ['ACTIVE','HANDOFF_PENDING','HANDOFF_VERIFYING','SWITCHING','FAILED'].includes(String(switchRaw.phase)) ? switchRaw.phase as Zero3ProviderSwitchPhase : 'ACTIVE'
   const maxSeq = events.reduce((max, event) => Math.max(max, event.sessionSeq), 0)
   return {
+    schemaVersion: 2,
+    migrationVersion: 1,
+    revision: Number.isSafeInteger(raw.revision) && Number(raw.revision) >= 0 ? Number(raw.revision) : 0,
     version: 1,
     nextSeq: Number.isSafeInteger(raw.nextSeq) && Number(raw.nextSeq) > maxSeq ? Number(raw.nextSeq) : maxSeq + 1,
     events,
@@ -196,12 +214,38 @@ function writeRoot(root: StoreRoot) {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(root))
   window.dispatchEvent(new CustomEvent(CHANGE_EVENT))
 }
+function persistSession(logicalSessionId: string, session: StoredSession) {
+  const bridge = window.zero3SessionProviders?.writeZero3SessionState
+  if (typeof bridge !== 'function') return
+  void bridge({ logicalSessionId, revision: session.revision, state: session }).catch(() => {})
+}
 function mutate(logicalSessionId: string, update: (session: StoredSession) => StoredSession): StoredSession {
   const root = readRoot()
-  const next = update(root.sessions[logicalSessionId] ?? emptySession())
-  root.sessions[logicalSessionId] = { ...next, events: next.events.slice(-MAX_EVENTS) }
+  const previous = root.sessions[logicalSessionId] ?? emptySession()
+  const updated = update(previous)
+  const next = { ...updated, schemaVersion: 2 as const, migrationVersion: 1 as const, revision: previous.revision + 1, events: updated.events.slice(-MAX_EVENTS) }
+  root.sessions[logicalSessionId] = next
   writeRoot(root)
-  return root.sessions[logicalSessionId]
+  persistSession(logicalSessionId, next)
+  return next
+}
+async function restorePersistedSession(logicalSessionId: string): Promise<StoredSession> {
+  const local = readRoot().sessions[logicalSessionId] ?? emptySession()
+  const bridge = window.zero3SessionProviders?.readZero3SessionState
+  if (typeof bridge !== 'function') return local
+  const envelope = await bridge({ logicalSessionId })
+  const persistedRaw = record(record(envelope).state)
+  if (persistedRaw.schemaVersion === 2 && persistedRaw.migrationVersion === 1) {
+    const persisted = normalizeSession(persistedRaw)
+    if (persisted.revision >= local.revision) {
+      const root = readRoot()
+      root.sessions[logicalSessionId] = persisted
+      writeRoot(root)
+      return persisted
+    }
+  }
+  if (local.revision > 0 || local.events.length > 0) persistSession(logicalSessionId, local)
+  return local
 }
 function append(logicalSessionId: string, type: Zero3SessionEventType, payload: Record<string, unknown>, meta: Partial<Zero3SessionEvent> = {}): Zero3SessionEvent {
   let appended!: Zero3SessionEvent
@@ -263,6 +307,18 @@ function safeEventForHandoff(event: Zero3SessionEvent): Record<string, unknown> 
   if (typeof payload.text === 'string') payload.text = payload.text.slice(-12_000)
   return { session_seq: event.sessionSeq, type: event.type, created_at: event.createdAt, item_id: event.itemId ?? null, turn_id: event.turnId ?? null, payload }
 }
+function recoveryTail(events: Zero3SessionEvent[], maxBytes = 560_000): Array<Record<string, unknown>> {
+  const selected: Array<Record<string, unknown>> = []
+  let bytes = 0
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const safe = safeEventForHandoff(events[index])
+    const size = new TextEncoder().encode(JSON.stringify(safe)).byteLength
+    if (selected.length && bytes + size > maxBytes) break
+    selected.push(safe)
+    bytes += size
+  }
+  return selected.reverse()
+}
 function covered(seq: number, coverage: Zero3SessionCoverage) {
   if (seq <= coverage.coveredSessionSeq) return true
   return coverage.coveredRanges.some(([start, end]) => seq >= start && seq <= end)
@@ -289,6 +345,10 @@ function transferBatches(events: Zero3SessionEvent[], maxEvents = 48, maxBytes =
 }
 function switchError(message: string) { return new Error('Zero3 Provider Switch: ' + message) }
 export const Zero3SessionEventStore = {
+  async restorePersisted(logicalSessionId: string) {
+    return restorePersistedSession(logicalSessionId)
+  },
+
   snapshot(logicalSessionId: string): StoredSession {
     return readRoot().sessions[logicalSessionId] ?? emptySession()
   },
@@ -378,6 +438,26 @@ export const Zero3SessionEventStore = {
   uncovered(logicalSessionId: string) {
     const session = this.snapshot(logicalSessionId)
     return session.events.filter(event => !covered(event.sessionSeq, session.coverage))
+  },
+
+  buildRecoveryHandoff(logicalSessionId: string): Zero3RecoveryHandoff {
+    const session = this.snapshot(logicalSessionId)
+    const events = recoveryTail(session.events)
+    const first = events[0]
+    const last = events.at(-1)
+    const lastUser = [...session.events].reverse().find(event => event.type === 'userMessage')
+    const lastAssistant = [...session.events].reverse().find(event => event.type === 'agentMessage')
+    return {
+      protocol: 'zero3.session-recovery-handoff.v1',
+      logical_session_id: logicalSessionId,
+      project_id: session.binding.projectId,
+      generation: session.binding.generation,
+      profile_id: session.binding.profileId,
+      failed_runtime_thread_id: session.binding.runtimeThreadId,
+      session_delta: { start_seq: typeof first?.session_seq === 'number' ? first.session_seq : null, end_seq: typeof last?.session_seq === 'number' ? last.session_seq : null, events },
+      runtime_state: { current_goal: lastUser ? text(lastUser.payload.text, 12_000) : '', latest_result: lastAssistant ? text(lastAssistant.payload.text, 12_000) : '' },
+      recovery: { generated_at: now() }
+    }
   },
 
   buildProviderHandoff(logicalSessionId: string, input: {
