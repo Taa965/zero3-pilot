@@ -67,3 +67,29 @@ export function readTaskSnapshots(value: unknown): ExecutionTaskSnapshot[] {
   }
   return [...value].sort((a, b) => b.runtime.task.updatedAt.localeCompare(a.runtime.task.updatedAt))
 }
+
+
+export type CreateAutonomousGoalInput = {
+  title: string
+  goal: string
+  projectId: string
+  workspace?: string | null
+  requiredSkills?: string[]
+  optionalSkills?: string[]
+  requiredCapabilities?: string[]
+  importance?: 'low' | 'normal' | 'high' | 'critical'
+}
+
+export interface AutonomousBridge {
+  status(): Promise<unknown>
+  createGoal(input: CreateAutonomousGoalInput): Promise<unknown>
+  dashboard(projectId: string, rootTaskId?: string | null): Promise<unknown>
+  reconcileProject(projectId: string): Promise<unknown>
+  ingestGuard(input: Record<string, unknown>): Promise<unknown>
+}
+
+export function autonomousBridge(): AutonomousBridge {
+  const bridge = (window as unknown as { zero3Autonomous?: AutonomousBridge }).zero3Autonomous
+  if (!bridge) throw new Error('自主任务服务未连接，请更新或重启 Zero3 桌面服务。')
+  return bridge
+}

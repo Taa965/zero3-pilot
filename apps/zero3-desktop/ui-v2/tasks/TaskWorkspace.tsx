@@ -2,13 +2,13 @@ import { useEffect, useState, type FormEvent } from 'react'
 import type { ExecutionTaskSnapshot } from '../../execution-runtime/contracts.ts'
 import { allowedStepTransitions } from '../../execution-runtime/state-machine'
 import type { Zero3ProjectRecord } from '../adapters/ProjectAdapter'
-import { readTaskSnapshots, readTaskWorkflows, taskBridge, type TaskWorkflowSummary } from './TaskAdapter'
+import { autonomousBridge, readTaskSnapshots, readTaskWorkflows, taskBridge, type TaskWorkflowSummary } from './TaskAdapter'
 import { useTasks } from './TaskContext'
 import { percent, requiredOutputGaps, statusLabel, taskArtifacts } from './task-model'
 
 const inputClass = 'w-full rounded border border-(--ui-border) bg-background p-2 text-sm'
 const buttonClass = 'rounded border border-(--ui-border) px-3 py-1.5 text-sm hover:bg-(--ui-control-hover-background) disabled:cursor-not-allowed disabled:opacity-40'
-const tabs = [['overview', '总览'], ['execution', '执行过程'], ['changes', '代码变更'], ['artifacts', '产物'], ['verification', '验证'], ['review', '审核'], ['timeline', '时间轴']]
+const tabs = [['overview', '总览'], ['autonomy', '自主编排'], ['execution', '执行过程'], ['changes', '代码变更'], ['artifacts', '产物'], ['verification', '验证'], ['review', '审核'], ['timeline', '时间轴']]
 const gateLabels: Record<string, string> = { human_review: '人工审核', required_outputs: '必需产物齐全' }
 const eventLabels: Record<string, string> = {
   'task.created': '创建任务', 'task.state_changed': '任务状态更新', 'step.added': '添加步骤',
@@ -36,6 +36,39 @@ function EventList({ events, empty }: { events: ExecutionTaskSnapshot['events'];
     </div>}
   </article>)}</div>
 }
+function CreateAutonomousGoal({ project }: { project: Zero3ProjectRecord | null }) {
+  const { busy, mutate, select, setCreating } = useTasks()
+  const [title, setTitle] = useState('')
+  const [goal, setGoal] = useState('')
+  const [capabilities, setCapabilities] = useState('')
+  const [importance, setImportance] = useState<'low' | 'normal' | 'high' | 'critical'>('normal')
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!project) return
+    let id = ''
+    const success = await mutate(async () => {
+      const created = await autonomousBridge().createGoal({
+        title, goal, projectId: project.id, workspace: project.rootPath ?? null, importance,
+        requiredCapabilities: capabilities.split(',').map(item => item.trim()).filter(Boolean)
+      })
+      id = readTaskSnapshots([created])[0].definition.task.taskId
+    })
+    if (success) { select(id); setCreating(false) }
+  }
+  return <form onSubmit={event => void submit(event)} className="mx-auto max-w-2xl space-y-5 p-6">
+    <div className="space-y-1"><h2 className="text-lg font-medium">新建自主目标</h2><p className="text-xs text-(--ui-text-secondary)">只定义最终目标。Zero3 会自动路由 Agent、派发会话、处理执行中发现的问题并持续恢复主线，直到 Completion Gate 完成。</p></div>
+    {!project && <p className="rounded border border-amber-500/30 p-3 text-sm text-amber-600">自主目标必须归属一个项目，请先选择项目。</p>}
+    <label className="block space-y-1 text-sm"><span>目标名称</span><input required value={title} onChange={event => setTitle(event.target.value)} className={inputClass} /></label>
+    <label className="block space-y-1 text-sm"><span>最终目标</span><textarea required rows={8} value={goal} onChange={event => setGoal(event.target.value)} placeholder="描述最终要达成什么；不需要手动拆步骤。" className={inputClass} /></label>
+    <label className="block space-y-1 text-sm"><span>所需能力（可选，逗号分隔）</span><input value={capabilities} onChange={event => setCapabilities(event.target.value)} placeholder="例如 software.development, git" className={inputClass} /></label>
+    <label className="block space-y-1 text-sm"><span>重要级别</span><select value={importance} onChange={event => setImportance(event.target.value as typeof importance)} className={inputClass}><option value="low">低</option><option value="normal">普通</option><option value="high">高</option><option value="critical">关键</option></select></label>
+    <div className="flex gap-2"><button disabled={busy || !project} className={buttonClass}>{busy ? '正在启动…' : '启动自主目标'}</button><button type="button" disabled={busy} onClick={() => setCreating(false)} className={buttonClass}>取消</button></div>
+  </form>
+}
+
+function obj(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {} }
+function rows(value: unknown): Record<string, unknown>[] { return Array.isArray(value) ? value.map(obj) : [] }
+
 function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
   const { busy, mutate, select, setCreating } = useTasks()
   const [title, setTitle] = useState('')
@@ -91,6 +124,45 @@ function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
     <div className="flex gap-2"><button disabled={busy || !workflowId} className={buttonClass}>{busy ? '正在创建…' : '创建任务'}</button><button type="button" disabled={busy} onClick={() => setCreating(false)} className={buttonClass}>取消</button></div>
   </form>
 }
+function AutonomousPanel({ snapshot }: { snapshot: ExecutionTaskSnapshot }) {
+  const { busy, mutate } = useTasks()
+  const [dashboard, setDashboard] = useState<Record<string, unknown> | null>(null)
+  const [dashboardError, setDashboardError] = useState<string | null>(null)
+  const projectId = snapshot.definition.task.projectId
+  const lineage = obj(snapshot.definition.task.metadata?.autonomousLineage)
+  const rootTaskId = typeof lineage.rootTaskId === 'string' ? lineage.rootTaskId : snapshot.definition.task.metadata?.autonomousRootGoal === true ? snapshot.definition.task.taskId : null
+  const load = async () => {
+    if (!projectId) return
+    try {
+      setDashboard(obj(await autonomousBridge().dashboard(projectId, rootTaskId)))
+      setDashboardError(null)
+    } catch (error) { setDashboardError(error instanceof Error ? error.message : String(error)) }
+  }
+  useEffect(() => { void load() }, [projectId, rootTaskId, snapshot.runtime.task.updatedAt])
+  if (!projectId) return <p className="text-sm text-(--ui-text-secondary)">此任务没有项目归属，无法启用自主编排。</p>
+  const review = obj(dashboard?.dailyReview)
+  const status = obj(dashboard?.status)
+  const plugin = obj(status.pluginBaseline)
+  const plan = obj(dashboard?.plan)
+  const graph = obj(dashboard?.executionGraph)
+  const attention = rows(dashboard?.humanAttention)
+  const actions = rows(plan.actions)
+  const nodes = rows(graph.nodes)
+  const edges = rows(graph.edges)
+  const reconcile = () => { void mutate(() => autonomousBridge().reconcileProject(projectId)).then(() => void load()) }
+  return <div className="space-y-5">
+    <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-medium">自主编排</h3><p className="text-xs text-(--ui-text-secondary)">Zero3 按 Root Goal 持续协调任务、Agent、会话和计划外问题。</p></div><button type="button" disabled={busy} onClick={reconcile} className={buttonClass}>{busy ? '协调中…' : '立即协调'}</button></div>
+    {dashboardError && <p className="rounded border border-red-500/30 p-3 text-sm text-red-500">{dashboardError}</p>}
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {[['Root任务', review.userRootTasks], ['自动任务', review.autonomousTasks], ['发现问题', review.discoveredCandidates], ['需要介入', review.humanAttention]].map(([label, value]) => <div key={String(label)} className="rounded border border-(--ui-border) p-3"><div className="text-xs text-(--ui-text-secondary)">{String(label)}</div><div className="mt-1 text-xl font-medium">{Number(value ?? 0)}</div></div>)}
+    </div>
+    <div className="rounded border border-(--ui-border) p-3 text-sm"><div className="font-medium">能力基线</div><div className="mt-1 text-xs text-(--ui-text-secondary)">{plugin.ready === true ? '已就绪：统一 Agent Dispatch / Session / Memory 能力可用于自主执行。' : `未完全就绪：${Array.isArray(plugin.missing) ? plugin.missing.join('、') : '状态未知'}`}</div></div>
+    <section className="space-y-2"><h4 className="text-sm font-medium">Human Attention · {attention.length}</h4>{attention.length === 0 ? <p className="text-xs text-(--ui-text-secondary)">当前没有必须由你处理的问题。</p> : attention.map(item => <div key={String(item.sourceKey)} className="rounded border border-amber-500/30 p-3 text-sm"><div className="font-medium text-amber-600">{String(item.reason ?? '需要人工处理')}</div><div className="mt-1 text-xs text-(--ui-text-secondary)">{String(item.taskId ?? item.sourceKey ?? '')}</div></div>)}</section>
+    <section className="space-y-2"><h4 className="text-sm font-medium">下一步计划 · {actions.length}</h4>{actions.length === 0 ? <p className="text-xs text-(--ui-text-secondary)">当前没有新的计划动作。</p> : actions.map(action => <div key={String(action.actionId)} className="rounded border border-(--ui-border) p-3 text-sm"><div className="flex justify-between gap-2"><span className="font-medium">{String(action.title ?? '')}</span><span className="text-xs text-blue-500">{String(action.type ?? '')}</span></div><p className="mt-1 text-xs text-(--ui-text-secondary)">{String(action.reason ?? '')}</p></div>)}</section>
+    <section className="space-y-2"><h4 className="text-sm font-medium">Execution Graph · {nodes.length} 节点 / {edges.length} 关系</h4><div className="max-h-72 space-y-1 overflow-y-auto rounded border border-(--ui-border) p-3 text-xs">{nodes.map(node => <div key={String(node.id)} className="flex justify-between gap-2"><span className="truncate">{String(node.kind)} · {String(node.label)}</span><span className="shrink-0 text-(--ui-text-tertiary)">{String(node.status ?? '')}</span></div>)}</div></section>
+  </div>
+}
+
 function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnapshot; stepId: string; review: boolean }) {
   const { busy, mutate } = useTasks()
   const step = snapshot.definition.steps.find(item => item.stepId === stepId)!
@@ -159,11 +231,11 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
   </article>
 }
 export function TaskWorkspace({ project = null }: { project?: Zero3ProjectRecord | null }) {
-  const { tasks, selectedId, creating, setCreating, loading, error } = useTasks()
+  const { tasks, selectedId, creating, setCreating, creatingMode, setCreatingMode, loading, error } = useTasks()
   const [activeTab, setActiveTab] = useState('overview')
   const snapshot = tasks.find(task => task.definition.task.taskId === selectedId)
-  if (creating) return <div className="h-full overflow-y-auto"><CreateTask project={project} /></div>
-  if (!snapshot) return <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm text-(--ui-text-secondary)"><p>{loading ? '正在加载任务…' : error ? '任务服务暂不可用，请刷新重试。' : '选择一个任务查看详情，或创建新任务。'}</p><button type="button" onClick={() => setCreating(true)} className={buttonClass}>新建任务</button></div>
+  if (creating) return <div className="h-full overflow-y-auto">{creatingMode === 'goal' ? <CreateAutonomousGoal project={project} /> : <CreateTask project={project} />}</div>
+  if (!snapshot) return <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm text-(--ui-text-secondary)"><p>{loading ? '正在加载任务…' : error ? '任务服务暂不可用，请刷新重试。' : '选择一个任务查看详情，或创建新任务。'}</p><div className="flex gap-2"><button type="button" onClick={() => { setCreatingMode('goal'); setCreating(true) }} className={buttonClass}>自主目标</button><button type="button" onClick={() => { setCreatingMode('task'); setCreating(true) }} className={buttonClass}>新建任务</button></div></div>
   const task = snapshot.definition.task
   const artifacts = taskArtifacts(snapshot)
   const changes = artifacts.filter(event => /diff|patch|code.?change/i.test(String(event.payload?.kind ?? '')) || typeof event.payload?.diff === 'string' || Array.isArray(event.payload?.changedFiles))
@@ -172,6 +244,8 @@ export function TaskWorkspace({ project = null }: { project?: Zero3ProjectRecord
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <h2 className="text-lg font-medium">{task.title}</h2>
+          {task.metadata?.autonomousRootGoal === true && <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-600">自主目标</span>}
+          {task.metadata?.autonomous === true && task.metadata?.autonomousRootGoal !== true && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[11px] text-blue-500">AUTO</span>}
           {snapshot.archived && <span className="rounded bg-(--ui-control-active-background) px-1.5 py-0.5 text-[11px] text-(--ui-text-secondary)">已归档</span>}
         </div>
         <span className="text-sm text-blue-500">{statusLabel(snapshot.runtime.task.status)} · {percent(snapshot.runtime.task.progress)}</span>
@@ -186,6 +260,7 @@ export function TaskWorkspace({ project = null }: { project?: Zero3ProjectRecord
         {[...snapshot.runtime.task.blockers, ...snapshot.runtime.steps.flatMap(step => step.blocker ? [step.blocker] : [])].map((blocker, index) => <p key={index} className="text-sm text-amber-500">{blocker}</p>)}
         <h3 className="font-medium">步骤状态</h3>{snapshot.definition.steps.map(step => { const state = snapshot.runtime.steps.find(item => item.stepId === step.stepId)!; return <div key={step.stepId} className="space-y-1 border-b border-(--ui-border) py-2 text-sm"><div className="flex justify-between gap-3"><span>{step.title}</span><span>{statusLabel(state.status)}</span></div>{!!step.requiredSkills?.length && <div className="text-xs text-blue-500">Required Skills：{step.requiredSkills.join('、')}</div>}{state.skillPreflight?.executor && <div className="text-xs text-(--ui-text-tertiary)">推荐 Agent：{state.skillPreflight.executor} · {state.skillPreflight.adapterMode}</div>}</div>})}
       </>}
+      {activeTab === 'autonomy' && <AutonomousPanel snapshot={snapshot} />}
       {(activeTab === 'execution' || activeTab === 'review') && <>
         {snapshot.definition.steps.length === 0 && <p className="text-sm text-(--ui-text-secondary)">尚未添加步骤。</p>}
         {snapshot.definition.steps.map(step => <StepControl key={step.stepId} snapshot={snapshot} stepId={step.stepId} review={activeTab === 'review'} />)}

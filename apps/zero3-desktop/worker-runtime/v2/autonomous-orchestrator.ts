@@ -146,36 +146,6 @@ export function evaluateAttentionBudget(
   const failed = checks.find(([condition]) => condition)
   return failed ? { allowed: false, reason: failed[1] } : { allowed: true, reason: null }
 }
-export type AutonomousCapabilityProvider = {
-  providerId: string
-  executor: Exclude<ExecutionExecutorTarget, 'AUTO'>
-  capabilities: readonly string[]
-  available: boolean
-  currentLoad?: number
-  riskLevel?: 'low' | 'standard' | 'high'
-}
-
-export type AutonomousCapabilityRoute = {
-  state: 'READY' | 'WAITING_HUMAN'
-  requiredCapabilities: readonly string[]
-  provider: AutonomousCapabilityProvider | null
-  reason: string
-}
-
-export function routeAutonomousCapabilities(
-  requiredCapabilities: readonly string[],
-  providers: readonly AutonomousCapabilityProvider[]
-): AutonomousCapabilityRoute {
-  const required = [...new Set(requiredCapabilities.filter(Boolean))]
-  const candidates = providers.filter(provider =>
-    provider.available && required.every(capability => provider.capabilities.includes(capability))
-  ).sort((a, b) => (a.currentLoad ?? 0) - (b.currentLoad ?? 0) || a.providerId.localeCompare(b.providerId))
-  if (!candidates.length) {
-    return { state: 'WAITING_HUMAN', requiredCapabilities: required, provider: null, reason: 'No safe provider advertises every required capability.' }
-  }
-  return { state: 'READY', requiredCapabilities: required, provider: candidates[0], reason: `Selected ${candidates[0].providerId} by capability match and load.` }
-}
-
 export type AutonomousGuardSource = 'gpt_web' | 'execution' | 'worker' | 'git' | 'compute' | 'tool_mcp' | 'artifact_completion'
 export type AutonomousGuardEvent = {
   source: AutonomousGuardSource
@@ -376,3 +346,111 @@ export const gitGuardEvent = (input: TypedGuardInput): AutonomousGuardEvent => t
 export const computeGuardEvent = (input: TypedGuardInput): AutonomousGuardEvent => typedGuard('compute', input)
 export const toolMcpGuardEvent = (input: TypedGuardInput): AutonomousGuardEvent => typedGuard('tool_mcp', input)
 export const artifactCompletionGuardEvent = (input: TypedGuardInput): AutonomousGuardEvent => typedGuard('artifact_completion', input)
+
+export type AutonomousAgentDispatchRequest = {
+  taskSpec: Record<string, unknown>
+  context: Record<string, unknown>
+}
+
+function agentTarget(executor: ExecutionExecutorTarget): 'AUTO' | 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' {
+  if (executor === 'CODEX') return 'CODEX'
+  if (executor === 'CLAUDE') return 'CLAUDE'
+  if (executor === 'GEMINI_WEB' || executor === 'ANTIGRAVITY') return 'GEMINI'
+  if (executor === 'ZERO3') return 'ZERO3_API'
+  return 'AUTO'
+}
+
+function autonomousImportance(snapshot: ExecutionTaskSnapshot): 'low' | 'normal' | 'high' | 'critical' {
+  const lineage = snapshot.definition.task.metadata?.autonomousLineage as Record<string, unknown> | undefined
+  const source = snapshot.definition.task.metadata ?? {}
+  const raw = source.importance ?? lineage?.importance
+  if (raw === 'low' || raw === 'high' || raw === 'critical') return raw
+  return 'normal'
+}
+export function buildAutonomousAgentDispatchRequest(
+  snapshot: ExecutionTaskSnapshot,
+  stepId: string,
+  attempt: number,
+  createdAt: string
+): AutonomousAgentDispatchRequest {
+  const task = snapshot.definition.task
+  const step = snapshot.definition.steps.find(item => item.stepId === stepId)
+  if (!step) throw new Error(`autonomous dispatch step not found: ${stepId}`)
+  if (!task.projectId) throw new Error('autonomous agent dispatch requires a project-scoped task')
+  const runtime = snapshot.runtime.steps.find(item => item.stepId === stepId)
+  const effectiveExecutor = step.executor === 'AUTO' && runtime?.skillPreflight?.executor ? runtime.skillPreflight.executor : step.executor
+  const target = agentTarget(effectiveExecutor)
+  const importance = autonomousImportance(snapshot)
+  const requiredCapabilities = strings(step.metadata?.requiredCapabilities ?? step.metadata?.required_capabilities)
+  const constraints = strings(step.metadata?.constraints)
+  const taskSpec = {
+    protocol: 'zero3.pilot.task-spec.v2',
+    taskId: `${task.taskId}:${stepId}:agent`,
+    executionId: `${task.taskId}:${stepId}:attempt-${Math.max(1, attempt)}`,
+    projectId: task.projectId,
+    target,
+    type: task.workspace ? 'IMPLEMENT' : 'RESEARCH',
+    title: step.title,
+    goal: step.objective,
+    contextVersion: Math.max(1, snapshot.runtime.task.lastEventSequence),
+    importance,
+    ...(task.workspace ? { worktreePath: task.workspace } : {}),
+    workflowId: task.workflowId,
+    skillSelectors: [...new Set([...(step.requiredSkills ?? []), ...(step.optionalSkills ?? [])])],
+    requirements: requiredCapabilities,
+    constraints,
+    requiredContracts: [],
+    inputArtifacts: [],
+    expectedOutputs: step.expectedOutputs.map(output => ({ ...output })),
+    verification: [],
+    completionGate: [...step.completionGate],
+    reviewPolicy: { required: false, reviewer: 'GPT_WEB' },
+    createdBySessionId: `autonomous:${task.taskId}`,
+    createdAt
+  }
+  const context = {
+    targetLogicalSessionId: `autonomous:${task.taskId}:${stepId}`,
+    reviewSessionId: `autonomous:${task.taskId}`,
+    importance,
+    ...(target === 'AUTO' ? { routingMode: 'AUTO' } : { routingMode: 'PINNED', preferredExecutor: target })
+  }
+  return { taskSpec, context }
+}
+
+export type AutonomousPlannerContext = {
+  projectId: string
+  rootTaskId: string | null
+  tasks: readonly ExecutionTaskSnapshot[]
+  intakes: readonly AutonomousTaskIntakeRecord[]
+  capabilities: readonly string[]
+  generatedAt: string
+}
+function plannerPriority(intake: AutonomousTaskIntakeRecord): number {
+  const disposition = intake.disposition ?? 'OBSERVE'
+  const dispositionWeight: Record<AutonomousDisposition, number> = { INTERRUPT: 50, PARALLEL: 40, DEFER: 20, OBSERVE: 10, IGNORE: 0 }
+  const severityWeight: Record<AutonomousSeverity, number> = { blocking: 20, high: 12, normal: 5, low: 1 }
+  const mainlineWeight: Record<AutonomousMainlineImpact, number> = { interrupt: 15, parallel: 8, defer: 3, none: 0 }
+  return dispositionWeight[disposition] + severityWeight[intake.severity ?? 'normal'] + mainlineWeight[intake.mainlineImpact ?? 'none']
+}
+
+export function createAutonomousPlanProposal(context: AutonomousPlannerContext): AutonomousPlanProposal {
+  const proposalId = `plan-${context.projectId}-${context.generatedAt.replace(/[^0-9]/g, '').slice(0, 14)}`
+  const open = context.intakes
+    .filter(intake => intake.projectId === context.projectId && !intake.resolvedAt)
+    .sort((a, b) => plannerPriority(b) - plannerPriority(a) || a.firstSeenAt.localeCompare(b.firstSeenAt))
+  const actions = open.map((intake, index) => {
+    const requiredCapabilities = strings(intake.detail.requiredCapabilities ?? intake.detail.required_capabilities)
+    const missing = requiredCapabilities.filter(capability => !context.capabilities.includes(capability))
+    const escalated = Boolean(intake.humanAttentionReason) || missing.length > 0
+    return {
+      actionId: `${proposalId}-a${index + 1}`,
+      type: escalated ? 'ESCALATE' : proposalActionType(intake.disposition ?? 'OBSERVE'),
+      sourceKey: intake.sourceKey,
+      ...(intake.taskId ? { taskId: intake.taskId } : {}),
+      title: String(intake.detail.title ?? intake.detail.message ?? intake.entityType).slice(0, 160),
+      requiredCapabilities,
+      reason: intake.humanAttentionReason ?? (missing.length ? `Missing capabilities: ${missing.join(', ')}` : intake.decisionReason ?? 'No governance reason recorded.')
+    } satisfies AutonomousPlanAction
+  })
+  return { contract: ZERO3_PLAN_PROPOSAL, proposalId, projectId: context.projectId, rootTaskId: context.rootTaskId, createdAt: context.generatedAt, actions, materialized: false }
+}

@@ -8,9 +8,11 @@ import {
   evaluateAttentionBudget,
   evaluatePluginCapabilityBaseline,
   guardEventToCandidate,
-  routeAutonomousCapabilities,
+  projectHumanAttention,
+  projectExecutionGraph,
+  projectDailyReview,
+  createAutonomousPlanProposal,
   type AutonomousAttentionBudget,
-  type AutonomousCapabilityProvider,
   type AutonomousGuardEvent
 } from './autonomous-orchestrator.ts'
 
@@ -49,6 +51,11 @@ export type AutonomousTaskExecutionPort = {
   }>
   transitionStep(taskId: string, stepId: string, status: string, reason?: string): Promise<ExecutionTaskSnapshot>
   transitionTask?(taskId: string, status: string, reason?: string): Promise<ExecutionTaskSnapshot>
+  createAssignment?(taskId: string, stepId: string, executor: Exclude<ExecutionExecutorTarget, 'AUTO'>, executorId?: string | null): Promise<unknown>
+  bindSession?(assignmentId: string, input: Record<string, unknown>): Promise<unknown>
+  recordProgress?(taskId: string, stepId: string, progress: number, activity?: string | null): Promise<ExecutionTaskSnapshot>
+  requestCompletion?(taskId: string, stepId: string): Promise<ExecutionTaskSnapshot>
+  gatePassed?(taskId: string, stepId: string, evidence?: Record<string, unknown>): Promise<ExecutionTaskSnapshot>
 }
 
 export type AutonomousTaskLifecyclePort = {
@@ -59,6 +66,18 @@ export type AutonomousTaskLifecyclePort = {
 export type AutonomousTaskGptPort = {
   create(projectId?: string | null): Promise<{ id: string; conversationUrl?: string | null }>
   sendWakeup(entryId: string, message: string): Promise<{ sent: true }>
+  executionStatus?(entryId: string): { executing: boolean; health: string | null; lastProgressAt: number | null; idleForMs: number } | Promise<{ executing: boolean; health: string | null; lastProgressAt: number | null; idleForMs: number }>
+}
+
+export type AutonomousGoalInput = {
+  title: string
+  goal: string
+  projectId: string
+  workspace?: string | null
+  requiredSkills?: readonly string[]
+  optionalSkills?: readonly string[]
+  requiredCapabilities?: readonly string[]
+  importance?: 'low' | 'normal' | 'high' | 'critical'
 }
 
 export type AutonomousTaskLoopOptions = {
@@ -72,8 +91,7 @@ export type AutonomousTaskLoopOptions = {
 }
 
 export type AutonomousAgentDispatchPort = {
-  listProviders(): Promise<AutonomousCapabilityProvider[]>
-  dispatch(input: { task: ExecutionTaskSnapshot; stepId: string; provider: AutonomousCapabilityProvider }): Promise<{ dispatched: boolean; reason?: string | null }>
+  dispatch(input: { task: ExecutionTaskSnapshot; stepId: string; attempt: number }): Promise<{ dispatched: boolean; reason?: string | null; resolvedExecutor?: string | null; state?: string | null; sessionId?: string | null }>
 }
 
 type Candidate = {
@@ -268,6 +286,7 @@ export class Zero3AutonomousTaskLoop {
       lifecycle: AutonomousTaskLifecyclePort
       gpt: AutonomousTaskGptPort
       agentDispatch?: AutonomousAgentDispatchPort
+      guardSources?: { list(projectId: string, taskIds: readonly string[]): Promise<AutonomousGuardEvent[]> }
     },
     readonly options: AutonomousTaskLoopOptions = {}
   ) {
@@ -300,6 +319,58 @@ export class Zero3AutonomousTaskLoop {
     }
   }
 
+  async createGoal(input: AutonomousGoalInput): Promise<ExecutionTaskSnapshot> {
+    const title = input.title.trim().slice(0, 512)
+    const goal = input.goal.trim().slice(0, 64_000)
+    const projectId = input.projectId.trim()
+    if (!title || !goal || !projectId) throw new Error('autonomous goal requires title, goal and projectId')
+    const project = (await this.ports.projects.list()).find(item => item.id === projectId)
+    if (!project) throw new Error(`autonomous project not found: ${projectId}`)
+    const at = nowIso(this.clock)
+    const taskId = `goal-${hash({ projectId, title, goal, at }).slice(0, 32)}`
+    const requiredSkills = [...new Set((input.requiredSkills ?? []).map(item => item.trim()).filter(Boolean))]
+    const optionalSkills = [...new Set((input.optionalSkills ?? []).map(item => item.trim()).filter(Boolean))]
+    const requiredCapabilities = [...new Set((input.requiredCapabilities ?? []).map(item => item.trim()).filter(Boolean))]
+    const importance = input.importance ?? 'normal'
+    const created = await this.ports.execution.createTask({
+      task: {
+        taskId, projectId, workspace: input.workspace?.trim() || project.rootPath?.trim() || null,
+        title, goal, workflowId: 'autonomous-root-goal', maxParallelSteps: 1, createdBySessionId: null,
+        metadata: {
+          autonomous: true,
+          autonomousRootGoal: true,
+          autonomousTaskLoop: ZERO3_AUTONOMOUS_TASK_LOOP,
+          autonomyLevel: 'L4',
+          importance,
+          autonomousLineage: { rootTaskId: taskId, parentTaskId: null, parentStepId: null, sourceCandidateId: null, sourceEventRefs: [], creationReason: 'user_goal', resumeParentOnComplete: false, childDepth: 0 }
+        }
+      },
+      steps: [{
+        stepId: 'goal-work', title, objective: goal, executor: 'AUTO', dependsOn: [], requiredSkills, optionalSkills,
+        inputArtifacts: [], expectedOutputs: [], completionGate: ['zero3_agent_runtime_verified'], maxAttempts: Math.min(this.attentionBudget.maxRetries, 3),
+        metadata: { autonomousTaskLoop: ZERO3_AUTONOMOUS_TASK_LOOP, rootTaskId: taskId, requiredCapabilities, importance }
+      }]
+    })
+    if (this.options.autoDispatch === true) await this.enqueueProject(project)
+    return created
+  }
+
+  async dashboard(projectId: string, rootTaskId: string | null = null): Promise<Record<string, unknown>> {
+    const tasks = (await this.ports.execution.listTasks()).filter(task => task.definition.task.projectId === projectId)
+    const intakes = this.store.listAutonomousIntakes(projectId)
+    const generatedAt = nowIso(this.clock)
+    const capabilities = [...(this.options.advertisedPluginCapabilities ?? [])]
+    return {
+      projectId,
+      generatedAt,
+      status: this.status(),
+      humanAttention: projectHumanAttention(intakes),
+      executionGraph: projectExecutionGraph({ projectId, tasks, intakes }),
+      dailyReview: projectDailyReview({ projectId, generatedAt, tasks, intakes }),
+      plan: createAutonomousPlanProposal({ projectId, rootTaskId, tasks, intakes, capabilities, generatedAt })
+    }
+  }
+
   // An unattended loop must never reject: an unhandled rejection in the Electron main process
   // would take the whole desktop app down. Failures are remembered and retried on the next tick.
   private noteError(error: unknown): void {
@@ -326,9 +397,7 @@ export class Zero3AutonomousTaskLoop {
     await this.enqueueProject(project)
   }
 
-  async ingestGuardEvent(event: AutonomousGuardEvent): Promise<void> {
-    const project = (await this.ports.projects.list()).find(item => item.id === event.projectId)
-    if (!project) throw new Error(`autonomous project not found: ${event.projectId}`)
+  private async ingestGuardCandidate(project: ProjectRecord, event: AutonomousGuardEvent): Promise<boolean> {
     const guard = guardEventToCandidate(event)
     const detail: JsonObject = { ...guard.detail, source_refs: guard.sourceRefs }
     const semantic = semanticKey(detail)
@@ -336,7 +405,7 @@ export class Zero3AutonomousTaskLoop {
     const fingerprint = semanticDedupe
       ? hash({ version: SEMANTIC_FINGERPRINT_VERSION, kind: 'semantic', entityType: guard.entityType, semantic })
       : hash({ version: SEMANTIC_FINGERPRINT_VERSION, kind: 'guard', entityType: guard.entityType, eventRef: event.eventRef, detail })
-    const candidate: Candidate = {
+    return this.ingest(project, {
       sourceKey: `ati-guard-${hash(`${event.projectId}|${event.eventRef}`).slice(0, 42)}`,
       fingerprint,
       entityType: guard.entityType,
@@ -350,9 +419,62 @@ export class Zero3AutonomousTaskLoop {
       requiredSkills: listOfStrings(detail.requiredSkills ?? detail.required_skills),
       optionalSkills: listOfStrings(detail.optionalSkills ?? detail.optional_skills),
       semanticDedupe
-    }
-    await this.ingest(project, candidate)
+    })
+  }
+
+  async ingestGuardEvent(event: AutonomousGuardEvent): Promise<void> {
+    const project = (await this.ports.projects.list()).find(item => item.id === event.projectId)
+    if (!project) throw new Error(`autonomous project not found: ${event.projectId}`)
+    await this.ingestGuardCandidate(project, event)
     await this.enqueueProject(project)
+  }
+
+  private async ingestGptWebGuardEvents(project: ProjectRecord, tasks: readonly ExecutionTaskSnapshot[]): Promise<void> {
+    if (!this.ports.gpt.executionStatus) return
+    const dangerous = new Set(['stalled', 'timeout_error', 'connection_lost', 'recovery_failed', 'rotation_failed'])
+    for (const task of tasks) {
+      for (const binding of task.runtime.sessionBindings.filter(item => item.executor === 'GPT_WEB' && item.state !== 'closed')) {
+        try {
+          const status = await this.ports.gpt.executionStatus(binding.logicalSessionId)
+          if (!status.health || !dangerous.has(status.health)) continue
+          const suffix = status.lastProgressAt ?? Math.floor(Date.now() / 60_000)
+          await this.ingestGuardCandidate(project, {
+            source: 'gpt_web', projectId: project.id, sourceTaskId: task.definition.task.taskId,
+            eventRef: `gpt:${binding.bindingId}:${status.health}:${suffix}`,
+            kind: status.health, message: `GPT Web ${status.health}: ${binding.logicalSessionId}`,
+            blocking: status.health !== 'stalled',
+            affectedResources: [`task:${task.definition.task.taskId}`, `session:${binding.logicalSessionId}`],
+            metadata: { bindingId: binding.bindingId, idleForMs: status.idleForMs, lastProgressAt: status.lastProgressAt }
+          })
+        } catch {}
+      }
+    }
+  }
+
+  private async ingestExecutionGuardEvents(project: ProjectRecord, tasks: readonly ExecutionTaskSnapshot[]): Promise<void> {
+    for (const task of tasks) {
+      if (task.archived === true) continue
+      const metadata = record(task.definition.task.metadata)
+      if (metadata.autonomous === true && metadata.autonomousRootGoal !== true) continue
+      for (const event of task.events) {
+        const payload = record(event.payload)
+        const reason = compactText(payload.reason ?? payload.message ?? payload.blocker, event.type, 2048)
+        if (reason.startsWith('Autonomous blocking issue:') || reason.startsWith('Autonomous repair ')) continue
+        const lostSession = event.type === 'session.state_changed' && payload.to === 'lost'
+        const failedTask = event.type === 'task.state_changed' && payload.to === 'failed'
+        const relevant = ['blocked', 'waiting_human', 'outcome_unknown', 'gate.failed'].includes(event.type) || lostSession || failedTask
+        if (!relevant) continue
+        await this.ingestGuardCandidate(project, {
+          source: 'execution', projectId: project.id, sourceTaskId: task.definition.task.taskId,
+          eventRef: `execution:${task.definition.task.taskId}:${event.eventId}`,
+          kind: lostSession ? 'session_lost' : failedTask ? 'task_failed' : event.type.replace('.', '_'),
+          message: reason,
+          blocking: ['blocked', 'outcome_unknown', 'gate.failed'].includes(event.type) || lostSession || failedTask,
+          affectedResources: [`task:${task.definition.task.taskId}`, ...(event.stepId ? [`step:${event.stepId}`] : [])],
+          metadata: { execution_event_id: event.eventId, execution_sequence: event.sequence, execution_event_type: event.type }
+        })
+      }
+    }
   }
 
   private enqueueProject(project: ProjectRecord): Promise<void> {
@@ -383,13 +505,23 @@ export class Zero3AutonomousTaskLoop {
       }
       if (created >= this.maxCreates) break
     }
+    const projectTasks = (await this.ports.execution.listTasks()).filter(snapshot => snapshot.definition.task.projectId === project.id)
+    if (this.ports.guardSources) {
+      try {
+        const externalGuards = await this.ports.guardSources.list(project.id, projectTasks.map(task => task.definition.task.taskId))
+        for (const event of externalGuards) await this.ingestGuardCandidate(project, event)
+      } catch (error) { this.noteError(error) }
+    }
+    await this.ingestGptWebGuardEvents(project, projectTasks)
+    await this.ingestExecutionGuardEvents(project, projectTasks)
     // Archived tasks are deliberately excluded: archiving is the operator's signal that this
-    // work should stop being scheduled, without destroying its audit trail.
-    const tasks = (await this.ports.execution.listTasks()).filter(snapshot =>
-      snapshot.archived !== true
-      && snapshot.definition.task.projectId === project.id
-      && snapshot.definition.task.metadata?.autonomousTaskLoop === ZERO3_AUTONOMOUS_TASK_LOOP
-    )
+    // work should stop being scheduled. Root goals and repair children share the same loop.
+    const tasks = (await this.ports.execution.listTasks()).filter(snapshot => {
+      const metadata = record(snapshot.definition.task.metadata)
+      return snapshot.archived !== true
+        && snapshot.definition.task.projectId === project.id
+        && (metadata.autonomousTaskLoop === ZERO3_AUTONOMOUS_TASK_LOOP || metadata.autonomous === true || metadata.autonomousRootGoal === true)
+    })
     for (const snapshot of tasks) {
       const taskId = snapshot.definition.task.taskId
       try {
@@ -524,41 +656,32 @@ export class Zero3AutonomousTaskLoop {
       const runtime = snapshot.runtime.steps.find(item => item.stepId === stepId)
       if (!step || !runtime || runtime.assignmentId) continue
       const target = step.executor === 'AUTO'
-        ? runtime.skillPreflight?.executor ?? (plan.recommendedExecutorByStep[stepId] as ExecutionExecutorTarget | undefined) ?? null
+        ? runtime.skillPreflight?.executor ?? (plan.recommendedExecutorByStep[stepId] as ExecutionExecutorTarget | undefined) ?? 'AUTO'
         : step.executor
-      if (!target) {
-        this.markTaskHumanAttention(taskId, 'Autonomous routing produced no safe executor; manual assignment required.')
-        await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', 'Autonomous routing produced no safe executor; manual assignment required.')
-        continue
-      }
       if (target !== 'GPT_WEB') {
+        if (target === 'HUMAN') {
+          const reason = 'Autonomous step explicitly requires a human executor.'
+          this.markTaskHumanAttention(taskId, reason)
+          await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', reason)
+          continue
+        }
         const baseline = evaluatePluginCapabilityBaseline(this.options.advertisedPluginCapabilities ?? [])
         if (!baseline.ready || !this.ports.agentDispatch) {
-          const reason = `Post-plugin capability gate is not ready for ${target}; missing: ${baseline.missing.join(', ') || 'agent dispatch adapter'}.`
+          const reason = `Post-plugin capability gate is not ready for ${target}; missing: ${baseline.missing.join(', ') || 'unified agent dispatch adapter'}.`
           this.markTaskHumanAttention(taskId, reason)
           await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', reason)
           continue
         }
-        const stepMetadata = record(step.metadata)
-        const requiredCapabilities = listOfStrings(stepMetadata.requiredCapabilities ?? stepMetadata.required_capabilities)
-        const providers = (await this.ports.agentDispatch.listProviders()).filter(provider => provider.executor === target)
-        const route = routeAutonomousCapabilities(requiredCapabilities, providers)
-        if (route.state !== 'READY' || !route.provider) {
-          this.markTaskHumanAttention(taskId, route.reason)
-          await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', route.reason)
-          continue
-        }
-        const dispatched = await this.ports.agentDispatch.dispatch({ task: snapshot, stepId, provider: route.provider })
+        const dispatched = await this.ports.agentDispatch.dispatch({ task: snapshot, stepId, attempt: runtime.attempt + 1 })
         if (!dispatched.dispatched) {
-          const reason = dispatched.reason ?? 'Autonomous agent dispatch failed closed.'
+          const reason = dispatched.reason ?? 'Autonomous unified agent dispatch failed closed.'
           this.markTaskHumanAttention(taskId, reason)
-          await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', reason)
+          const latest = await this.ports.execution.getTask(taskId)
+          const latestStep = latest.runtime.steps.find(item => item.stepId === stepId)
+          if (latestStep && !['waiting_human','blocked','failed','outcome_unknown','completed'].includes(latestStep.status)) {
+            await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', reason)
+          }
           continue
-        }
-        const observed = await this.ports.execution.getTask(taskId)
-        if (!observed.runtime.steps.find(item => item.stepId === stepId)?.assignmentId) {
-          this.markTaskHumanAttention(taskId, 'Agent dispatch returned without an authoritative Execution Assignment.')
-          await this.ports.execution.transitionStep(taskId, stepId, 'waiting_human', 'Agent dispatch returned without an authoritative Execution Assignment.')
         }
         snapshot = await this.ports.execution.getTask(taskId)
         continue

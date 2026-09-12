@@ -7,6 +7,8 @@ interface TaskState {
   select: (id: string | null) => void
   creating: boolean
   setCreating: (value: boolean) => void
+  creatingMode: 'task' | 'goal'
+  setCreatingMode: (value: 'task' | 'goal') => void
   loading: boolean
   busy: boolean
   error: string | null
@@ -18,6 +20,7 @@ export function TaskProvider({ active, children }: { active: boolean; children: 
   const [tasks, setTasks] = useState<ExecutionTaskSnapshot[]>([])
   const [selectedId, select] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [creatingMode, setCreatingMode] = useState<'task' | 'goal'>('task')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -71,7 +74,7 @@ export function TaskProvider({ active, children }: { active: boolean; children: 
       if (mounted.current) setBusy(false)
     }
   }, [refresh])
-  return <TaskContext.Provider value={{ tasks, selectedId, select, creating, setCreating, loading, busy, error: actionError ?? error, refresh, mutate }}>{children}</TaskContext.Provider>
+  return <TaskContext.Provider value={{ tasks, selectedId, select, creating, setCreating, creatingMode, setCreatingMode, loading, busy, error: actionError ?? error, refresh, mutate }}>{children}</TaskContext.Provider>
 }
 export function useTasks() {
   const value = useContext(TaskContext)

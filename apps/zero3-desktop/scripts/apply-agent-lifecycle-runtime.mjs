@@ -122,10 +122,140 @@ const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(
   },
   { memoryForProject: projectId => zero3SharedMemoryForProject(projectId) }
 )
-function zero3AutonomousTaskFlag(name: string): boolean {
-  return ['1', 'true', 'yes', 'on'].includes((process.env[name] ?? '').trim().toLowerCase())
+function zero3AutonomousTaskFlag(name: string, fallback = false): boolean {
+  const raw = (process.env[name] ?? '').trim().toLowerCase()
+  if (!raw) return fallback
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false
+  return ['1', 'true', 'yes', 'on'].includes(raw)
 }
 const zero3AutonomousTaskInterval = Number.parseInt(process.env.ZERO3_AUTONOMOUS_TASK_INTERVAL_MS ?? '', 10)
+
+function zero3AutonomousExecutionExecutor(stepExecutor: string, routed: string): string | null {
+  if (stepExecutor && stepExecutor !== 'AUTO') return stepExecutor
+  if (routed === 'CODEX') return 'CODEX'
+  if (routed === 'CLAUDE') return 'CLAUDE'
+  if (routed === 'GEMINI') return 'ANTIGRAVITY'
+  if (routed === 'ZERO3_API') return 'ZERO3'
+  return null
+}
+async function zero3DispatchAutonomousAgent(input: { task: any; stepId: string; attempt: number }) {
+  const taskId = input.task.definition.task.taskId
+  const step = input.task.definition.steps.find((item: any) => item.stepId === input.stepId)
+  if (!step) return { dispatched: false, reason: 'Autonomous step definition not found.' }
+  try {
+    const request = buildAutonomousAgentDispatchRequest(input.task, input.stepId, input.attempt, new Date().toISOString())
+    const record = await zero3AgentRuntime.dispatchAgentTask(request.taskSpec as any, request.context as any)
+    const resolvedTarget = typeof record.resolvedTarget === 'string' ? record.resolvedTarget : ''
+    const executor = zero3AutonomousExecutionExecutor(step.executor, resolvedTarget)
+    if (!executor) return { dispatched: false, reason: 'Unified Agent Runtime returned no supported executor.' }
+
+    let execution = await zero3ExecutionRuntime.getTask(taskId) as any
+    let runtimeStep = execution.runtime.steps.find((item: any) => item.stepId === input.stepId)
+    let assignment = runtimeStep?.assignmentId
+      ? execution.runtime.assignments.find((item: any) => item.assignmentId === runtimeStep.assignmentId) ?? null
+      : null
+    if (!assignment) {
+      assignment = await zero3ExecutionRuntime.createAssignment(taskId, input.stepId, executor as any, 'agent-runtime:' + String((request.taskSpec as any).taskId))
+    }
+
+    const binding = record.binding && typeof record.binding === 'object' ? record.binding as Record<string, unknown> : {}
+    const logicalSessionId = typeof binding.targetLogicalSessionId === 'string'
+      ? binding.targetLogicalSessionId
+      : 'agent-runtime:' + String((request.taskSpec as any).taskId)
+    execution = await zero3ExecutionRuntime.getTask(taskId) as any
+    const hasBinding = execution.runtime.sessionBindings.some((item: any) => item.assignmentId === assignment.assignmentId && item.state !== 'closed')
+    if (!hasBinding) {
+      await zero3ExecutionRuntime.bindSession(assignment.assignmentId, {
+        logicalSessionId,
+        runtimeConversationId: typeof binding.runtimeConversationId === 'string' ? binding.runtimeConversationId : null,
+        state: 'active',
+        metadata: { autonomous: true, agentTaskId: (request.taskSpec as any).taskId, resolvedTarget }
+      })
+    }
+
+    const result = record.result && typeof record.result === 'object' ? record.result as Record<string, unknown> : {}
+    const resultStatus = typeof result.status === 'string' ? result.status : ''
+    const summary = typeof result.summary === 'string' ? result.summary : 'Unified Agent Runtime state: ' + String(record.state)
+    execution = await zero3ExecutionRuntime.getTask(taskId) as any
+    runtimeStep = execution.runtime.steps.find((item: any) => item.stepId === input.stepId)
+    if ((resultStatus === 'COMPLETE' || resultStatus === 'PARTIAL') && record.state === 'COMPLETE') {
+      if (runtimeStep && ['dispatching', 'running', 'waiting_report', 'fix_required'].includes(runtimeStep.status)) {
+        await zero3ExecutionRuntime.runtime.requestCompletion(taskId, input.stepId)
+      }
+      execution = await zero3ExecutionRuntime.getTask(taskId) as any
+      runtimeStep = execution.runtime.steps.find((item: any) => item.stepId === input.stepId)
+      if (runtimeStep?.status === 'verifying') {
+        await zero3ExecutionRuntime.runtime.gatePassed(taskId, input.stepId, {
+          source: 'zero3_agent_runtime', provider: result.provider ?? resolvedTarget,
+          executorId: result.executorId ?? null, summary,
+          verificationProfile: record.verificationProfile ?? null
+        })
+      }
+    } else if (runtimeStep && record.state === 'REVIEW_PENDING') {
+      if (runtimeStep.status === 'dispatching') {
+        await zero3ExecutionRuntime.transitionStep(taskId, input.stepId, 'running', 'Unified Agent Runtime produced a result pending independent review.')
+        execution = await zero3ExecutionRuntime.getTask(taskId) as any
+        runtimeStep = execution.runtime.steps.find((item: any) => item.stepId === input.stepId)
+      }
+      if (runtimeStep?.status === 'running') {
+        await zero3ExecutionRuntime.transitionStep(taskId, input.stepId, 'waiting_report', 'Unified Agent Runtime is waiting for independent review.')
+      }
+    } else if (runtimeStep && resultStatus === 'BLOCKED' && runtimeStep.status !== 'blocked') {
+      await zero3ExecutionRuntime.transitionStep(taskId, input.stepId, 'blocked', summary)
+    } else if (runtimeStep && resultStatus === 'FAILED' && runtimeStep.status !== 'failed') {
+      await zero3ExecutionRuntime.transitionStep(taskId, input.stepId, 'failed', summary)
+    } else if (runtimeStep && resultStatus === 'OUTCOME_UNKNOWN' && runtimeStep.status !== 'outcome_unknown') {
+      await zero3ExecutionRuntime.transitionStep(taskId, input.stepId, 'outcome_unknown', summary)
+    }
+    return { dispatched: true, resolvedExecutor: executor, state: record.state, sessionId: logicalSessionId }
+  } catch (error) {
+    return { dispatched: false, reason: error instanceof Error ? error.message : String(error) }
+  }
+}
+async function zero3AutonomousExternalGuards(projectId: string, taskIds: readonly string[]) {
+  const events: Array<Record<string, unknown>> = []
+  if (taskIds.length > 0) {
+    const placeholders = taskIds.map(() => '?').join(',')
+    const workerSql = "SELECT e.*, r.task_id FROM workflow_worker_events e JOIN workflow_runs r ON r.workflow_run_id=e.workflow_run_id WHERE r.task_id IN (" + placeholders + ") AND e.type IN ('claim.blocked','wakeup.rotation_required') ORDER BY e.sequence DESC LIMIT 200"
+    const workerRows = zero3WorkflowWorkerStore.db.prepare(workerSql).all(...taskIds) as any[]
+    for (const row of workerRows) {
+      let payload: Record<string, unknown> = {}
+      try { payload = JSON.parse(String(row.payload_json ?? '{}')) as Record<string, unknown> } catch {}
+      const reason = typeof payload.reason === 'string' ? payload.reason : String(row.type)
+      const terminal = payload.disposition === 'BLOCKED_TERMINAL'
+      events.push({
+        source: 'worker', projectId, sourceTaskId: row.task_id,
+        eventRef: 'worker:' + String(row.event_id), kind: String(row.type).replaceAll('.', '_'),
+        message: reason, blocking: terminal || row.type === 'wakeup.rotation_required',
+        affectedResources: [row.worker_slot_id ? 'worker-slot:' + String(row.worker_slot_id) : '', row.worker_session_id ? 'worker-session:' + String(row.worker_session_id) : ''].filter(Boolean),
+        metadata: { workflowRunId: row.workflow_run_id, claimId: row.claim_id ?? null, disposition: payload.disposition ?? null }
+      })
+    }
+  }
+  for (const operation of zero3CapabilityRuntime.listOperations(projectId)) {
+    if (!['BLOCKED', 'FAILED', 'TIMED_OUT'].includes(operation.status)) continue
+    events.push({
+      source: 'tool_mcp', projectId, sourceTaskId: operation.context?.taskId ?? null,
+      eventRef: 'capability:' + operation.operationId, kind: 'capability_' + operation.status.toLowerCase(),
+      message: operation.error?.message ?? (operation.capability + ' ' + operation.status),
+      blocking: operation.status !== 'BLOCKED' || operation.error?.code === 'POLICY_DENIED',
+      affectedResources: ['capability:' + operation.capability, 'node:' + operation.nodeId],
+      metadata: { operationId: operation.operationId, capability: operation.capability, errorCode: operation.error?.code ?? null }
+    })
+  }
+  const remoteStatus = zero3RemoteNode.status()
+  if (remoteStatus.enabled && !remoteStatus.connected && ((remoteStatus.activeTaskId && taskIds.includes(remoteStatus.activeTaskId)) || remoteStatus.pendingDeliveries > 0)) {
+    events.push({
+      source: 'compute', projectId, sourceTaskId: remoteStatus.activeTaskId ?? null,
+      eventRef: 'compute:' + remoteStatus.nodeId + ':' + String(remoteStatus.lastHeartbeatAt ?? 'offline'),
+      kind: 'remote_node_offline', message: remoteStatus.lastError ?? ('Remote node ' + remoteStatus.nodeId + ' is offline'),
+      blocking: Boolean(remoteStatus.activeTaskId && taskIds.includes(remoteStatus.activeTaskId)),
+      affectedResources: ['node:' + remoteStatus.nodeId],
+      metadata: { pendingDeliveries: remoteStatus.pendingDeliveries, lastHeartbeatAt: remoteStatus.lastHeartbeatAt }
+    })
+  }
+  return events
+}
 const zero3AutonomousTaskLoop = new Zero3AutonomousTaskLoop(
   zero3AgentLifecycleStore,
   {
@@ -138,7 +268,12 @@ const zero3AutonomousTaskLoop = new Zero3AutonomousTaskLoop(
       refreshSkillPreflight: taskId => zero3ExecutionRuntime.refreshSkillPreflight(taskId),
       reconcileReadiness: taskId => zero3ExecutionRuntime.reconcileReadiness(taskId) as any,
       transitionStep: (taskId, stepId, status, reason) => zero3ExecutionRuntime.transitionStep(taskId, stepId, status as any, reason) as any,
-      transitionTask: (taskId, status, reason) => zero3ExecutionRuntime.runtime.transitionTask(taskId, status as any, reason) as any
+      transitionTask: (taskId, status, reason) => zero3ExecutionRuntime.runtime.transitionTask(taskId, status as any, reason) as any,
+      createAssignment: (taskId, stepId, executor, executorId) => zero3ExecutionRuntime.createAssignment(taskId, stepId, executor as any, executorId ?? null),
+      bindSession: (assignmentId, input) => zero3ExecutionRuntime.bindSession(assignmentId, input as any),
+      recordProgress: (taskId, stepId, progress, activity) => zero3ExecutionRuntime.runtime.recordProgress(taskId, stepId, progress, activity),
+      requestCompletion: (taskId, stepId) => zero3ExecutionRuntime.runtime.requestCompletion(taskId, stepId),
+      gatePassed: (taskId, stepId, evidence) => zero3ExecutionRuntime.runtime.gatePassed(taskId, stepId, evidence ?? {})
     },
     lifecycle: {
       sessionStart: input => zero3AgentLifecycleRuntime.sessionStart(input) as any,
@@ -146,18 +281,35 @@ const zero3AutonomousTaskLoop = new Zero3AutonomousTaskLoop(
     },
     gpt: {
       create: projectId => zero3GptWeb.create(projectId),
-      sendWakeup: (entryId, message) => zero3GptWeb.sendWakeup(entryId, message)
+      sendWakeup: (entryId, message) => zero3GptWeb.sendWakeup(entryId, message),
+      executionStatus: entryId => zero3GptWeb.executionStatus(entryId)
+    },
+    agentDispatch: {
+      dispatch: input => zero3DispatchAutonomousAgent(input as any)
+    },
+    guardSources: {
+      list: (projectId, taskIds) => zero3AutonomousExternalGuards(projectId, taskIds) as any
     }
   },
   {
-    enabled: zero3AutonomousTaskFlag('ZERO3_AUTONOMOUS_TASK_LOOP_ENABLED'),
-    autoDispatch: zero3AutonomousTaskFlag('ZERO3_AUTONOMOUS_TASK_AUTO_DISPATCH'),
+    enabled: zero3AutonomousTaskFlag('ZERO3_AUTONOMOUS_TASK_LOOP_ENABLED', true),
+    autoDispatch: zero3AutonomousTaskFlag('ZERO3_AUTONOMOUS_TASK_AUTO_DISPATCH', true),
+    advertisedPluginCapabilities: [
+      'zero3.full-capability.web-gpt',
+      'agent.dispatch.unified',
+      'agent.dispatch.codex.full',
+      'session.bootstrap.project',
+      'memory.shared.lifecycle'
+    ],
     ...(Number.isSafeInteger(zero3AutonomousTaskInterval) && zero3AutonomousTaskInterval > 0 ? { intervalMs: zero3AutonomousTaskInterval } : {})
   }
 )
 void app.whenReady().then(() => zero3AutonomousTaskLoop.start())
 ipcMain.handle('zero3:autonomous:status', () => zero3AutonomousTaskLoop.status())
+ipcMain.handle('zero3:autonomous:create-goal', (_event, request: unknown) => zero3AutonomousTaskLoop.createGoal(request as any))
+ipcMain.handle('zero3:autonomous:dashboard', (_event, projectId: unknown, rootTaskId?: unknown) => zero3AutonomousTaskLoop.dashboard(String(projectId), typeof rootTaskId === 'string' ? rootTaskId : null))
 ipcMain.handle('zero3:autonomous:reconcile-project', (_event, projectId: unknown) => zero3AutonomousTaskLoop.reconcileProjectNow(String(projectId)))
+ipcMain.handle('zero3:autonomous:ingest-guard', (_event, request: unknown) => zero3AutonomousTaskLoop.ingestGuardEvent(request as any))
 function zero3WorkflowWorkerInput(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('workflow worker request must be an object')
   return value as Record<string, unknown>
@@ -227,7 +379,15 @@ async function zero3WorkerRpcRuntime() {
 app.on('before-quit', () => { zero3AutonomousTaskLoop.stop(); zero3WorkerStationManager.stop(); zero3WorkerWakeupController.stop(); zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close(); zero3CapabilityRuntime.close() })
 `
 
-const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
+const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3Autonomous', {
+  status: () => ipcRenderer.invoke('zero3:autonomous:status'),
+  createGoal: input => ipcRenderer.invoke('zero3:autonomous:create-goal', input),
+  dashboard: (projectId, rootTaskId) => ipcRenderer.invoke('zero3:autonomous:dashboard', projectId, rootTaskId),
+  reconcileProject: projectId => ipcRenderer.invoke('zero3:autonomous:reconcile-project', projectId),
+  ingestGuard: input => ipcRenderer.invoke('zero3:autonomous:ingest-guard', input)
+})
+
+contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
   ensureRun: input => ipcRenderer.invoke('zero3:workflow-worker:ensure-run', input),
   ensureBinding: input => ipcRenderer.invoke('zero3:workflow-worker:ensure-binding', input),
   addItems: input => ipcRenderer.invoke('zero3:workflow-worker:add-items', input),
@@ -240,7 +400,14 @@ const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3WorkflowW
 
 contextBridge.exposeInMainWorld('hermesDesktop', {`
 
-const globalBridge = String.raw`    zero3WorkflowWorkers: {
+const globalBridge = String.raw`    zero3Autonomous: {
+      status: () => Promise<unknown>
+      createGoal: (input: { title: string; goal: string; projectId: string; workspace?: string | null; requiredSkills?: string[]; optionalSkills?: string[]; requiredCapabilities?: string[]; importance?: 'low' | 'normal' | 'high' | 'critical' }) => Promise<unknown>
+      dashboard: (projectId: string, rootTaskId?: string | null) => Promise<unknown>
+      reconcileProject: (projectId: string) => Promise<unknown>
+      ingestGuard: (input: Record<string, unknown>) => Promise<unknown>
+    }
+    zero3WorkflowWorkers: {
       ensureRun: (input: Record<string, unknown>) => Promise<unknown>
       ensureBinding: (input: Record<string, unknown>) => Promise<unknown>
       addItems: (input: Record<string, unknown>) => Promise<unknown>
@@ -284,9 +451,9 @@ export function applyZero3AgentLifecycleRuntime() {
         // Runs after the Agent Lifecycle import replacement, which re-emits the
         // same anchor, so the loop import is added without disturbing it.
         label: 'Autonomous Task Loop runtime import',
-        appliedMarker: "import { Zero3AutonomousTaskLoop } from './zero3/worker-runtime/v2/index'",
+        appliedMarker: 'buildAutonomousAgentDispatchRequest',
         from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
-        to: "import { Zero3AutonomousTaskLoop } from './zero3/worker-runtime/v2/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+        to: "import { Zero3AutonomousTaskLoop, buildAutonomousAgentDispatchRequest } from './zero3/worker-runtime/v2/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
       },
       {
         label: 'Agent Lifecycle composition after Execution Runtime',
@@ -330,13 +497,16 @@ export function applyZero3AgentLifecycleRuntime() {
       { label: 'Worker RPC composite runtime provider', text: '() => zero3WorkerRpcRuntime()', count: 1 },
       { label: 'Agent Lifecycle teardown', text: 'zero3AgentLifecycleStore.close()', count: 1 },
       { label: 'Autonomous Task Loop composition point', text: 'const zero3AutonomousTaskLoop = new Zero3AutonomousTaskLoop(', count: 1 },
-      { label: 'Autonomous Task Loop teardown', text: 'zero3AutonomousTaskLoop.stop()', count: 1 }
+      { label: 'Autonomous Task Loop teardown', text: 'zero3AutonomousTaskLoop.stop()', count: 1 },
+      { label: 'Unified Autonomous Agent dispatch', text: 'async function zero3DispatchAutonomousAgent(', count: 1 },
+      { label: 'Autonomous goal IPC', text: "zero3:autonomous:create-goal", count: 1 },
+      { label: 'Autonomous dashboard IPC', text: "zero3:autonomous:dashboard", count: 1 }
     ]
   )
   patchFile('electron/preload.ts', [
-    { label: 'Workflow Worker local admin preload', appliedMarker: "exposeInMainWorld('zero3WorkflowWorkers'", from: "contextBridge.exposeInMainWorld('hermesDesktop', {", to: preloadBridge }
+    { label: 'Autonomous + Workflow Worker preload', appliedMarker: "exposeInMainWorld('zero3Autonomous'", from: "contextBridge.exposeInMainWorld('hermesDesktop', {", to: preloadBridge }
   ])
   patchFile('src/global.d.ts', [
-    { label: 'Workflow Worker local admin renderer types', appliedMarker: '    zero3WorkflowWorkers: {', from: '    hermesDesktop: {', to: globalBridge }
+    { label: 'Autonomous + Workflow Worker renderer types', appliedMarker: '    zero3Autonomous: {', from: '    hermesDesktop: {', to: globalBridge }
   ])
 }

@@ -74,6 +74,10 @@ export class Zero3OperationStore {
     return record ? structuredClone(record) : null
   }
 
+  list(): Zero3OperationRecord[] {
+    return [...this.records.values()].map(record => structuredClone(record)).sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.operationId.localeCompare(right.operationId))
+  }
+
   findByIdempotency(capability: string, key: string): Zero3OperationRecord | null {
     const operationId = this.idempotency.get(this.idempotencyKey(capability, key))
     return operationId ? this.get(operationId) : null

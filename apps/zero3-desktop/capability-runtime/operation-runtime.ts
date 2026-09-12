@@ -119,6 +119,10 @@ export class Zero3OperationRuntime {
     return this.store.get(created.operationId)!
   }
 
+  listOperations(projectId?: string | null): Zero3OperationRecord[] {
+    return this.store.list().filter(operation => !projectId || operation.context?.projectId === projectId)
+  }
+
   getOperation(input: Record<string, unknown>): Zero3OperationRecord {
     const id = typeof input.operationId === 'string' ? input.operationId.trim() : ''
     const operation = id ? this.store.get(id) : null

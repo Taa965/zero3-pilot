@@ -8,7 +8,7 @@ const CONTEXT_MENU_WIDTH = 176
 const CONTEXT_MENU_HEIGHT = 104
 type TaskMenu = { task: ExecutionTaskSnapshot; x: number; y: number }
 export function TaskList() {
-  const { tasks, selectedId, select, creating, setCreating, loading, busy, error, refresh, mutate } = useTasks()
+  const { tasks, selectedId, select, creating, setCreating, setCreatingMode, loading, busy, error, refresh, mutate } = useTasks()
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [query, setQuery] = useState('')
   const [projectId, setProjectId] = useState('')
@@ -61,7 +61,10 @@ export function TaskList() {
   return <div ref={paneRef} className="flex h-full flex-col">
     <div className="flex items-center justify-between border-b border-(--ui-border) p-3 text-sm">
       <span>任务 · {tasks.length}</span>
-      <button type="button" disabled={busy} onClick={() => setCreating(true)} className="text-blue-500 disabled:opacity-50">＋ 新建任务</button>
+      <div className="flex gap-3">
+        <button type="button" disabled={busy} onClick={() => { setCreatingMode('goal'); setCreating(true) }} className="text-emerald-600 disabled:opacity-50">◎ 自主目标</button>
+        <button type="button" disabled={busy} onClick={() => { setCreatingMode('task'); setCreating(true) }} className="text-blue-500 disabled:opacity-50">＋ 新建任务</button>
+      </div>
     </div>
     <div className="space-y-2 p-3">
       <input aria-label="搜索任务" placeholder="搜索任务名称、编号或目标" value={query} onChange={event => { setMenu(null); setQuery(event.target.value) }} className="w-full rounded border border-(--ui-border) bg-background p-2 text-xs" />
@@ -79,7 +82,11 @@ export function TaskList() {
         return <button key={definition.taskId} type="button" aria-pressed={!creating && selectedId === definition.taskId} title="右键可归档或删除任务" onClick={() => { select(definition.taskId); setCreating(false) }} onContextMenu={event => openMenu(task, event)} className={`w-full rounded-lg border border-(--ui-border) p-3 text-left ${!creating && selectedId === definition.taskId ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'}`}>
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 break-words text-sm font-medium">{definition.title}</div>
-            {task.archived && <span className="shrink-0 rounded bg-(--ui-control-active-background) px-1.5 py-0.5 text-[10px] text-(--ui-text-secondary)">已归档</span>}
+            <div className="flex shrink-0 gap-1">
+              {definition.metadata?.autonomousRootGoal === true && <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-600">自主目标</span>}
+              {definition.metadata?.autonomous === true && definition.metadata?.autonomousRootGoal !== true && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-500">AUTO</span>}
+              {task.archived && <span className="rounded bg-(--ui-control-active-background) px-1.5 py-0.5 text-[10px] text-(--ui-text-secondary)">已归档</span>}
+            </div>
           </div>
           <div className="mt-1 truncate text-xs text-(--ui-text-tertiary)" title={definition.taskId}>{definition.taskId}</div>
           <div className="mt-2 flex justify-between text-xs"><span>{statusLabel(task.runtime.task.status)}</span><span>{percent(task.runtime.task.progress)}</span></div>

@@ -1,5 +1,17 @@
 # Zero3 Autonomous Task Runtime v1.3 — Implementation Baseline
 
+## 2026-09-12 Post-Plugin / Post-Main Re-baseline
+
+The v1.3 branch has been merged forward with current `main` and now consumes the production Zero3 capability/agent stack instead of maintaining a parallel executor router.
+
+- **Root Goal entry is live in the Task Board.** A user can create an autonomous goal with title, final objective, importance and optional required capabilities. The Root Goal is an authoritative Execution Runtime Task with one AUTO entry step and `autonomyLevel: L4` metadata.
+- **Non-Web-GPT execution reuses `Zero3AgentRuntimeOrchestrator.dispatchAgentTask`.** Executor selection, availability, routing history, failover and verification profile stay owned by the unified Intelligent Agent Task Router. ATR no longer lists providers or scores executors itself.
+- **Execution results are reconciled back into the authoritative Execution Runtime.** ATR creates the Execution Assignment/Session Binding and moves successful work through `completion.requested -> gate.passed`; Agent Runtime result state never becomes a second Task authority.
+- **Structured Runtime Guards are connected.** Execution events, GPT Web execution health, Workflow Worker blocked/rotation events, Capability Operation failures/timeouts, and Remote Compute connectivity are normalized into Intake Candidates. Guard sources never create Tasks directly.
+- **Planner is context-aware and proposal-only.** It prioritizes unresolved candidates by disposition, severity and mainline impact, detects missing capabilities and emits ESCALATE/EXECUTE/DEFER/OBSERVE proposals. Materialization remains an Orchestrator/Policy action.
+- **Task Board exposes the autonomy control surface.** The same Task Board shows Root Goal/AUTO badges and a `自主编排` view for Daily Review, Human Attention, next actions and Execution Graph. No autonomous-only Task Store or board authority exists.
+- The autonomous loop and auto-dispatch are enabled by default in the prepared desktop composition but can be explicitly disabled through the existing environment flags.
+
 Status: branch implementation baseline for `codex/autonomous-task-runtime-v1.3`.
 
 ## Delivery ordering
@@ -113,7 +125,7 @@ v1.3 routes from required capability to providers rather than growing agent-spec
 
 `Task / Issue -> required capabilities -> candidate providers -> Scheduler / Policy`.
 
-Existing Skill preflight remains an input. Current GPT launch remains a concrete adapter. Future Plugin VNext connects unified agent dispatch to the same router. Until the Plugin Capability Gate is ready, non-GPT autonomous dispatch fails closed.
+Existing Skill preflight remains an input. Current GPT launch remains a concrete adapter. Future Plugin VNext connects unified agent dispatch to the same router. When the production capability baseline is advertised, non-GPT work is delegated to the unified Agent Runtime. Missing/disabled capabilities and unsupported executors continue to fail closed into Human Attention.
 
 ## Runtime Guard intake
 
@@ -136,7 +148,7 @@ Periodic reconciliation remains a safety net. v1.3 additionally exposes project-
 
 Planner output is a versioned `PlanProposal`. It may propose EXECUTE / DEFER / OBSERVE / ESCALATE actions but has no direct Execution Runtime mutation capability. Only Policy + Orchestrator materializes authoritative tasks.
 
-This branch includes a deterministic basic planner so the contract is production-usable before Plugin VNext contributes richer capability/history inputs.
+The branch now includes a deterministic context-aware planner over authoritative Tasks, unresolved Intake records and advertised capabilities. It remains proposal-only; richer LLM planning can replace proposal generation without gaining Task mutation authority.
 
 ## Projection-only views
 
@@ -185,4 +197,4 @@ node --experimental-transform-types --test \
 
 ## Merge gate
 
-This branch may be developed and tested before Plugin VNext is finished, but it must not be treated as fully autonomous cross-agent production mode until the Plugin Capability Gate reports ready. Current bounded security surfaces remain unchanged.
+The current mainline supplies Remote Capability P0 and unified production Agent dispatch. ATR treats those as the post-plugin baseline and still fails closed whenever the capability gate is not ready. Full production acceptance remains a separate test phase after all code is landed.
