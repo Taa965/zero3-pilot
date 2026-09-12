@@ -8,6 +8,8 @@ const sourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'worker-runtime',
 const targetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'worker-runtime', 'v2')
 const workflowSourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'workflow-runtime')
 const workflowTargetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'workflow-runtime')
+const capabilitySourceDir = path.join(repoRoot, 'apps', 'zero3-desktop', 'capability-runtime')
+const capabilityTargetDir = path.join(hermesDesktopDir, 'electron', 'zero3', 'capability-runtime')
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
 function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
@@ -37,6 +39,11 @@ function copySources() {
     if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) continue
     write(path.join(workflowTargetDir, entry.name), overlayRuntimeSource(normalizeRelativeTypeScriptSpecifiers(read(path.join(workflowSourceDir, entry.name)))))
   }
+  fs.mkdirSync(capabilityTargetDir, { recursive: true })
+  for (const entry of fs.readdirSync(capabilitySourceDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) continue
+    write(path.join(capabilityTargetDir, entry.name), overlayRuntimeSource(normalizeRelativeTypeScriptSpecifiers(read(path.join(capabilitySourceDir, entry.name)))))
+  }
 }
 
 const mainRuntime = String.raw`
@@ -58,6 +65,10 @@ function zero3WorkerBindingSecret() {
   }
   return created
 }
+const zero3CapabilityRuntime = createZero3CapabilityRuntime({
+  root: path.join(app.getPath('userData'), 'zero3', 'capability-runtime'),
+  nodeId: process.env.ZERO3_WORKER_TUNNEL_NODE_ID?.trim() || 'zero3-desktop'
+})
 const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))
 const zero3WorkflowWorkerRuntime = new Zero3WorkflowWorkerRuntime(zero3WorkflowWorkerStore, { ticketSecret: zero3WorkerBindingSecret() })
 const zero3WorkerStationManager = new Zero3WorkerStationManager(zero3WorkflowWorkerRuntime, {
@@ -204,11 +215,16 @@ async function zero3WorkerRpcRuntime() {
       const result = await verifyZero3Commit(input)
       return { ...result, taskId: context.task?.definition?.task?.taskId ?? null, contextVersion: context.contextVersion }
     },
+    listCapabilities: input => zero3CapabilityRuntime.listCapabilities(input),
+    describeCapability: input => zero3CapabilityRuntime.describeCapability(input),
+    invokeCapability: input => zero3CapabilityRuntime.invokeCapability(input as any),
+    getOperation: input => zero3CapabilityRuntime.getOperation(input),
+    cancelOperation: input => zero3CapabilityRuntime.cancelOperation(input),
     claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),
     reportProgressV2: input => zero3WorkflowWorkerRuntime.reportProgressV2(input)
   }
 }
-app.on('before-quit', () => { zero3AutonomousTaskLoop.stop(); zero3WorkerStationManager.stop(); zero3WorkerWakeupController.stop(); zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close() })
+app.on('before-quit', () => { zero3AutonomousTaskLoop.stop(); zero3WorkerStationManager.stop(); zero3WorkerWakeupController.stop(); zero3AgentLifecycleStore.close(); zero3WorkflowWorkerStore.close(); zero3CapabilityRuntime.close() })
 `
 
 const preloadBridge = String.raw`contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
@@ -259,6 +275,12 @@ export function applyZero3AgentLifecycleRuntime() {
         to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\nimport { dispatchZero3CodexTask, verifyZero3Commit } from './zero3/remote-host/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
       },
       {
+        label: 'Capability Runtime import',
+        appliedMarker: "from './zero3/capability-runtime/index'",
+        from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
+        to: "import { createZero3CapabilityRuntime } from './zero3/capability-runtime/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+      },
+      {
         // Runs after the Agent Lifecycle import replacement, which re-emits the
         // same anchor, so the loop import is added without disturbing it.
         label: 'Autonomous Task Loop runtime import',
@@ -275,6 +297,24 @@ export function applyZero3AgentLifecycleRuntime() {
           'The Execution Runtime bridge overlay (apply-execution-runtime-bridge.mjs) composes it and must run first; use prepare-codex-upstream.mjs instead of applying overlays by hand.'
       },
       {
+        label: 'Capability Runtime composition',
+        appliedMarker: 'const zero3CapabilityRuntime = createZero3CapabilityRuntime(',
+        from: "const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))",
+        to: "const zero3CapabilityRuntime = createZero3CapabilityRuntime({\n  root: path.join(app.getPath('userData'), 'zero3', 'capability-runtime'),\n  nodeId: process.env.ZERO3_WORKER_TUNNEL_NODE_ID?.trim() || 'zero3-desktop'\n})\nconst zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))"
+      },
+      {
+        label: 'Capability RPC methods',
+        appliedMarker: 'listCapabilities: input => zero3CapabilityRuntime.listCapabilities(input)',
+        from: '    claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),',
+        to: "    listCapabilities: input => zero3CapabilityRuntime.listCapabilities(input),\n    describeCapability: input => zero3CapabilityRuntime.describeCapability(input),\n    invokeCapability: input => zero3CapabilityRuntime.invokeCapability(input as any),\n    getOperation: input => zero3CapabilityRuntime.getOperation(input),\n    cancelOperation: input => zero3CapabilityRuntime.cancelOperation(input),\n    claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),"
+      },
+      {
+        label: 'Capability Runtime teardown',
+        appliedMarker: 'zero3CapabilityRuntime.close()',
+        fromAny: [/zero3WorkflowWorkerStore\.close\(\)(?= \}\))/],
+        to: match => `${match}; zero3CapabilityRuntime.close()`
+      },
+      {
         label: 'Remote Worker RPC composite runtime provider',
         appliedMarker: '}, () => zero3WorkerRpcRuntime())',
         fromAny: ['}, () => zero3WorkerAdmin())', WORKER_RUNTIME_PROVIDER],
@@ -285,6 +325,7 @@ export function applyZero3AgentLifecycleRuntime() {
     [
       { label: 'Agent Lifecycle composition point', text: 'const zero3AgentLifecycleRuntime = new Zero3AgentLifecycleRuntime(', count: 1 },
       { label: 'Workflow Worker store composition point', text: 'const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(', count: 1 },
+      { label: 'Capability Runtime composition point', text: 'const zero3CapabilityRuntime = createZero3CapabilityRuntime(', count: 1 },
       { label: 'Worker RPC composite runtime definition', text: 'async function zero3WorkerRpcRuntime(', count: 1 },
       { label: 'Worker RPC composite runtime provider', text: '() => zero3WorkerRpcRuntime()', count: 1 },
       { label: 'Agent Lifecycle teardown', text: 'zero3AgentLifecycleStore.close()', count: 1 },

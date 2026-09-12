@@ -2,24 +2,28 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir, repoRoot } from './config.mjs'
+import { patchOverlaySource } from './overlay-patch.mjs'
 
 function read(file) { return fs.readFileSync(file, 'utf8') }
 function write(file, content) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content) }
-function patchFile(relativePath, replacements) {
+
+// This overlay is replayed over whatever the previous run produced, which
+// includes the tree its own earlier versions generated. Those versions inserted
+// their payload directly before an anchor that they also kept, so re-running a
+// changed payload would have added a second copy of the runtime. Every
+// insertion is therefore delimited by a marker the engine can recognise, and
+// the pre-marker shape is listed as a repair candidate.
+function patchOverlayFile(relativePath, replacements, invariants) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
-  let source = read(file)
-  for (const replacement of replacements) {
-    if (source.includes(replacement.to)) continue
-    if (!source.includes(replacement.from)) {
-      throw new Error(`Zero3 session-provider overlay drift in ${relativePath}: missing ${replacement.label}`)
-    }
-    source = source.replace(replacement.from, replacement.to)
-  }
-  write(file, source)
+  write(file, patchOverlaySource({ relativePath, source: read(file), replacements, invariants }))
+}
+
+function markerBlock(start, end, body) {
+  return start + '\n' + body.replace(/^\n+/, '').replace(/\n+$/, '') + '\n' + end + '\n'
 }
 
 const mainRuntime = String.raw`
-type Zero3SessionProviderId = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'zero3'
+type Zero3SessionProviderId = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'workbuddy' | 'zero3'
 type Zero3ApiProfileProtocol = 'openai_compatible' | 'anthropic' | 'google_gemini'
 type Zero3ApiProfileStored = {
   id: string
@@ -54,7 +58,7 @@ function zero3SessionOptionalText(value: unknown, max = 4096): string | null {
 }
 function zero3SessionProvider(value: unknown): Zero3SessionProviderId {
   const provider = zero3SessionText(value, 'provider', 32)
-  if (!['gpt', 'gemini', 'codex', 'claude', 'antigravity', 'zero3'].includes(provider)) throw new Error('unsupported session provider')
+  if (!['gpt', 'gemini', 'codex', 'claude', 'antigravity', 'workbuddy', 'zero3'].includes(provider)) throw new Error('unsupported session provider')
   return provider as Zero3SessionProviderId
 }
 function zero3SessionSafeBaseUrl(value: unknown): string {
@@ -1057,11 +1061,23 @@ async function zero3RunCodexCliTurn(requestValue: unknown, onProgress?: (payload
     })
   })
 }
+// The interactive login path opens the CLI's own TUI inside a console, so the
+// invocation has to survive cmd.exe quoting rather than argv quoting.
+function zero3CodebuddyInteractiveCommand(): string {
+  const cli = zero3ResolveCodebuddyCli()
+  return [cli.command, ...cli.args].map(part => /\s/.test(part) ? '"' + part + '"' : part).join(' ')
+}
 async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) {
   if (provider === 'gpt' || provider === 'gemini') return { opened: false, detail: '网页会话会直接打开官方登录页' }
   if (provider === 'zero3') return { opened: false, detail: 'Zero3 本体使用 API Profile，不需要 CLI 登录' }
   if (process.platform !== 'win32') return { opened: false, detail: '当前自动打开授权终端仅支持 Windows，请在系统终端完成官方 CLI 登录' }
-  const command = provider === 'codex' ? 'codex login' : provider === 'claude' ? 'claude auth login' : 'agy'
+  const command = provider === 'codex'
+    ? 'codex login'
+    : provider === 'claude'
+      ? 'claude auth login'
+      : provider === 'workbuddy'
+        ? zero3CodebuddyInteractiveCommand()
+        : 'agy'
   const { spawn } = await import('node:child_process')
   const comspec = process.env.ComSpec || 'cmd.exe'
   // The start command is what creates the console. Spawning cmd.exe directly
@@ -1074,7 +1090,13 @@ async function zero3OpenProviderAuthorization(provider: Zero3SessionProviderId) 
   // command line by hand. Passing argv entries instead lets Node quote each one,
   // so the empty title stays an empty title and the command stays one argument.
   const child = spawn(comspec, ['/d', '/c', 'start', '', comspec, '/k', command], {
-    env: provider === 'codex' ? zero3OfficialCodexCliEnv() : provider === 'claude' ? await claudeCliEnvironment() : process.env,
+    env: provider === 'codex'
+      ? zero3OfficialCodexCliEnv()
+      : provider === 'claude'
+        ? await claudeCliEnvironment()
+        : provider === 'workbuddy'
+          ? { ...process.env, ...zero3ResolveCodebuddyCli().env }
+          : process.env,
     stdio: 'ignore',
     windowsHide: false
   })
@@ -1119,6 +1141,253 @@ async function zero3ProbeCodexCli() {
     })
   })
 }
+// WorkBuddy AI ships its own CodeBuddy Code CLI inside the desktop app instead
+// of putting it on PATH. The entry point is a Node script
+// (<WorkBuddy>/resources/app.asar.unpacked/cli/bin/codebuddy), so driving it
+// means spawning an interpreter with that script. Electron's own binary is that
+// interpreter once ELECTRON_RUN_AS_NODE is set, which keeps this provider
+// independent of whichever node happens to be installed.
+const ZERO3_CODEBUDDY_ENTRY = path.join('resources', 'app.asar.unpacked', 'cli', 'bin', 'codebuddy')
+const ZERO3_CODEBUDDY_NAMES = ['codebuddy', 'cbc', 'codebuddy-code']
+const ZERO3_CODEBUDDY_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+
+type Zero3CodebuddyCli = {
+  command: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  /** Which location answered, for a message the user can act on. */
+  source: string
+}
+
+function zero3CodebuddyInstallRoots(): string[] {
+  const local = process.env.LOCALAPPDATA
+  const programFiles = process.env.ProgramFiles
+  const programFilesX86 = process.env['ProgramFiles(x86)']
+  return [
+    local ? path.join(local, 'Programs', 'WorkBuddyAI') : '',
+    programFiles ? path.join(programFiles, 'WorkBuddyAI') : '',
+    programFilesX86 ? path.join(programFilesX86, 'WorkBuddyAI') : ''
+  ].filter(Boolean)
+}
+
+// npm's CodeBuddy shim forwards to an extension-less bin script, which the
+// generic Windows resolver's .js-shaped pattern does not recognise.
+function zero3CodebuddyShimScript(shimPath: string): string | null {
+  let text: string
+  try { text = fs.readFileSync(shimPath, 'utf8') } catch { return null }
+  const callLine = text.split(/\r?\n/).find(line => line.includes('%*'))
+  if (!callLine) return null
+  const reference = /%~?dp0%\\?([^"\r\n]+?)(?="|\s|$)/i.exec(callLine)?.[1]
+  if (!reference) return null
+  const target = path.resolve(path.dirname(shimPath), reference.trim())
+  return fs.existsSync(target) ? target : null
+}
+
+function zero3CodebuddyOnPath(): string | null {
+  if (process.platform === 'win32') {
+    for (const name of ZERO3_CODEBUDDY_NAMES) {
+      const resolved = resolveWindowsCommand(name)
+      if (resolved.command === name) continue
+      return resolved.args.length ? resolved.args[resolved.args.length - 1] : resolved.command
+    }
+  }
+  const extensions = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['', '.js']
+  for (const directory of (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    for (const name of ZERO3_CODEBUDDY_NAMES) {
+      for (const extension of extensions) {
+        const candidate = path.join(directory, name + extension)
+        if (!fs.existsSync(candidate)) continue
+        if (/\.(?:cmd|bat)$/i.test(candidate)) {
+          const script = zero3CodebuddyShimScript(candidate)
+          if (script) return script
+          continue
+        }
+        return candidate
+      }
+    }
+  }
+  return null
+}
+
+function zero3ResolveCodebuddyCli(): Zero3CodebuddyCli {
+  const override = process.env.ZERO3_CODEBUDDY_CLI_BIN?.trim()
+  const candidates: Array<{ path: string; source: string }> = []
+  if (override) candidates.push({ path: override, source: '环境变量 ZERO3_CODEBUDDY_CLI_BIN' })
+  const onPath = zero3CodebuddyOnPath()
+  if (onPath) candidates.push({ path: onPath, source: 'PATH 上的 codebuddy CLI' })
+  for (const root of zero3CodebuddyInstallRoots()) {
+    candidates.push({ path: path.join(root, ZERO3_CODEBUDDY_ENTRY), source: 'WorkBuddy AI 应用内置的 CodeBuddy Code CLI' })
+  }
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate.path)) continue
+    // A real executable is spawned as-is; everything else in this family is a
+    // Node entry script and needs an interpreter.
+    if (/\.exe$/i.test(candidate.path)) return { command: candidate.path, args: [], env: {}, source: candidate.source }
+    return { command: process.execPath, args: [candidate.path], env: { ELECTRON_RUN_AS_NODE: '1' }, source: candidate.source }
+  }
+  throw new Error(
+    '未找到 WorkBuddy AI 的 CodeBuddy Code CLI：请确认已安装 WorkBuddy AI 桌面应用，' +
+    '或用 ZERO3_CODEBUDDY_CLI_BIN 指定 codebuddy 入口脚本的完整路径'
+  )
+}
+
+// '--version' is the CLI's own fast path: it prints the version before loading
+// its bundle, so probing costs a process start rather than a network round
+// trip. It cannot prove a login exists, and CodeBuddy exposes no
+// 'login status' to ask -- reporting null says "installed, not verified"
+// instead of inventing either answer.
+async function zero3ProbeCodebuddyCli() {
+  const { spawn } = await import('node:child_process')
+  let cli: Zero3CodebuddyCli
+  try {
+    cli = zero3ResolveCodebuddyCli()
+  } catch (error) {
+    return {
+      available: false,
+      authenticated: null,
+      detail: error instanceof Error ? error.message : String(error)
+    }
+  }
+  return new Promise<{ available: boolean; authenticated: boolean | null; detail: string }>(resolve => {
+    const child = spawn(cli.command, [...cli.args, '--version'], {
+      env: { ...process.env, ...cli.env },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    const chunks: Buffer[] = []
+    const timer = setTimeout(() => child.kill(), 20_000)
+    child.stdout.on('data', chunk => chunks.push(Buffer.from(chunk)))
+    child.stderr.on('data', chunk => chunks.push(Buffer.from(chunk)))
+    child.once('error', error => {
+      clearTimeout(timer)
+      const cause = error instanceof Error ? error.message : String(error)
+      resolve({ available: false, authenticated: null, detail: '无法启动 CodeBuddy Code CLI（' + cli.source + '）：' + cause })
+    })
+    child.once('close', code => {
+      clearTimeout(timer)
+      const output = Buffer.concat(chunks).toString('utf8').trim()
+      if (code !== 0) {
+        return resolve({ available: false, authenticated: null, detail: output.slice(0, 200) || 'CodeBuddy Code CLI 退出码 ' + String(code) })
+      }
+      const version = output.split(/\r?\n/).map(line => line.trim()).filter(Boolean).at(-1) ?? ''
+      resolve({
+        available: true,
+        authenticated: null,
+        detail: '已检测到 CodeBuddy Code ' + (version || 'CLI') + '（' + cli.source + '）；登录状态以首次发送为准'
+      })
+    })
+  })
+}
+
+// CodeBuddy Code answers '--output-format json' with an array of stream events
+// whose final entry carries the assistant text and the session id. Older or
+// piped invocations emit one JSON object per line instead, so both shapes are
+// read here rather than assuming the array.
+function zero3CodebuddyResult(output: string): { text: string; sessionId: string | null; isError: boolean } | null {
+  const trimmed = output.trim()
+  const events: unknown[] = []
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (Array.isArray(parsed)) events.push(...parsed)
+    else events.push(parsed)
+  } catch {
+    for (const line of trimmed.split(/\r?\n/)) {
+      const value = line.trim()
+      if (!value.startsWith('{')) continue
+      try { events.push(JSON.parse(value)) } catch { /* Not every line is JSON. */ }
+    }
+  }
+  let result: Record<string, unknown> | null = null
+  for (const event of events) {
+    const record = zero3SessionRecord(event)
+    if (record.type === 'result') result = record
+  }
+  if (!result) return null
+  const text = typeof result.result === 'string' ? result.result.trim() : ''
+  const sessionId = typeof result.session_id === 'string' && result.session_id.trim() ? result.session_id.trim() : null
+  return { text, sessionId, isError: result.is_error === true }
+}
+
+// WorkBuddy AI's CLI is an external collaborator on the same footing as Claude
+// Code: driven headlessly, resumed by the id it reports, and never asked for
+// credentials -- the login it reuses belongs to the WorkBuddy app.
+async function zero3RunCodebuddyTurn(requestValue: unknown) {
+  const request = zero3SessionRecord(requestValue)
+  const text = zero3SessionText(request.text, 'WorkBuddy prompt', 128_000)
+  const cwd = zero3SessionOptionalText(request.cwd, 4096)
+  const sessionId = zero3SessionOptionalText(request.sessionId, 512)
+  const model = zero3SessionOptionalText(request.model, 256)
+  const effort = zero3SessionOptionalText(request.effort, 16)
+  if (effort && !ZERO3_CODEBUDDY_EFFORTS.includes(effort)) {
+    throw new Error('WorkBuddy effort must be low, medium, high, xhigh, or max')
+  }
+  const cli = zero3ResolveCodebuddyCli()
+  // 'dontAsk' reads as the safe non-interactive choice, but it denies tool use
+  // outright: asked to create a file the CLI answers that it cannot and the turn
+  // is wasted. 'auto' is the classifier-backed mode that actually approves work
+  // inside the session, which is the same footing Codex gets from
+  // --sandbox workspace-write.
+  const args = ['-p', '--output-format', 'json', '--permission-mode', 'auto']
+  if (model) args.push('--model', model)
+  if (effort) args.push('--effort', effort)
+  if (sessionId) args.push('--resume', sessionId)
+  const { spawn } = await import('node:child_process')
+  return new Promise<{ text: string; sessionId: string | null }>((resolve, reject) => {
+    const child = spawn(cli.command, [...cli.args, ...args], {
+      ...(cwd ? { cwd } : {}),
+      env: { ...process.env, ...cli.env },
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    const stdout: Buffer[] = []
+    const stderr: Buffer[] = []
+    let bytes = 0
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error('WorkBuddy AI（CodeBuddy Code）turn 超时'))
+    }, ZERO3_LOCAL_AGENT_TIMEOUT_MS)
+    const capture = (target: Buffer[], chunk: Buffer) => {
+      bytes += chunk.byteLength
+      if (bytes > ZERO3_API_MAX_RESPONSE_BYTES) {
+        child.kill()
+        reject(new Error('WorkBuddy AI（CodeBuddy Code）输出超过 16 MiB'))
+        return
+      }
+      target.push(Buffer.from(chunk))
+    }
+    child.stdout.on('data', chunk => capture(stdout, Buffer.from(chunk)))
+    child.stderr.on('data', chunk => capture(stderr, Buffer.from(chunk)))
+    child.once('error', error => { clearTimeout(timer); reject(error) })
+    // The prompt travels over stdin so it is never parsed as an argument.
+    child.stdin.on('error', () => {})
+    child.stdin.end(text, 'utf8')
+    child.once('close', code => {
+      clearTimeout(timer)
+      const output = Buffer.concat(stdout).toString('utf8')
+      const errorOutput = Buffer.concat(stderr).toString('utf8')
+      const failure = {
+        provider: 'workbuddy',
+        command: cli.command,
+        args: [...cli.args, ...args],
+        cwd,
+        exitCode: code,
+        stderr: errorOutput,
+        stdout: output,
+        promptChars: text.length
+      }
+      if (code !== 0) return void zero3TurnFailureError('WorkBuddy AI 执行失败', failure).then(reject)
+      const parsed = zero3CodebuddyResult(output)
+      if (!parsed) return reject(new Error('WorkBuddy AI（CodeBuddy Code）没有返回可解析的结果'))
+      // The CLI reports a refused request in-band and still exits zero, so an
+      // error result must not be handed back as if it were an answer.
+      if (parsed.isError) {
+        return void zero3TurnFailureError('WorkBuddy AI 拒绝了这次请求', { ...failure, stderr: parsed.text || errorOutput }).then(reject)
+      }
+      if (!parsed.text) return reject(new Error('WorkBuddy AI（CodeBuddy Code）没有返回 assistant 文本'))
+      resolve({ text: parsed.text, sessionId: parsed.sessionId ?? sessionId })
+    })
+  })
+}
 async function zero3SetSessionProviderArchived(requestValue: unknown) {
   const request = zero3SessionRecord(requestValue)
   const provider = zero3SessionProvider(request.provider)
@@ -1144,6 +1413,12 @@ async function zero3SetSessionProviderArchived(requestValue: unknown) {
   }
   if (provider === 'antigravity') {
     return { native: false, detail: 'Antigravity currently has no persistent session archive API' }
+  }
+  if (provider === 'workbuddy') {
+    // CodeBuddy Code keeps its transcript on disk and resumes by session id,
+    // but exposes no archive/unarchive command. Zero3 owns only the visibility
+    // flag for this provider, exactly as it does for Claude Code.
+    return { native: false, detail: 'WorkBuddy AI（CodeBuddy Code）没有受支持的会话归档接口；本地会话记录保持完整' }
   }
 
   const command = process.env.ZERO3_CODEX_CLI_BIN?.trim() || 'codex'
@@ -1253,7 +1528,7 @@ async function zero3SessionProviderStatus(provider?: string) {
   // available stays null on a timeout rather than collapsing to false: a probe
   // that did not finish has not shown the CLI to be missing, and 未安装 on a
   // working install is the exact failure this picker already put users through.
-  const [codexCli, claude, antigravityAuth, profiles] = await Promise.all([
+  const [codexCli, claude, workbuddyCli, antigravityAuth, profiles] = await Promise.all([
     wants('codex') ? zero3ProbeWithDeadline<Zero3CliProbeResult>(zero3ProbeCodexCli(), {
       available: null,
       authenticated: null,
@@ -1263,6 +1538,11 @@ async function zero3SessionProviderStatus(provider?: string) {
       available: null,
       authenticated: null,
       detail: '检测超时（15 秒）：Claude Code CLI 未在时限内响应'
+    }) : Promise.resolve(unknown),
+    wants('workbuddy') ? zero3ProbeWithDeadline<Zero3CliProbeResult>(zero3ProbeCodebuddyCli(), {
+      available: null,
+      authenticated: null,
+      detail: '检测超时（15 秒）：CodeBuddy Code CLI 未在时限内响应'
     }) : Promise.resolve(unknown),
     // The adapter reads a running session's auth state first and only then pays
     // for a CLI round trip, so this stays cheap while the picker is open.
@@ -1317,6 +1597,14 @@ async function zero3SessionProviderStatus(provider?: string) {
           : antigravityAuthenticated === false
             ? zero3ProviderHint('Antigravity 授权已失效或缺失：请运行 agy 完成官方登录', antigravityAuth.detail)
             : zero3ProviderHint('已安装；暂时无法确认官方授权状态', antigravityAuth.detail)
+    },
+    workbuddy: {
+      available: workbuddyCli.available,
+      authenticated: workbuddyCli.authenticated,
+      authMode: 'cli' as const,
+      detail: workbuddyCli.available === false
+        ? zero3ProviderHint(workbuddyCli.detail || '未检测到 WorkBuddy AI 的 CodeBuddy Code CLI', null)
+        : workbuddyCli.detail
     },
     zero3: {
       available: true,
@@ -1397,6 +1685,7 @@ ipcMain.handle('zero3:session-providers:zero3-turn', async (_event, requestValue
 })
 ipcMain.handle('zero3:session-providers:set-archived', (_event, request: unknown) => zero3SetSessionProviderArchived(request))
 ipcMain.handle('zero3:session-providers:claude-turn', (_event, request: unknown) => zero3RunClaudeTurn(request))
+ipcMain.handle('zero3:session-providers:workbuddy-turn', (_event, request: unknown) => zero3RunCodebuddyTurn(request))
 ipcMain.handle('zero3:session-providers:codex-turn', (event, request: unknown) => zero3RunCodexCliTurn(request, payload => {
   if (!event.sender.isDestroyed()) event.sender.send('zero3:session-providers:codex-progress', payload)
 }))
@@ -1413,6 +1702,7 @@ const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionP
   zero3Turn: request => ipcRenderer.invoke('zero3:session-providers:zero3-turn', request),
   setArchived: request => ipcRenderer.invoke('zero3:session-providers:set-archived', request),
   claudeTurn: request => ipcRenderer.invoke('zero3:session-providers:claude-turn', request),
+  workbuddyTurn: request => ipcRenderer.invoke('zero3:session-providers:workbuddy-turn', request),
   codexTurn: request => ipcRenderer.invoke('zero3:session-providers:codex-turn', request),
   onCodexProgress: callback => {
     const listener = (_event, payload) => callback(payload)
@@ -1421,10 +1711,10 @@ const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionP
   }
 })
 
-contextBridge.exposeInMainWorld('zero3AgentTask', {`
+`
 
 const globalTypes = String.raw`
-type Zero3SessionProviderId = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'zero3'
+type Zero3SessionProviderId = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'workbuddy' | 'zero3'
 type Zero3SessionProviderStatus = {
   /** null means the probe did not finish: unknown, not missing. */
   available: boolean | null
@@ -1448,7 +1738,7 @@ type Zero3ApiProfile = {
 `
 
 const globalSurface = String.raw`    zero3SessionProviders: {
-      usage: (request: { provider: 'codex' | 'claude' | 'antigravity' | 'zero3'; profileId?: string | null; force?: boolean }) => Promise<import('../electron/zero3/provider-usage/provider-usage').ProviderUsage>
+      usage: (request: { provider: 'codex' | 'claude' | 'antigravity' | 'workbuddy' | 'zero3'; profileId?: string | null; force?: boolean }) => Promise<import('../electron/zero3/provider-usage/provider-usage').ProviderUsage>
       status: (request?: { provider: Zero3SessionProviderId }) => Promise<Partial<Zero3SessionProviderStatusMap>>
       authorize: (request: { provider: Zero3SessionProviderId }) => Promise<{ opened: boolean; detail: string }>
       listZero3Profiles: () => Promise<Zero3ApiProfile[]>
@@ -1457,14 +1747,67 @@ const globalSurface = String.raw`    zero3SessionProviders: {
       zero3Turn: (request: { profileId: string; text: string; cwd: string; projectId: string; threadId?: string | null; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) => Promise<{ text: string; model: string; profileId: string; threadId: string }>
       setArchived: (request: { provider: Exclude<Zero3SessionProviderId, 'gpt' | 'gemini'>; runtimeId?: string | null; archived: boolean }) => Promise<{ native: boolean; detail: string }>
       claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null }) => Promise<{ text: string; sessionId: string | null }>
+      workbuddyTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null }) => Promise<{ text: string; sessionId: string | null }>
       codexTurn: (request: { text: string; cwd?: string | null; threadId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | null; requestId?: string | null }) => Promise<{ text: string; threadId: string | null }>
       onCodexProgress: (callback: (event: Zero3CodexProgressEvent) => void) => () => void
     }
-    zero3AgentTask: {`
+`
+
+// Payload revision. The marker doubles as the engine's "already applied" proof,
+// so bump this whenever the injected payload changes: the previous revision then
+// becomes a repair candidate and an already-staged tree picks up the new runtime
+// on the next prepare, instead of silently keeping the old one.
+const SESSION_PROVIDER_REVISION = 'v1'
+
+function sessionProviderMarkers(kind) {
+  return {
+    start: `/* zero3:session-provider-${kind}:start ${SESSION_PROVIDER_REVISION} */`,
+    end: `/* zero3:session-provider-${kind}:end ${SESSION_PROVIDER_REVISION} */`,
+    // Any earlier revision of this block, so a payload change replaces it.
+    anyRevision: new RegExp(String.raw`/\* zero3:session-provider-${kind}:start [^*]*\*/[\s\S]*?/\* zero3:session-provider-${kind}:end \*/\n`)
+  }
+}
+
+const runtimeMarkers = sessionProviderMarkers('runtime')
+const preloadMarkers = sessionProviderMarkers('preload')
+const typesMarkers = sessionProviderMarkers('types')
+const surfaceMarkers = sessionProviderMarkers('surface')
+
+const MAIN_ANCHOR = 'const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({'
+const PRELOAD_ANCHOR = "contextBridge.exposeInMainWorld('zero3AgentTask', {"
+const TYPES_ANCHOR = 'type Zero3AgentTaskTarget ='
+const SURFACE_ANCHOR = '    zero3AgentTask: {'
+
+const escapePattern = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// What this overlay wrote before the markers existed. Anchoring on the retired
+// provider union (no 'workbuddy') keeps these from matching the current block.
+const LEGACY_PROVIDER_UNION = "type Zero3SessionProviderId = 'gpt' | 'gemini' | 'codex' | 'claude' | 'antigravity' | 'zero3'"
+const LEGACY_MAIN_BLOCK = new RegExp(
+  String.raw`\n${escapePattern(LEGACY_PROVIDER_UNION)}\n[\s\S]*?\n(?=${escapePattern(MAIN_ANCHOR)})`
+)
+const LEGACY_PRELOAD_BLOCK = /contextBridge\.exposeInMainWorld\('zero3SessionProviders', \{[\s\S]*?\n\n(?=contextBridge\.exposeInMainWorld\('zero3AgentTask', \{)/
+const LEGACY_TYPES_BLOCK = new RegExp(
+  String.raw`\n${escapePattern(LEGACY_PROVIDER_UNION)}\n[\s\S]*?\n(?=${escapePattern(TYPES_ANCHOR)})`
+)
+const LEGACY_SURFACE_BLOCK = /    zero3SessionProviders: \{[\s\S]*?\n(?=    zero3AgentTask: \{)/
+
+const sessionProviderRuntimeBlock = markerBlock(runtimeMarkers.start, runtimeMarkers.end, mainRuntime)
+const sessionProviderPreloadBlock = markerBlock(preloadMarkers.start, preloadMarkers.end, preloadSurface)
+const sessionProviderTypesBlock = markerBlock(typesMarkers.start, typesMarkers.end, globalTypes)
+const sessionProviderSurfaceBlock = markerBlock(surfaceMarkers.start, surfaceMarkers.end, globalSurface)
+
+// Candidates are tried in order, so the narrowest existing shape is repaired
+// first and the bare anchor only ever runs on a tree with no block at all.
+const sessionProviderCandidates = (markers, legacyBlock, anchor, block) => [
+  { from: markers.anyRevision, to: block },
+  { from: legacyBlock, to: block },
+  { from: anchor, to: block + anchor }
+]
 
 export function applyZero3SessionProviderRuntime() {
   fs.cpSync(path.join(repoRoot, 'apps/zero3-desktop/provider-usage-runtime'), path.join(hermesDesktopDir, 'electron/zero3/provider-usage'), { recursive: true })
-  patchFile('electron/main.ts', [
+  patchOverlayFile('electron/main.ts', [
     {
       label: 'windows CLI resolver import',
       from: "import { Zero3AntigravityAdapter } from './zero3/antigravity/index'",
@@ -1476,28 +1819,35 @@ export function applyZero3SessionProviderRuntime() {
         "import { fetchUsageJson } from './zero3/provider-usage/usage-fetch'"
     },
     {
-      label: 'session provider IPC before Agent orchestrator',
-      from: 'const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({',
-      to: mainRuntime + '\nconst zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({'
+      label: 'session provider runtime before Agent orchestrator',
+      appliedMarker: runtimeMarkers.start,
+      fromAny: sessionProviderCandidates(runtimeMarkers, LEGACY_MAIN_BLOCK, MAIN_ANCHOR, sessionProviderRuntimeBlock)
     }
+  ], [
+    { label: 'session provider runtime block', text: runtimeMarkers.start, count: 1 }
   ])
-  patchFile('electron/preload.ts', [
+  patchOverlayFile('electron/preload.ts', [
     {
       label: 'session provider preload before Agent Task bridge',
-      from: "contextBridge.exposeInMainWorld('zero3AgentTask', {",
-      to: preloadSurface
+      appliedMarker: preloadMarkers.start,
+      fromAny: sessionProviderCandidates(preloadMarkers, LEGACY_PRELOAD_BLOCK, PRELOAD_ANCHOR, sessionProviderPreloadBlock)
     }
+  ], [
+    { label: 'session provider preload block', text: preloadMarkers.start, count: 1 }
   ])
-  patchFile('src/global.d.ts', [
+  patchOverlayFile('src/global.d.ts', [
     {
       label: 'session provider renderer types',
-      from: 'type Zero3AgentTaskTarget =',
-      to: globalTypes + '\ntype Zero3AgentTaskTarget ='
+      appliedMarker: typesMarkers.start,
+      fromAny: sessionProviderCandidates(typesMarkers, LEGACY_TYPES_BLOCK, TYPES_ANCHOR, sessionProviderTypesBlock)
     },
     {
       label: 'session provider renderer surface',
-      from: '    zero3AgentTask: {',
-      to: globalSurface
+      appliedMarker: surfaceMarkers.start,
+      fromAny: sessionProviderCandidates(surfaceMarkers, LEGACY_SURFACE_BLOCK, SURFACE_ANCHOR, sessionProviderSurfaceBlock)
     }
+  ], [
+    { label: 'session provider renderer types block', text: typesMarkers.start, count: 1 },
+    { label: 'session provider renderer surface block', text: surfaceMarkers.start, count: 1 }
   ])
 }

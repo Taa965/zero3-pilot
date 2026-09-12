@@ -32,8 +32,16 @@ const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 3] = ["2025-03-26", "2025-06-18", 
 const BUILT_WORKER_OAUTH_ISSUER: Option<&str> = option_env!("ZERO3_WORKER_OAUTH_ISSUER_BUILD");
 const WORKER_CAPABILITY: &str = "worker-protocol-v1";
 const SKILL_CAPABILITY: &str = "codex-native-skills-v1";
+const REMOTE_CAPABILITY: &str = "zero3-capability-v1";
+const CAPABILITY_TOOLS: [&str; 5] = [
+    "list_capabilities",
+    "describe_capability",
+    "invoke_capability",
+    "get_operation",
+    "cancel_operation",
+];
 const SKILL_TOOLS: [&str; 4] = ["list_skills", "search_skills", "get_skill", "invoke_skill"];
-const WORKER_TOOLS: [&str; 21] = [
+const WORKER_TOOLS: [&str; 22] = [
     "register_worker",
     "claim_work",
     "report_progress",
@@ -50,12 +58,19 @@ const WORKER_TOOLS: [&str; 21] = [
     "handoff_create",
     "task_bootstrap",
     "dispatch_codex_task",
+    "dispatch_agent_task",
     "verify_commit",
     "bootstrap_worker",
     "commit_and_claim_next",
     "report_blocked",
     "recover_worker",
 ];
+// Tools whose result only arrives after a long local execution. They get the
+// long request/lease window so a real agent task is not fenced out mid-flight by
+// the default 30s lease.
+fn is_long_running_worker_tool(tool: &str) -> bool {
+    matches!(tool, "verify_commit" | "dispatch_agent_task")
+}
 #[derive(Clone)]
 pub struct WorkerGatewayRuntime {
     gateway: Option<Arc<WorkerGateway>>,
@@ -157,7 +172,12 @@ struct WorkerGateway {
 struct ApiError {
     status: StatusCode,
     message: String,
-    headers: HeaderMap,
+    // Boxed so the error stays small enough to return by value from every
+    // gateway handler without tripping clippy::result_large_err. The response
+    // headers are still the same HeaderMap; they are simply no longer inline in
+    // the returned error, which is what made every `Result<_, ApiError>` in this
+    // module a large-Err type.
+    headers: Box<HeaderMap>,
 }
 
 impl ApiError {
@@ -165,7 +185,7 @@ impl ApiError {
         Self {
             status,
             message: message.into(),
-            headers: HeaderMap::new(),
+            headers: Box::new(HeaderMap::new()),
         }
     }
 
@@ -177,11 +197,25 @@ impl ApiError {
     }
 }
 
+/// Terminal outcome of one Worker RPC request.
+///
+/// `complete` and `fail` are the only producers, and everything they hand to
+/// `finish` is one indivisible decision (the state plus the result-or-error that
+/// justifies it). Grouping them keeps `finish` inside the reviewed argument
+/// budget instead of suppressing clippy's argument-count lint on a security-
+/// relevant gateway method.
+#[derive(Debug)]
+struct WorkerOutcome {
+    result: Option<Value>,
+    error: Option<String>,
+    state: WorkerRequestState,
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
             self.status,
-            self.headers,
+            *self.headers,
             Json(json!({ "error": self.message })),
         )
             .into_response()
@@ -299,6 +333,11 @@ impl WorkerGateway {
             state: Mutex::new(state),
         })
     }
+    // Production dispatch always names the protocol explicitly through
+    // `submit_for`; the Worker-Protocol shorthand only exists for the tests that
+    // exercise the gateway queue, so it must not be compiled into the binary as
+    // dead code.
+    #[cfg(test)]
     fn submit(&self, tool: &str, arguments: Value) -> Result<WorkerRpcRecord, ApiError> {
         self.submit_for(WORKER_CAPABILITY, tool, arguments)
     }
@@ -352,6 +391,8 @@ impl WorkerGateway {
                 "{}-{}",
                 if capability == SKILL_CAPABILITY {
                     "srpc"
+                } else if capability == REMOTE_CAPABILITY {
+                    "crpc"
                 } else {
                     "wrpc"
                 },
@@ -372,7 +413,7 @@ impl WorkerGateway {
             created_at: now,
             updated_at: now,
             expires_at: now
-                + if capability == SKILL_CAPABILITY || tool == "verify_commit" {
+                + if capability == SKILL_CAPABILITY || is_long_running_worker_tool(tool) {
                     Duration::seconds(SKILL_REQUEST_TTL_SECONDS)
                 } else {
                     self.request_ttl
@@ -384,6 +425,9 @@ impl WorkerGateway {
             .insert(record.request_id.clone(), record.clone());
         Ok(record)
     }
+    // Same rule as `submit`: the capability-scoped `try_lease_for` is the
+    // production entry point, and this shorthand only serves tests.
+    #[cfg(test)]
     fn try_lease(&self, node_id: &str) -> Result<Option<WorkerRpcLease>, ApiError> {
         self.try_lease_for(node_id, &[WORKER_CAPABILITY.to_string()])
     }
@@ -431,7 +475,9 @@ impl WorkerGateway {
         })?;
         record.lease_expires_at = Some(
             Utc::now()
-                + if record.capability == SKILL_CAPABILITY || record.tool == "verify_commit" {
+                + if record.capability == SKILL_CAPABILITY
+                    || is_long_running_worker_tool(&record.tool)
+                {
                     Duration::seconds(SKILL_LEASE_TTL_SECONDS)
                 } else {
                     self.lease_ttl
@@ -466,9 +512,11 @@ impl WorkerGateway {
             node_id,
             lease_id,
             fencing_token,
-            Some(result),
-            None,
-            WorkerRequestState::Completed,
+            WorkerOutcome {
+                result: Some(result),
+                error: None,
+                state: WorkerRequestState::Completed,
+            },
         )
     }
 
@@ -492,9 +540,11 @@ impl WorkerGateway {
             node_id,
             lease_id,
             fencing_token,
-            None,
-            Some(detail.to_string()),
-            WorkerRequestState::Failed,
+            WorkerOutcome {
+                result: None,
+                error: Some(detail.to_string()),
+                state: WorkerRequestState::Failed,
+            },
         )
     }
 
@@ -504,9 +554,7 @@ impl WorkerGateway {
         node_id: &str,
         lease_id: &str,
         fencing_token: u64,
-        result: Option<Value>,
-        error: Option<String>,
-        state_value: WorkerRequestState,
+        outcome: WorkerOutcome,
     ) -> Result<WorkerRpcRecord, ApiError> {
         validate_id("worker request_id", request_id)?;
         let mut state = self.state.lock().unwrap();
@@ -516,7 +564,10 @@ impl WorkerGateway {
                 ApiError::new(StatusCode::NOT_FOUND, "worker RPC request not found")
             })?;
         if record.state.is_terminal() {
-            if record.state == state_value && record.result == result && record.error == error {
+            if record.state == outcome.state
+                && record.result == outcome.result
+                && record.error == outcome.error
+            {
                 return Ok(record);
             }
             return Err(ApiError::new(
@@ -525,9 +576,9 @@ impl WorkerGateway {
             ));
         }
         validate_active_lease(&record, node_id, lease_id, fencing_token)?;
-        record.state = state_value;
-        record.result = result;
-        record.error = error;
+        record.state = outcome.state;
+        record.result = outcome.result;
+        record.error = outcome.error;
         record.updated_at = Utc::now();
         record.lease_expires_at = None;
         self.persist(&record).map_err(ApiError::internal)?;
@@ -603,11 +654,11 @@ async fn worker_lease(
     Json(body): Json<WorkerLeaseBody>,
 ) -> Result<Json<Option<WorkerRpcLease>>, ApiError> {
     require_host(&runtime, &headers, &body.node_id)?;
-    if !body
-        .capabilities
-        .iter()
-        .any(|capability| capability == WORKER_CAPABILITY || capability == SKILL_CAPABILITY)
-    {
+    if !body.capabilities.iter().any(|capability| {
+        capability == WORKER_CAPABILITY
+            || capability == SKILL_CAPABILITY
+            || capability == REMOTE_CAPABILITY
+    }) {
         return Err(ApiError::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "a supported worker RPC capability is required",
@@ -710,7 +761,7 @@ async fn mcp_handler(
             Ok(StatusCode::ACCEPTED.into_response())
         }
         "ping" => Ok(mcp_result(id, json!({}))),
-        "tools/list" => Ok(mcp_result(id, json!({"tools": worker_tool_catalog()}))),
+        "tools/list" => Ok(mcp_result(id, json!({"tools": mcp_tool_catalog()}))),
         "tools/call" => mcp_call_tool(runtime, id, request.get("params")).await,
         _ => Ok(mcp_error(id, -32601, "Method not found")),
     }
@@ -735,7 +786,12 @@ async fn mcp_call_tool(
         .cloned()
         .unwrap_or_else(|| Value::Object(Map::new()));
     let gateway = runtime.gateway()?;
-    let submitted = gateway.submit(name, arguments)?;
+    let protocol = if CAPABILITY_TOOLS.contains(&name) {
+        REMOTE_CAPABILITY
+    } else {
+        WORKER_CAPABILITY
+    };
+    let submitted = gateway.submit_for(protocol, name, arguments)?;
     let deadline = Instant::now() + StdDuration::from_secs(DEFAULT_MCP_WAIT_SECONDS);
     loop {
         let current = gateway.get(&submitted.request_id)?;
@@ -1028,6 +1084,7 @@ fn validate_tool_for(capability: &str, tool: &str) -> Result<(), ApiError> {
     let known = match capability {
         WORKER_CAPABILITY => WORKER_TOOLS.contains(&tool),
         SKILL_CAPABILITY => SKILL_TOOLS.contains(&tool),
+        REMOTE_CAPABILITY => CAPABILITY_TOOLS.contains(&tool),
         _ => false,
     };
     if known {
@@ -1279,6 +1336,24 @@ fn worker_tool_catalog() -> Vec<Value> {
                 "requireRemoteSyncOnSuccess":{"type":"boolean"}, "idempotencyKey":id_schema()
             }), &["sessionId","workspace","objective","idempotencyKey"], false,
         ),
+        // Unified task entry: Zero3 decides which executor runs the task. The
+        // schema intentionally exposes only a typed objective/task contract --
+        // never a command, a shell string, or an executable.
+        tool_definition(
+            "dispatch_agent_task", "Dispatch Unified Zero3 Agent Task",
+            "Dispatch one objective through the Zero3 Intelligent Agent Task Router, which selects Codex, Claude, Gemini or the Zero3 API from capability, availability and history. Only a typed objective, constraints and acceptance criteria are accepted; no shell command, executable, credential, or routing internals are exposed.",
+            json!({
+                "sessionId":id_schema(), "objective":{"type":"string","minLength":1,"maxLength":64000},
+                "projectId":id_schema(), "workspace":{"type":"string","maxLength":4096},
+                "routingMode":{"type":"string","enum":["AUTO","PINNED","PREFERRED"]},
+                "preferredExecutor":{"type":"string","enum":["CODEX","CLAUDE","GEMINI","ZERO3_API"]},
+                "taskType":{"type":"string","enum":["DESIGN","IMPLEMENT","VERIFY","FIX","REVIEW","INTEGRATE","RESEARCH"]},
+                "importance":{"type":"string","enum":["low","normal","high","critical"]},
+                "constraints":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}},
+                "acceptanceCriteria":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}},
+                "idempotencyKey":id_schema()
+            }), &["sessionId","objective","idempotencyKey"], false,
+        ),
         tool_definition(
             "verify_commit", "Verify Commit And Push",
             "Run only allow-listed static checks, then stage only declared task-owned paths, create one scoped Git commit and non-force push the current branch. Fails closed on unrelated staged changes or unsafe repository state.",
@@ -1321,6 +1396,49 @@ fn worker_tool_catalog() -> Vec<Value> {
             &["bindingTicket"], false,
         ),
     ]
+}
+
+fn capability_tool_catalog() -> Vec<Value> {
+    vec![
+        tool_definition(
+            "list_capabilities", "List Zero3 Local Capabilities",
+            "List capabilities currently registered by the authoritative local Zero3 Pilot. The plugin only transports this request; execution authority remains local.",
+            json!({"category":{"type":"string","minLength":1,"maxLength":128}}), &[], true,
+        ),
+        tool_definition(
+            "describe_capability", "Describe Zero3 Local Capability",
+            "Return the local Zero3 definition, schemas, availability and execution metadata for one registered capability.",
+            json!({"capability":{"type":"string","minLength":1,"maxLength":128}}), &["capability"], true,
+        ),
+        tool_definition(
+            "invoke_capability", "Invoke Zero3 Local Capability",
+            "Ask local Zero3 Pilot to authorize and invoke one registered capability. Local Policy remains authoritative; long-running work is represented by an operationId.",
+            json!({
+                "capability":{"type":"string","minLength":1,"maxLength":128},
+                "input":{"type":"object"},
+                "context":{"type":"object","properties":{
+                    "projectId":id_schema(),"taskId":id_schema(),"sessionId":id_schema()
+                },"additionalProperties":false},
+                "idempotencyKey":id_schema()
+            }), &["capability","idempotencyKey"], false,
+        ),
+        tool_definition(
+            "get_operation", "Get Zero3 Capability Operation",
+            "Read authoritative local execution state/result for a previously invoked Zero3 capability operation.",
+            json!({"operationId":id_schema()}), &["operationId"], true,
+        ),
+        tool_definition(
+            "cancel_operation", "Cancel Zero3 Capability Operation",
+            "Request cancellation of a cancellable local Zero3 capability operation. Cancellation is enforced by the local runtime.",
+            json!({"operationId":id_schema(),"idempotencyKey":id_schema()}), &["operationId"], false,
+        ),
+    ]
+}
+
+fn mcp_tool_catalog() -> Vec<Value> {
+    let mut tools = worker_tool_catalog();
+    tools.extend(capability_tool_catalog());
+    tools
 }
 
 fn skill_tool_catalog() -> Vec<Value> {
@@ -1621,10 +1739,32 @@ mod tests {
         assert_eq!(names, WORKER_TOOLS);
         let serialized = serde_json::to_string(&catalog).unwrap();
         assert!(serialized.contains("dispatch_codex_task"));
+        assert!(serialized.contains("dispatch_agent_task"));
         assert!(serialized.contains("verify_commit"));
         assert!(serialized.contains("task_bootstrap"));
         assert!(!serialized.contains("run_gpu"));
         assert!(!serialized.contains("workflow_admin"));
+        // The unified entry accepts a typed objective only: no raw shell, no
+        // arbitrary command and no executable may ever appear in its schema.
+        let unified = catalog
+            .iter()
+            .find(|tool| tool["name"] == "dispatch_agent_task")
+            .expect("unified dispatch tool is registered");
+        let unified_schema = serde_json::to_string(&unified["inputSchema"])
+            .unwrap()
+            .to_lowercase();
+        for forbidden in [
+            "\"command\"",
+            "\"shell\"",
+            "\"exec\"",
+            "\"executable\"",
+            "\"argv\"",
+        ] {
+            assert!(
+                !unified_schema.contains(forbidden),
+                "dispatch_agent_task must not accept {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -1681,6 +1821,66 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         assert!(expiry - Utc::now() > Duration::minutes(10));
+    }
+
+    #[test]
+    fn dispatch_agent_task_is_deduplicated_and_gets_a_long_execution_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        let gateway = WorkerGateway::open(dir.path().to_path_buf(), "node-1".into()).unwrap();
+        let args = json!({
+            "sessionId":"session-1", "objective":"Summarize the architecture", "workspace":"C:/repo",
+            "routingMode":"AUTO", "importance":"normal", "idempotencyKey":"agent-1"
+        });
+        let first = gateway.submit("dispatch_agent_task", args.clone()).unwrap();
+        let replay = gateway.submit("dispatch_agent_task", args).unwrap();
+        assert_eq!(first.request_id, replay.request_id);
+        assert!(
+            first.expires_at - first.created_at >= Duration::seconds(SKILL_REQUEST_TTL_SECONDS)
+        );
+        let lease = gateway.try_lease("node-1").unwrap().unwrap();
+        assert_eq!(lease.tool, "dispatch_agent_task");
+        assert_eq!(lease.arguments["objective"], "Summarize the architecture");
+        let expiry = DateTime::parse_from_rfc3339(&lease.lease_expires_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(expiry - Utc::now() > Duration::minutes(10));
+    }
+
+    #[test]
+    fn capability_catalog_is_separate_and_routes_on_its_own_protocol() {
+        let catalog = capability_tool_catalog();
+        let names: Vec<&str> = catalog
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, CAPABILITY_TOOLS);
+        let all = mcp_tool_catalog();
+        assert_eq!(all.len(), WORKER_TOOLS.len() + CAPABILITY_TOOLS.len());
+
+        let dir = tempfile::tempdir().unwrap();
+        let gateway = WorkerGateway::open(dir.path().to_path_buf(), "node-1".into()).unwrap();
+        let request = gateway
+            .submit_for(
+                REMOTE_CAPABILITY,
+                "invoke_capability",
+                json!({"capability":"system.status","idempotencyKey":"cap-1"}),
+            )
+            .unwrap();
+        assert_eq!(request.capability, REMOTE_CAPABILITY);
+        let lease = gateway
+            .try_lease_for("node-1", &[REMOTE_CAPABILITY.to_string()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.capability, REMOTE_CAPABILITY);
+        assert_eq!(lease.tool, "invoke_capability");
+    }
+
+    #[test]
+    fn capability_protocol_rejects_worker_tools_and_worker_protocol_rejects_capability_tools() {
+        assert!(validate_tool_for(REMOTE_CAPABILITY, "system_status_missing").is_err());
+        assert!(validate_tool_for(REMOTE_CAPABILITY, "claim_work").is_err());
+        assert!(validate_tool_for(WORKER_CAPABILITY, "invoke_capability").is_err());
+        assert!(validate_tool_for(REMOTE_CAPABILITY, "invoke_capability").is_ok());
     }
 
     #[test]

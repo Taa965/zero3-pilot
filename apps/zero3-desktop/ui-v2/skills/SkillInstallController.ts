@@ -1,6 +1,14 @@
 type Bridge = Window['zero3Codex']
 type Event = Parameters<Bridge['onEvent']>[0] extends (event: infer E) => void ? E : never
 export type InstallRequest = Extract<Event, { kind: 'request' }>
+export type InstallJobView = {
+  threadId: string
+  source: string
+  cwd: string | null
+  destination: string
+  status: string
+  error: string | null
+}
 export type InstallSnapshot = {
   status: 'idle' | 'starting' | 'running' | 'completed' | 'failed' | 'interrupted'
   threadId: string | null
@@ -10,19 +18,37 @@ export type InstallSnapshot = {
   output: string
   error: string | null
   requests: InstallRequest[]
+  recoverable: InstallJobView[]
 }
 const record = (value: unknown): Record<string, any> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {}
+const toJobView = (value: unknown): InstallJobView => {
+  const job = record(value)
+  return {
+    threadId: String(job.threadId ?? ''),
+    source: String(job.source ?? ''),
+    cwd: typeof job.cwd === 'string' ? job.cwd : null,
+    destination: String(job.destination ?? ''),
+    status: String(job.status ?? ''),
+    error: typeof job.error === 'string' ? job.error : null
+  }
+}
 
 // One controller per renderer keeps the live installation and approval requests
-// reachable when the user switches modules. No Skill files or registry are copied.
+// reachable when the user switches modules. Approval requests and the install
+// task envelope are mirrored in the main process, so on mount the controller
+// re-attaches to a running installer (renderer reload) and surfaces installs
+// that an app restart interrupted. No Skill files or registry are copied.
 export class SkillInstallController {
-  private snapshot: InstallSnapshot = { status: 'idle', threadId: null, turnId: null, source: '', destination: '', output: '', error: null, requests: [] }
+  private snapshot: InstallSnapshot = { status: 'idle', threadId: null, turnId: null, source: '', destination: '', output: '', error: null, requests: [], recoverable: [] }
   private listeners = new Set<() => void>()
   private disconnect: (() => void) | null = null
   private earlyEvents: Event[] = []
   private streamedItems = new Set<string>()
-  constructor(private bridge: Bridge) {}
+  private recovering = false
+  constructor(private bridge: Bridge) {
+    void this.recover()
+  }
   getSnapshot = () => this.snapshot
   subscribe = (listener: () => void) => {
     this.listeners.add(listener)
@@ -75,6 +101,41 @@ export class SkillInstallController {
       void this.bridge.skills.list({ forceReload: true }).catch(() => {})
     }
   }
+  // Renderer reload recovery: the main process kept the install task and its
+  // still-pending approval requests, so rebuild the live snapshot around them.
+  async recover() {
+    if (this.recovering || ['starting', 'running'].includes(this.snapshot.status)) return
+    this.recovering = true
+    try {
+      const state = record(await this.bridge.skills.pending())
+      if (['starting', 'running'].includes(this.snapshot.status)) return
+      const active = record(state.activeJob)
+      if (active.status === 'running' && typeof active.threadId === 'string' && active.threadId) {
+        const approvals = Array.isArray(state.approvals) ? state.approvals : []
+        const requests = approvals
+          .filter(item => record(record(item).params).threadId === active.threadId)
+          .map(item => item as InstallRequest)
+        this.update({
+          status: 'running',
+          threadId: active.threadId,
+          turnId: null,
+          source: String(active.source ?? ''),
+          destination: String(active.destination ?? ''),
+          output: '',
+          error: null,
+          requests
+        })
+        this.disconnect?.()
+        this.disconnect = this.bridge.onEvent(this.receive)
+      }
+      const recoverable = Array.isArray(state.recoverableJobs) ? state.recoverableJobs.map(toJobView).filter(job => job.threadId) : []
+      if (recoverable.length || this.snapshot.recoverable.length) this.update({ recoverable })
+    } catch {
+      // Recovery is best-effort: a missing or old bridge leaves a fresh panel.
+    } finally {
+      this.recovering = false
+    }
+  }
   async install(source: string, cwd?: string | null) {
     if (['starting', 'running'].includes(this.snapshot.status)) return
     const value = source.trim()
@@ -117,6 +178,17 @@ export class SkillInstallController {
     await Promise.allSettled(this.snapshot.requests.map(request => this.reject(request)))
     await this.bridge.turn.interrupt({ threadId, turnId })
     this.finish('interrupted')
+  }
+  // Re-running the recorded source supersedes the interrupted record; the old
+  // job is dismissed so the recovery prompt does not resurface.
+  async reinstall(job: InstallJobView) {
+    this.update({ recoverable: this.snapshot.recoverable.filter(item => item.threadId !== job.threadId) })
+    await this.install(job.source, job.cwd)
+    void this.bridge.skills.dismissInstallJob({ threadId: job.threadId }).catch(() => {})
+  }
+  async dismissRecoverable(job: InstallJobView) {
+    this.update({ recoverable: this.snapshot.recoverable.filter(item => item.threadId !== job.threadId) })
+    await this.bridge.skills.dismissInstallJob({ threadId: job.threadId }).catch(() => {})
   }
 }
 

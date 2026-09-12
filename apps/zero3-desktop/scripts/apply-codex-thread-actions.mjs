@@ -8,6 +8,9 @@ function patchFile(relativePath, replacements) {
   let source = fs.readFileSync(file, 'utf8')
 
   for (const replacement of replacements) {
+    // appliedMarkers record output that a later overlay (thread-action
+    // hardening) supersedes; their presence means the hunk is final.
+    if (replacement.appliedMarkers?.every(marker => source.includes(marker))) continue
     if (source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) {
       throw new Error(
@@ -380,6 +383,7 @@ export function applyZero3CodexThreadActions() {
   patchFile('src/global.d.ts', [
     {
       label: 'R3D thread renderer methods',
+      appliedMarkers: ['forkAtTurn: (request: Zero3CodexThreadForkAtTurnRequest) => Promise<unknown>'],
       from: String.raw`        read: (request: Zero3CodexThreadReadRequest) => Promise<unknown>
       }
       turn: {`,
@@ -393,6 +397,7 @@ export function applyZero3CodexThreadActions() {
     },
     {
       label: 'R3D action request types',
+      appliedMarkers: ['type Zero3CodexThreadForkAtTurnRequest = {'],
       from: String.raw`type Zero3CodexThreadListRequest = { archived?: boolean; cursor?: string; limit?: number }
 type Zero3CodexThreadReadRequest = { includeTurns?: boolean; threadId: string }
 
@@ -484,6 +489,7 @@ type Zero3CodexTurnInput =`,
     },
     {
       label: 'R3D archived Thread list',
+      appliedMarkers: ['window.zero3Codex.thread.list({ archived: true'],
       from: String.raw`    try {
       const result = await listAllProfileSessions(ARCHIVED_FETCH_LIMIT, 0, 'only')
       setLocalSessions(result.sessions)
@@ -492,6 +498,7 @@ type Zero3CodexTurnInput =`,
     },
     {
       label: 'R3D unarchive action',
+      appliedMarkers: ['window.zero3Codex.thread.unarchive({ threadId: session.id })'],
       from: '        await setSessionArchived(session.id, false, session.profile)',
       to: settingsUnarchive
     },

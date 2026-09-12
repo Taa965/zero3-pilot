@@ -383,8 +383,11 @@ export class Zero3AutonomousTaskLoop {
       }
       if (created >= this.maxCreates) break
     }
+    // Archived tasks are deliberately excluded: archiving is the operator's signal that this
+    // work should stop being scheduled, without destroying its audit trail.
     const tasks = (await this.ports.execution.listTasks()).filter(snapshot =>
-      snapshot.definition.task.projectId === project.id
+      snapshot.archived !== true
+      && snapshot.definition.task.projectId === project.id
       && snapshot.definition.task.metadata?.autonomousTaskLoop === ZERO3_AUTONOMOUS_TASK_LOOP
     )
     for (const snapshot of tasks) {

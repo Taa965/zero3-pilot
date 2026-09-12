@@ -36,6 +36,9 @@ function stageSources() {
     'codex-task-adapter.ts',
     'authoritative-result-finalizer.ts',
     'verification-collector.ts',
+    'intelligent-router-contracts.ts',
+    'intelligent-router.ts',
+    'routing-metrics-store.ts',
     'index.ts'
   ]
   for (const file of routingFiles) {
@@ -154,6 +157,8 @@ async function zero3ProviderAvailability() {
   }
 }
 
+const zero3IntelligentRouter = new Zero3IntelligentTaskRouter()
+const zero3RoutingMetricsStore = new Zero3RoutingMetricsStore(path.join(app.getPath('userData'), 'zero3', 'routing-metrics'))
 const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({
   router: zero3AgentRouter,
   taskStore: zero3AgentTaskStore,
@@ -162,7 +167,13 @@ const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({
   codex: zero3CodexTaskAdapter,
   skills: zero3TaskSkillRuntime,
   availability: zero3ProviderAvailability,
-  finalizeResult: (task, candidate) => zero3AuthoritativeResultFinalizer.finalize(task, candidate)
+  finalizeResult: (task, candidate) => zero3AuthoritativeResultFinalizer.finalize(task, candidate),
+  intelligentRouting: {
+    router: zero3IntelligentRouter,
+    metrics: zero3RoutingMetricsStore,
+    maxAttempts: 3,
+    maxExecutorSwitches: 2
+  }
 })
 const zero3AgentRecovery = new Zero3AgentRecoveryController({
   taskStore: zero3AgentTaskStore,
@@ -244,8 +255,9 @@ contextBridge.exposeInMainWorld('zero3AgentTasks', {
 contextBridge.exposeInMainWorld('zero3Artifacts', {`
 
 const globalTypes = String.raw`
-type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'AUTO'
+type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' | 'AUTO'
 type Zero3AgentTaskType = 'DESIGN' | 'IMPLEMENT' | 'VERIFY' | 'FIX' | 'REVIEW' | 'INTEGRATE' | 'RESEARCH'
+type Zero3AgentTaskImportance = 'low' | 'normal' | 'high' | 'critical'
 type Zero3AgentRecoveryResolution = 'KEEP_UNKNOWN' | 'ACCEPT_PARTIAL' | 'MARK_FAILED'
 type Zero3AgentTaskSpecV2 = {
   protocol: 'zero3.pilot.task-spec.v2'
@@ -257,6 +269,7 @@ type Zero3AgentTaskSpecV2 = {
   title: string
   goal: string
   contextVersion: number
+  importance?: Zero3AgentTaskImportance
   repo?: string | null
   baseSha?: string | null
   branch?: string | null
@@ -278,7 +291,7 @@ type Zero3AgentTaskSpecV2 = {
 
 const globalSurface = String.raw`    zero3AgentTask: {
       get: (request: { taskId: string }) => Promise<unknown>
-      dispatch: (request: { task: Zero3AgentTaskSpecV2; context: { targetLogicalSessionId: string; reviewSessionId?: string | null; runtimeConversationId?: string | null } }) => Promise<unknown>
+      dispatch: (request: { task: Zero3AgentTaskSpecV2; context: { targetLogicalSessionId: string; reviewSessionId?: string | null; runtimeConversationId?: string | null; routingMode?: 'AUTO' | 'PINNED' | 'PREFERRED'; importance?: Zero3AgentTaskImportance; preferredExecutor?: 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' } }) => Promise<unknown>
       reviewDecision: (request: { taskId: string; contextVersion: number; decision: Zero3ReviewDecisionInput }) => Promise<unknown>
       recoveryInspect: (request: { taskId: string }) => Promise<unknown>
       recoveryResolve: (request: { taskId: string; resolution: Zero3AgentRecoveryResolution; rationale: string }) => Promise<unknown>
@@ -296,7 +309,7 @@ export function applyZero3AgentIntegrationRuntime() {
       already: "createZero3AgentDesktopHandlers, ZERO3_AGENT_DESKTOP_CHANNELS",
       from: "import { Zero3ReviewLoopStore } from './zero3/agent-routing/index'",
       to:
-        "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, zero3GitEvidence } from './zero3/agent-routing/index'\n" +
+        "import { Zero3ReviewLoopStore, Zero3AgentRouter, Zero3AgentTaskStore, Zero3AgentRuntimeOrchestrator, Zero3AgentRecoveryController, Zero3CodexTaskAdapter, Zero3AuthoritativeResultFinalizer, Zero3VerificationCollector, Zero3IntelligentTaskRouter, Zero3RoutingMetricsStore, zero3GitEvidence } from './zero3/agent-routing/index'\n" +
         "import { createZero3AgentDesktopHandlers, ZERO3_AGENT_DESKTOP_CHANNELS } from './zero3/agent-desktop-bridge/index'"
     },
     {

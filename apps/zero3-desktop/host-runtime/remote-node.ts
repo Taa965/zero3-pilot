@@ -190,7 +190,7 @@ export class Zero3RemoteNode {
   }
 
   private hostCapabilities(): string[] {
-    return ['codex', 'thread', 'turn', 'shell', 'file', 'git', 'mcp', ...(this.config.workerTunnelEnabled && this.workerRuntime ? ['worker-protocol-v1'] : []), ...(this.config.skillTunnelEnabled ? ['codex-native-skills-v1'] : [])]
+    return ['codex', 'thread', 'turn', 'shell', 'file', 'git', 'mcp', ...(this.config.workerTunnelEnabled && this.workerRuntime ? ['worker-protocol-v1', 'zero3-capability-v1'] : []), ...(this.config.skillTunnelEnabled ? ['codex-native-skills-v1'] : [])]
   }
 
   private async workerLoop(): Promise<void> {
@@ -198,7 +198,7 @@ export class Zero3RemoteNode {
     while (!this.stopped && (this.config.workerTunnelEnabled || this.config.skillTunnelEnabled)) {
       try {
         const capabilities = [
-          ...(this.config.workerTunnelEnabled && this.workerRuntime ? ['worker-protocol-v1'] : []),
+          ...(this.config.workerTunnelEnabled && this.workerRuntime ? ['worker-protocol-v1', 'zero3-capability-v1'] : []),
           ...(this.config.skillTunnelEnabled ? ['codex-native-skills-v1'] : [])
         ]
         if (!capabilities.length) return

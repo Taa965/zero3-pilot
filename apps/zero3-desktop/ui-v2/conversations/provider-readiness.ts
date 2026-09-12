@@ -2,8 +2,8 @@ import type { WorkspaceProvider } from './session-types'
 
 type StatusMap = Awaited<ReturnType<Window['zero3SessionProviders']['status']>>
 type ProviderStatus = NonNullable<StatusMap[WorkspaceProvider]>
-export type CliProvider = 'codex' | 'claude' | 'antigravity'
-const CLI_PROVIDERS: CliProvider[] = ['codex', 'claude', 'antigravity']
+export type CliProvider = 'codex' | 'claude' | 'antigravity' | 'workbuddy'
+const CLI_PROVIDERS: CliProvider[] = ['codex', 'claude', 'antigravity', 'workbuddy']
 const STORAGE_KEY = 'zero3.global-cli-readiness.v1'
 
 export function isCliProvider(provider: string): provider is CliProvider {

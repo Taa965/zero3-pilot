@@ -100,6 +100,28 @@ test('Claude executor captures CLI session id and resumes subsequent prompts', a
   assert.equal(runner.requests[1]?.args[resumeIndex + 1], 'session-real')
 })
 
+test('a prompt beyond the Windows command-line limit travels on stdin instead of argv', async () => {
+  const longPrompt = 'x'.repeat(40_000)
+  const stdout = JSON.stringify({ result: 'ok', session_id: 'session-long' })
+  const longRunner = new QueueRunner([{ exitCode: 0, stdout, stderr: '' }])
+  const longExecutor = new ClaudeExecutor({ runner: longRunner })
+  const longSession = await longExecutor.start(baseContext)
+  for await (const _event of longExecutor.prompt(longSession, { kind: 'prompt', clientRequestId: 'long', text: longPrompt })) {}
+
+  const request = longRunner.requests[0]
+  assert.equal(request?.args.includes(longPrompt), false, 'the prompt must not be an argv element')
+  assert.equal(request?.stdin, longPrompt, 'the prompt must be delivered on stdin')
+  assert.deepEqual(request?.args.slice(0, 2), ['-p', '--output-format'])
+
+  // A short prompt keeps the argv path, which is what the CLI documents.
+  const shortRunner = new QueueRunner([{ exitCode: 0, stdout, stderr: '' }])
+  const shortExecutor = new ClaudeExecutor({ runner: shortRunner })
+  const shortSession = await shortExecutor.start(baseContext)
+  for await (const _event of shortExecutor.prompt(shortSession, { kind: 'prompt', clientRequestId: 'short', text: 'short prompt' })) {}
+  assert.deepEqual(shortRunner.requests[0]?.args.slice(0, 2), ['-p', 'short prompt'])
+  assert.equal(shortRunner.requests[0]?.stdin, undefined)
+})
+
 test('Claude permission mode preserves workspace-write semantics without bypassing read-only', async () => {
   const writeRunner = new QueueRunner([{ exitCode: 0, stdout: '{"result":"ok","session_id":"session-write"}', stderr: '' }])
   const writeExecutor = new ClaudeExecutor({ runner: writeRunner })

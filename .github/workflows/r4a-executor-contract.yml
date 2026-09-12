@@ -5,11 +5,14 @@ on:
     branches: [main]
     paths:
       - 'apps/zero3-desktop/executor-runtime/**'
-      - 'apps/zero3-desktop/agent-routing-runtime/claude-task-adapter.ts'
-      - 'apps/zero3-desktop/agent-routing-runtime/claude-task-adapter.test.ts'
+      - 'apps/zero3-desktop/agent-routing-runtime/**'
+      - 'apps/zero3-desktop/agent-desktop-bridge/**'
       - 'apps/zero3-desktop/scripts/apply-agent-claude-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-agent-zero3-api-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-agent-integration-runtime.mjs'
       - 'apps/zero3-desktop/scripts/prepare-gemini-integration.mjs'
       - 'scripts/check-executor-runtime-architecture.mjs'
+      - 'scripts/check-intelligent-agent-router.mjs'
       - '.github/workflows/r4a-executor-contract.yml'
 
 jobs:
@@ -36,7 +39,10 @@ jobs:
         run: |
           node scripts/check-architecture.mjs
           node scripts/check-executor-runtime-architecture.mjs
+          node scripts/check-intelligent-agent-router.mjs
           node --check apps/zero3-desktop/scripts/apply-agent-claude-runtime.mjs
+          node --check apps/zero3-desktop/scripts/apply-agent-zero3-api-runtime.mjs
+          node --check apps/zero3-desktop/scripts/apply-agent-integration-runtime.mjs
 
       - name: Strict TypeScript contract check
         run: >-
@@ -63,3 +69,7 @@ jobs:
           apps/zero3-desktop/executor-runtime/router/failover-runtime.test.ts
           apps/zero3-desktop/executor-runtime/handoff/handoff-runtime.test.ts
           apps/zero3-desktop/agent-routing-runtime/claude-task-adapter.test.ts
+          apps/zero3-desktop/agent-routing-runtime/intelligent-router.test.ts
+          apps/zero3-desktop/agent-routing-runtime/routing-metrics-store.test.ts
+          apps/zero3-desktop/agent-routing-runtime/agent-runtime-orchestrator.test.ts
+          apps/zero3-desktop/agent-routing-runtime/zero3-api-task-adapter.test.ts

@@ -9,7 +9,7 @@ Pinned Codex source: `upstream/codex` (the repository pin remains the implementa
 | Enable/disable | `skills/config/write` | implemented | Codex |
 | Additional shared roots | `skills/extraRoots/set` | implemented; mounts normal `~/.codex/skills` into isolated Zero3 CODEX_HOME | Codex |
 | Native invocation | `UserInput::Skill { name, path }` | implemented for local Tasks and Web Skill RPC | Codex |
-| Install standalone Skill | built-in system `skill-installer` | explicit shared destination, progress, approvals/questions, cancellation, result and catalog refresh; native installer owns filesystem changes | Codex |
+| Install standalone Skill | built-in system `skill-installer` | explicit shared destination, progress, approvals/questions, cancellation, result and catalog refresh; install tasks persist across renderer reloads and app restarts (re-attach to pending approvals, or one-click re-install/dismiss after an interrupted restart); native installer owns filesystem changes | Codex |
 | Read/detail | Codex-discovered `SkillMetadata.path` | Zero3 purpose-specific bounded read; only paths returned by `skills/list` are accepted | Codex file is source; Zero3 is presentation only |
 | Agent/Workflow binding | not a Codex package-management concept | implemented as Zero3 relation-only store | Zero3 organization layer |
 | Task routing | not a Codex package-management concept | explicit selector + Binding + deterministic Top-N router | Zero3 orchestration layer |

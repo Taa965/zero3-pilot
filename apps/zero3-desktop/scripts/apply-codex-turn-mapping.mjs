@@ -8,6 +8,9 @@ function patchFile(relativePath, replacements) {
   let source = fs.readFileSync(file, 'utf8')
 
   for (const replacement of replacements) {
+    // appliedMarkers record output that a later overlay (R3E hardening)
+    // supersedes; their presence means the hunk already reached its final form.
+    if (replacement.appliedMarkers?.every(marker => source.includes(marker))) continue
     if (source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) {
       throw new Error(
@@ -416,6 +419,7 @@ export function applyZero3CodexTurnMapping() {
   patchFile('src/global.d.ts', [
     {
       label: 'R3E dedicated fork/revert renderer methods',
+      appliedMarkers: ['turnsList:'],
       from: String.raw`        fork: (request: Zero3CodexThreadForkRequest) => Promise<unknown>
       }
       turn: {`,
@@ -423,6 +427,7 @@ export function applyZero3CodexTurnMapping() {
     },
     {
       label: 'R3E exact Turn-boundary request types',
+      appliedMarkers: ['type Zero3CodexThreadRevertBeforeTurnRequest = {'],
       from: String.raw`type Zero3CodexThreadForkRequest = { threadId: string }
 type Zero3CodexThreadSetNameRequest = { name: string; threadId: string }`,
       to: r3eTypes

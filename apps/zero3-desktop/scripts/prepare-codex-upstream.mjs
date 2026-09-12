@@ -2,6 +2,7 @@ import { prepareCodexOverlay } from '../../../scripts/codex-overlay.mjs'
 import { applyDevelopmentGroupBridge } from './apply-development-group-bridge.mjs'
 import { applyExecutionRuntimeBridge } from './apply-execution-runtime-bridge.mjs'
 import { applyZero3AgentLifecycleRuntime } from './apply-agent-lifecycle-runtime.mjs'
+import { applyZero3UnifiedAgentTaskDispatch } from './apply-agent-zero3-api-runtime.mjs'
 import { codexRoot, pins, repoRoot } from './config.mjs'
 
 export function preparePinnedCodexUpstream() {
@@ -11,6 +12,9 @@ export function preparePinnedCodexUpstream() {
   applyDevelopmentGroupBridge()
   applyExecutionRuntimeBridge()
   applyZero3AgentLifecycleRuntime()
+  // The unified `dispatch_agent_task` tool extends the worker RPC composite the
+  // lifecycle overlay just composed, so it must be staged after it.
+  applyZero3UnifiedAgentTaskDispatch()
   const result = prepareCodexOverlay({ repoRoot, codexRoot, expectedPins: pins })
   console.log(`[Zero3 D0] Codex overlay prepared at ${result.baseSha}.`)
   console.log(`[Zero3 D0] Extensions: ${result.extensions.length}; patches: ${result.patches.length}.`)

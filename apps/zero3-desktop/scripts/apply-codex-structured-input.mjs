@@ -9,6 +9,9 @@ function patchFile(relativePath, replacements) {
   let source = fs.readFileSync(file, 'utf8')
 
   for (const replacement of replacements) {
+    // appliedMarkers record output that a later overlay (R3C hardening)
+    // supersedes; their presence means the hunk already reached its final form.
+    if (replacement.appliedMarkers?.every(marker => source.includes(marker))) continue
     if (source.includes(replacement.to)) continue
     if (!source.includes(replacement.from)) {
       throw new Error(
@@ -254,6 +257,7 @@ export function applyZero3CodexStructuredInput() {
   patchFile('src/global.d.ts', [
     {
       label: 'typed structured Turn input request',
+      appliedMarkers: ['Zero3CodexTurnStartBase &'],
       from: String.raw`type Zero3CodexTurnStartRequest = {
   approvalPolicy?: Zero3CodexApprovalPolicy
   cwd?: string

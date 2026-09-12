@@ -116,6 +116,12 @@ export class Zero3ExecutionDesktopRuntime implements ExecutionDesktopPort {
   }
 
   getTask(taskId: string): Promise<unknown> { return this.runtime.snapshot(taskId) }
+  setTaskArchived(taskId: string, archived: boolean): Promise<unknown> {
+    return this.runtime.setTaskArchived(taskId, archived)
+  }
+  deleteTask(taskId: string): Promise<unknown> {
+    return this.runtime.deleteTask(taskId).then(() => ({ taskId, deleted: true }))
+  }
   async listTaskWorkflows(): Promise<unknown> { return this.taskWorkflows.list() }
   createWorkflowTask(input: TaskWorkflowCreateInput): Promise<unknown> { return this.runtime.createTask(this.taskWorkflows.compile(input)) }
   createTask(input: CreateExecutionTaskInput): Promise<unknown> { return this.runtime.createTask(input) }
