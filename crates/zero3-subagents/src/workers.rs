@@ -21,6 +21,15 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_CAPTURE_BYTES: usize = 256 * 1024;
 const MAX_PROMPT_BYTES: usize = 1024 * 1024;
 
+/// Windows PowerShell adopts an inherited process-scope execution policy from
+/// this variable. Upstream Codex never passes -ExecutionPolicy for the shell
+/// tools it spawns, so this is the only way a Codex worker's `npm run dev`
+/// reaches an unsigned .ps1 command shim.
+#[cfg(windows)]
+const WINDOWS_POWERSHELL_POLICY_ENV: &str = "PSExecutionPolicyPreference";
+#[cfg(windows)]
+const WINDOWS_POWERSHELL_POLICY_BYPASS: &str = "Bypass";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CliWorkerConfig {
     pub executable: PathBuf,
@@ -127,6 +136,27 @@ impl CliWorker {
         // still using no shell and a bounded process timeout.
         if matches!(self.kind, CliKind::Codex) {
             command.env("TERM", "xterm-256color");
+            // Codex runs every shell tool as `powershell.exe -NoLogo
+            // -NoProfile -Command ...` and never passes -ExecutionPolicy, so
+            // npm/pnpm/yarn .ps1 shims are refused while the effective policy
+            // is Restricted or AllSigned. PowerShell adopts an inherited
+            // PSExecutionPolicyPreference as its process-scope policy, and the
+            // official Codex app runs its kernel with that preference set, so
+            // Zero3 has to supply the same one or it becomes the more
+            // restrictive kernel. MachinePolicy/UserPolicy still outrank the
+            // process scope, and an explicit worker env entry wins.
+            #[cfg(windows)]
+            if !self
+                .config
+                .env
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case(WINDOWS_POWERSHELL_POLICY_ENV))
+            {
+                command.env(
+                    WINDOWS_POWERSHELL_POLICY_ENV,
+                    WINDOWS_POWERSHELL_POLICY_BYPASS,
+                );
+            }
         }
 
         let timeout = Duration::from_millis(self.config.timeout_ms.max(1));

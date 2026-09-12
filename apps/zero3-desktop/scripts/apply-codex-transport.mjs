@@ -20,6 +20,79 @@ function patchFile(relativePath, replacements, invariants) {
   if (patched !== source) fs.writeFileSync(file, patched)
 }
 
+// The kernel child environment is assembled from the app's own environment plus
+// two Zero3-owned corrections. It lives in one named block because a tree that
+// was already prepared by an earlier Zero3 build has to be repaired in place
+// when this block changes -- see the second replacement for `electron/main.ts`.
+//
+// Windows PowerShell refuses to run unsigned .ps1 command shims -- npm.ps1,
+// npx.ps1, pnpm.ps1, yarn.ps1 -- while the effective execution policy is
+// Restricted or AllSigned. Pinned Codex runs every shell tool as
+// `powershell.exe -NoLogo -NoProfile -Command <script>` and never passes
+// -ExecutionPolicy, so the policy can only reach that child through the
+// environment: PowerShell adopts an inherited PSExecutionPolicyPreference as its
+// own process-scope policy. The official Codex desktop app runs its kernel with
+// exactly that preference, which is why starting a project works there and was
+// blocked inside Zero3. MachinePolicy and UserPolicy still outrank the process
+// scope, so this cannot loosen an administrator's machine-wide restriction;
+// ZERO3_KEEP_WINDOWS_POWERSHELL_POLICY=1 leaves the environment untouched.
+export const zero3CodexLaunchEnvironmentSource = String.raw`
+const ZERO3_WINDOWS_POWERSHELL_POLICY_ENV = 'PSExecutionPolicyPreference'
+const ZERO3_WINDOWS_POWERSHELL_POLICY_BYPASS = 'Bypass'
+
+function zero3CodexWindowsShellEnvironmentWanted(env: NodeJS.ProcessEnv): boolean {
+  if (process.platform !== 'win32') return false
+  const keep = env.ZERO3_KEEP_WINDOWS_POWERSHELL_POLICY
+  return !(keep && ['1', 'true', 'yes', 'on'].includes(keep.trim().toLowerCase()))
+}
+
+function zero3CodexWindowsShellEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (!zero3CodexWindowsShellEnvironmentWanted(env)) return env
+  return { ...env, [ZERO3_WINDOWS_POWERSHELL_POLICY_ENV]: ZERO3_WINDOWS_POWERSHELL_POLICY_BYPASS }
+}
+
+// Electron main is the parent of every Zero3 child -- the Codex kernel, the
+// embedded PowerShell terminal, capability shells and provider CLIs -- so the
+// preference is applied once to this process before any of them start.
+if (zero3CodexWindowsShellEnvironmentWanted(process.env)) {
+  process.env[ZERO3_WINDOWS_POWERSHELL_POLICY_ENV] = ZERO3_WINDOWS_POWERSHELL_POLICY_BYPASS
+}
+
+function zero3CodexLaunchEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const configured = Object.keys(env).find(key => key.toLowerCase() === 'no_proxy')
+  const withProxy =
+    configured && env[configured]?.trim()
+      ? env
+      : { ...env, NO_PROXY: ZERO3_CODEX_LOOPBACK_NO_PROXY, no_proxy: ZERO3_CODEX_LOOPBACK_NO_PROXY }
+  return zero3CodexWindowsShellEnvironment(withProxy)
+}
+`
+
+// The block an earlier Zero3 build injected into an already-prepared Electron
+// tree. Keeping the exact legacy text here is what lets the overlay upgrade that
+// tree in place instead of injecting a second launch environment next to it.
+export const zero3CodexLegacyLaunchEnvironmentSource = String.raw`
+function zero3CodexLaunchEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const configured = Object.keys(env).find(key => key.toLowerCase() === 'no_proxy')
+  if (configured && env[configured]?.trim()) return env
+  return { ...env, NO_PROXY: ZERO3_CODEX_LOOPBACK_NO_PROXY, no_proxy: ZERO3_CODEX_LOOPBACK_NO_PROXY }
+}
+`
+
+// Exported as its own step so the upgrade of an already-prepared tree can be
+// exercised without assembling a whole Electron main.ts fixture.
+export function zero3CodexLaunchEnvironmentReplacement() {
+  return {
+    // A tree prepared before the Windows shell-policy fix already carries the
+    // launcher environment without the Codex-side PowerShell preference.
+    // Rewrite that block in place; a freshly prepared tree skips this because
+    // mainTransport above already injected the current block.
+    label: 'Codex kernel launch environment (Windows PowerShell policy)',
+    from: zero3CodexLegacyLaunchEnvironmentSource,
+    to: zero3CodexLaunchEnvironmentSource
+  }
+}
+
 const mainTransport = String.raw`
 type Zero3CodexRpcId = number | string
 
@@ -571,11 +644,7 @@ function broadcastZero3CodexEvent(event: Zero3CodexEvent) {
 // is the user's own choice and is left alone.
 const ZERO3_CODEX_LOOPBACK_NO_PROXY = 'localhost,127.0.0.1,::1'
 
-function zero3CodexLaunchEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const configured = Object.keys(env).find(key => key.toLowerCase() === 'no_proxy')
-  if (configured && env[configured]?.trim()) return env
-  return { ...env, NO_PROXY: ZERO3_CODEX_LOOPBACK_NO_PROXY, no_proxy: ZERO3_CODEX_LOOPBACK_NO_PROXY }
-}
+${zero3CodexLaunchEnvironmentSource}
 
 class Zero3CodexAppServer {
   private child: ReturnType<typeof spawn> | null = null
@@ -1119,10 +1188,16 @@ export function applyZero3CodexTransport() {
       label: 'Codex app-server transport before Hermes compatibility API',
       from: "ipcMain.handle('hermes:api', async (_event, request) => {",
       to: mainTransport + "\nipcMain.handle('hermes:api', async (_event, request) => {"
-    }
+    },
+    zero3CodexLaunchEnvironmentReplacement()
   ], [
     { label: 'Codex app-server transport types', text: 'type Zero3CodexRpcId = number | string', count: 1 },
-    { label: 'Codex app-server transport client', text: 'class Zero3CodexAppServer', count: 1 }
+    { label: 'Codex app-server transport client', text: 'class Zero3CodexAppServer', count: 1 },
+    {
+      label: 'Codex kernel launch environment',
+      text: 'function zero3CodexLaunchEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {',
+      count: 1
+    }
   ])
 
   patchFile('electron/preload.ts', [

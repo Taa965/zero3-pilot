@@ -176,6 +176,26 @@ requireText(run, 'ensurePinnedCodexBinary', 'Development launcher must build the
 requireText(run, 'ZERO3_CODEX_BIN', 'Desktop launcher must pass the pinned Codex binary explicitly.')
 requireText(config, 'resolveCodexHome', 'Zero3 must own an explicit Codex home boundary.')
 
+// Pinned Codex spawns every shell tool as `powershell.exe -NoLogo -NoProfile
+// -Command ...` and never passes -ExecutionPolicy, so the Windows process-scope
+// policy can only reach it through the environment. Without the preference the
+// official Codex app sets, an npm/pnpm/yarn .ps1 shim is refused inside a Zero3
+// turn while the same command starts outside Zero3.
+for (const required of [
+  'PSExecutionPolicyPreference',
+  "const ZERO3_WINDOWS_POWERSHELL_POLICY_BYPASS = 'Bypass'",
+  'zero3CodexWindowsShellEnvironment(withProxy)',
+  'ZERO3_KEEP_WINDOWS_POWERSHELL_POLICY',
+  '${zero3CodexLaunchEnvironmentSource}',
+  'zero3CodexLaunchEnvironmentReplacement()'
+]) {
+  requireText(
+    codexTransport,
+    required,
+    `Codex transport must keep the Windows PowerShell execution-policy launch environment: ${required}`
+  )
+}
+
 for (const ipc of [
   'zero3:codex:thread:start',
   'zero3:codex:thread:resume',

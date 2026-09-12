@@ -39,3 +39,20 @@ Claude 401/403 仍提供“重新登录”入口，但登录成功后继续 403 
 - 独立 Electron 冒烟测试调用新增的环境解析代码，禁用测试输入中的显式代理，正确继承了 Windows 已启用的本地 HTTP 代理。
 
 源码启动入口会应用全部 overlay。开发模式的界面可热更新，Electron 主进程修改需在下次正常重启 Zero3 后加载。
+
+## Windows PowerShell 执行策略与 npm/pnpm 启动（2026-09-12）
+
+症状：在 Zero3 Pilot 本体会话里让 Agent 启动一个前端项目（`npm run dev`、`pnpm dev`、`npx`）会失败，错误是 `npm.ps1 cannot be loaded because running scripts is disabled on this system`；同一台机器上同样一句话在官方 Codex 里可以直接执行成功。于是会话只能反过来给用户一段"自行开启执行策略"的手工命令，看起来像 Zero3 比官方客户端更弱。
+
+根因：Node.js 在 Windows 上为 npm/npx/pnpm/yarn 安装了 `.ps1` 命令垫片。PowerShell 的有效执行策略为 Restricted 或 AllSigned 时拒绝加载未签名脚本（本机 MachinePolicy/UserPolicy/CurrentUser/LocalMachine 均为 Undefined，默认就是 Restricted）。上游 Codex 的 shell 工具固定以 `powershell.exe -NoLogo -NoProfile -Command <script>` 运行命令，从不传 `-ExecutionPolicy`，所以策略只能通过环境传进那个子进程：PowerShell 会把继承到的 `PSExecutionPolicyPreference` 当作自己的进程作用域策略。官方 Codex 桌面端正是用它自己进程的环境给内核设了这个偏好（在官方 Codex 会话里 `PSExecutionPolicyPreference=Bypass`，`Get-ExecutionPolicy -List` 的 Process 作用域为 Bypass），Zero3 之前没有设置，内核、内嵌 PowerShell 终端和 capability 执行都继承到机器默认的 Restricted，于是出现"换个客户端就失败"。
+
+修复：Zero3 生成 Electron 主进程时，统一用同一个启动环境块给 Codex 内核补上 `PSExecutionPolicyPreference=Bypass`，并把同一偏好写进 Electron 主进程自身环境，因此 Codex 内核、内嵌 PowerShell 终端、capability 执行和 provider CLI 行为一致（`apps/zero3-desktop/scripts/apply-codex-transport.mjs`）。Zero3 的 Rust Codex 子代理在 Windows 上同样补这个变量（`crates/zero3-subagents/src/workers.rs`），除非配置里已显式给出同名变量。
+
+边界：只设置进程作用域偏好，不写注册表、不改系统或用户执行策略；MachinePolicy、UserPolicy 仍高于进程作用域，管理员的全机限制不会被绕过；`ZERO3_KEEP_WINDOWS_POWERSHELL_POLICY=1` 可让环境中保留原样。已经准备好的 Electron 源码树会在下次启动时被 overlay 原地升级（重写旧的启动环境块），不会再注入第二份。
+
+验证：
+
+- `node --test apps/zero3-desktop/tests/windows-powershell-policy.test.cjs`：4 项通过，覆盖 Windows 加变量、非 Windows 不加、显式退出开关，以及"旧树原地升级且不重复注入"。
+- 用与上游 Codex 完全相同的启动形式复现：`powershell.exe -NoLogo -NoProfile -Command "npm --version"`（清掉环境里的该变量）在 Windows PowerShell 下被策略拒绝，加入 `PSExecutionPolicyPreference=Bypass` 后返回 `11.17.0`、退出码 0。
+- `node scripts/check-architecture.mjs` 通过，新增守卫要求 Codex 传输层始终保留该方法块。
+- 生成树 `upstream/hermes-agent/apps/desktop` 的 `tsc -p tsconfig.electron.json --noEmit` 通过。
