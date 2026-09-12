@@ -100,6 +100,25 @@ test('recovery handoff carries persisted logical-session context without changin
   assert.ok(handoff.session_delta.events.length >= 2)
 })
 
+test('runtime echo of the caller\'s own input merges into the optimistic user bubble instead of duplicating it', () => {
+  const store = createStore()
+  store.appendUser('session-echo', 'hello there')
+  store.ingestCodexEvent('session-echo', { kind: 'notification', method: 'item/started', params: { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'hello there' }] } } })
+  store.ingestCodexEvent('session-echo', { kind: 'notification', method: 'item/completed', params: { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'hello there' }] } } })
+  const userEvents = store.events('session-echo').filter(event => event.type === 'userMessage')
+  assert.equal(userEvents.length, 1)
+  assert.equal(userEvents[0].itemId, 'user-1')
+  assert.equal(userEvents[0].payload.status, 'completed')
+})
+
+test('runtime echo of a distinct user item is not merged into an unrelated optimistic message', () => {
+  const store = createStore()
+  store.appendUser('session-distinct', 'first message')
+  store.ingestCodexEvent('session-distinct', { kind: 'notification', method: 'item/started', params: { threadId: 'thread-a', turnId: 'turn-a', item: { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'a different message' }] } } })
+  const userEvents = store.events('session-distinct').filter(event => event.type === 'userMessage')
+  assert.equal(userEvents.length, 2)
+})
+
 test('legacy messages migrate once while the legacy source remains unchanged for rollback', () => {
   const store = createStore()
   const legacy = {

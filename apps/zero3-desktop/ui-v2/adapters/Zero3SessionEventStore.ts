@@ -271,6 +271,36 @@ function updateItem(logicalSessionId: string, itemId: string, type: Zero3Session
   }) }))
   if (!found) append(logicalSessionId, type, updater({}), { ...meta, itemId })
 }
+function contentText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return ''
+  return value.map(raw => {
+    const part = record(raw)
+    return text(part.text) || text(part.content)
+  }).filter(Boolean).join('\n')
+}
+function payloadText(payload: Record<string, unknown>): string {
+  return text(payload.text) || contentText(payload.content)
+}
+// The runtime echoes the caller's own input back as an `item/started`/`item/completed`
+// userMessage item. That item carries a real itemId the optimistic append never had, so
+// itemId-based matching in updateItem always misses and a second bubble gets appended.
+// Adopt the itemId onto the most recent itemId-less userMessage event with matching text
+// instead, merging the echo into the optimistic bubble.
+function adoptOrphanUserMessage(logicalSessionId: string, itemId: string, incomingText: string): boolean {
+  const normalized = incomingText.trim()
+  if (!normalized) return false
+  let adopted = false
+  mutate(logicalSessionId, session => {
+    const index = [...session.events].reverse().findIndex(event =>
+      !event.itemId && event.type === 'userMessage' && payloadText(event.payload).trim() === normalized)
+    if (index === -1) return session
+    const targetIndex = session.events.length - 1 - index
+    adopted = true
+    return { ...session, events: session.events.map((event, i) => i === targetIndex ? { ...event, itemId } : event) }
+  })
+  return adopted
+}
 function itemEventType(itemType: unknown): Zero3SessionEventType | null {
   if (itemType === 'userMessage') return 'userMessage'
   if (itemType === 'agentMessage') return 'agentMessage'
@@ -523,7 +553,10 @@ export const Zero3SessionEventStore = {
       const item = record(params.item)
       const itemId = typeof item.id === 'string' ? item.id : ''
       const type = itemEventType(item.type)
-      if (itemId && type) updateItem(logicalSessionId, itemId, type, () => startedItemPayload(item), meta)
+      if (itemId && type) {
+        if (type === 'userMessage') adoptOrphanUserMessage(logicalSessionId, itemId, payloadText(startedItemPayload(item)))
+        updateItem(logicalSessionId, itemId, type, () => startedItemPayload(item), meta)
+      }
       return
     }    if (method === 'item/agentMessage/delta') {
       const itemId = text(params.itemId, 256)
@@ -554,7 +587,10 @@ export const Zero3SessionEventStore = {
       const item = record(params.item)
       const itemId = typeof item.id === 'string' ? item.id : ''
       const type = itemEventType(item.type)
-      if (itemId && type) updateItem(logicalSessionId, itemId, type, previous => ({ ...previous, ...completedItemPayload(item) }), meta)
+      if (itemId && type) {
+        if (type === 'userMessage') adoptOrphanUserMessage(logicalSessionId, itemId, payloadText(completedItemPayload(item)))
+        updateItem(logicalSessionId, itemId, type, previous => ({ ...previous, ...completedItemPayload(item) }), meta)
+      }
       return
     }
     if (method === 'turn/completed') {
@@ -577,7 +613,12 @@ export const Zero3SessionEventStore = {
         if (!itemId || existingIds.has(itemId)) continue
         const type = itemEventType(item.type)
         if (!type) continue
-        append(logicalSessionId, type, completedItemPayload(item), { itemId, turnId, runtimeThreadId: runtimeThreadId ?? undefined })
+        const completedPayload = completedItemPayload(item)
+        if (type === 'userMessage' && adoptOrphanUserMessage(logicalSessionId, itemId, payloadText(completedPayload))) {
+          existingIds.add(itemId)
+          continue
+        }
+        append(logicalSessionId, type, completedPayload, { itemId, turnId, runtimeThreadId: runtimeThreadId ?? undefined })
         existingIds.add(itemId)
       }
       if (turnId && (turn.status === 'completed' || turn.status === 'failed' || turn.status === 'interrupted')) {
