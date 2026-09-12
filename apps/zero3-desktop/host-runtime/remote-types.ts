@@ -54,6 +54,13 @@ export type Zero3RemoteLease = {
 
 export type Zero3SkillRpcTool = 'list_skills' | 'search_skills' | 'get_skill' | 'invoke_skill'
 
+export type Zero3CapabilityRpcTool =
+  | 'list_capabilities'
+  | 'describe_capability'
+  | 'invoke_capability'
+  | 'get_operation'
+  | 'cancel_operation'
+
 export type Zero3WorkerRpcTool =
   | 'register_worker'
   | 'claim_work'
@@ -75,9 +82,10 @@ export type Zero3WorkerRpcTool =
   | 'recover_worker'
   | 'task_bootstrap'
   | 'dispatch_codex_task'
+  | 'dispatch_agent_task'
   | 'verify_commit'
 
-export type Zero3RemoteRpcTool = Zero3WorkerRpcTool | Zero3SkillRpcTool
+export type Zero3RemoteRpcTool = Zero3WorkerRpcTool | Zero3SkillRpcTool | Zero3CapabilityRpcTool
 
 export type Zero3RemoteWorkerRpcLease = {
   request_id: string

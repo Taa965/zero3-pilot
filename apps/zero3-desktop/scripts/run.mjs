@@ -20,6 +20,7 @@ import { applyDevelopmentGroupBridge } from './apply-development-group-bridge.mj
 import { ensureZero3WeixinBinary, runCargo, zero3WeixinBinary } from './rust-build.mjs'
 import { applyExecutionRuntimeBridge } from './apply-execution-runtime-bridge.mjs'
 import { applyZero3AgentLifecycleRuntime } from './apply-agent-lifecycle-runtime.mjs'
+import { applyZero3UnifiedAgentTaskDispatch } from './apply-agent-zero3-api-runtime.mjs'
 
 const mode = process.argv[2] ?? 'dev'
 const allowedModes = new Set(['dev', 'typecheck', 'dist:win'])
@@ -355,6 +356,7 @@ if (!externallyPrepared) {
     applyDevelopmentGroupBridge()
     applyExecutionRuntimeBridge()
     applyZero3AgentLifecycleRuntime()
+    applyZero3UnifiedAgentTaskDispatch()
     console.log('[Zero3] Desktop reload: reusing the compiled Codex core.')
   } else {
     runSync(process.execPath, [path.join(repoRoot, 'apps', 'zero3-desktop', 'scripts', 'prepare-codex-upstream.mjs')])

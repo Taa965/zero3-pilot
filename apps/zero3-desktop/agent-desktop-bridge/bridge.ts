@@ -1,5 +1,6 @@
 import type {
   Zero3ReviewDecision,
+  Zero3TaskImportance,
   Zero3TaskSpecV2
 } from '../agent-routing-runtime/agent-contracts'
 
@@ -13,13 +14,18 @@ export const ZERO3_AGENT_DESKTOP_CHANNELS = {
 
 export type Zero3AgentRecoveryResolution = 'KEEP_UNKNOWN' | 'ACCEPT_PARTIAL' | 'MARK_FAILED'
 
+export type Zero3AgentDesktopRoutingContext = {
+  targetLogicalSessionId: string
+  reviewSessionId?: string | null
+  runtimeConversationId?: string | null
+  routingMode?: 'AUTO' | 'PINNED' | 'PREFERRED'
+  importance?: Zero3TaskImportance
+  preferredExecutor?: 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API'
+}
+
 export type Zero3AgentDesktopRuntime = {
   task(taskId: string): Promise<unknown>
-  dispatch(task: Zero3TaskSpecV2, context: {
-    targetLogicalSessionId: string
-    reviewSessionId?: string | null
-    runtimeConversationId?: string | null
-  }): Promise<unknown>
+  dispatch(task: Zero3TaskSpecV2, context: Zero3AgentDesktopRoutingContext): Promise<unknown>
   submitReviewDecision(taskId: string, decision: Zero3ReviewDecision, contextVersion: number): Promise<unknown>
   recoveryInspect(taskId: string): Promise<unknown>
   recoveryResolve(taskId: string, resolution: Zero3AgentRecoveryResolution, rationale: string): Promise<unknown>
@@ -67,8 +73,11 @@ function taskSpec(value: unknown): Zero3TaskSpecV2 {
   boundedString(task.title, 'title', 512)
   boundedString(task.goal, 'goal', 64_000)
   safeContextVersion(task.contextVersion)
-  if (!['CODEX', 'GEMINI', 'AUTO'].includes(task.target)) throw new Error('TaskSpec target is invalid')
+  if (!['CODEX', 'GEMINI', 'CLAUDE', 'ZERO3_API', 'AUTO'].includes(task.target)) throw new Error('TaskSpec target is invalid')
   if (!['DESIGN', 'IMPLEMENT', 'VERIFY', 'FIX', 'REVIEW', 'INTEGRATE', 'RESEARCH'].includes(task.type)) throw new Error('TaskSpec type is invalid')
+  if (task.importance != null && !['low', 'normal', 'high', 'critical'].includes(task.importance)) {
+    throw new Error('TaskSpec importance is invalid')
+  }
   if (!Array.isArray(task.requirements) || !Array.isArray(task.constraints) || !Array.isArray(task.completionGate)) {
     throw new Error('TaskSpec arrays are invalid')
   }
@@ -110,10 +119,25 @@ export function createZero3AgentDesktopHandlers(runtime: Zero3AgentDesktopRuntim
       const input = record(request)
       const task = taskSpec(input.task)
       const context = record(input.context)
+      const routingMode = context.routingMode
+      if (routingMode != null && !['AUTO', 'PINNED', 'PREFERRED'].includes(routingMode as string)) {
+        throw new Error('dispatch context routingMode is invalid')
+      }
+      const importance = context.importance
+      if (importance != null && !['low', 'normal', 'high', 'critical'].includes(importance as string)) {
+        throw new Error('dispatch context importance is invalid')
+      }
+      const preferredExecutor = context.preferredExecutor
+      if (preferredExecutor != null && !['CODEX', 'GEMINI', 'CLAUDE', 'ZERO3_API'].includes(preferredExecutor as string)) {
+        throw new Error('dispatch context preferredExecutor is invalid')
+      }
       return runtime.dispatch(task, {
         targetLogicalSessionId: boundedString(context.targetLogicalSessionId, 'targetLogicalSessionId', 256),
         reviewSessionId: optionalBoundedString(context.reviewSessionId, 'reviewSessionId', 256),
-        runtimeConversationId: optionalBoundedString(context.runtimeConversationId, 'runtimeConversationId', 512)
+        runtimeConversationId: optionalBoundedString(context.runtimeConversationId, 'runtimeConversationId', 512),
+        ...(routingMode ? { routingMode: routingMode as 'AUTO' | 'PINNED' | 'PREFERRED' } : {}),
+        ...(importance ? { importance: importance as Zero3TaskImportance } : {}),
+        ...(preferredExecutor ? { preferredExecutor: preferredExecutor as 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' } : {})
       })
     },
 

@@ -66,9 +66,9 @@ const zero3ClaudeTaskAdapter = new Zero3ClaudeTaskAdapter({
   patchFile('src/global.d.ts', [
     {
       label: 'CLAUDE TaskSpec target type',
-      appliedMarker: "type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'AUTO'",
+      appliedMarker: "type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' | 'AUTO'",
       from: "type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'AUTO'",
-      to: "type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'AUTO'"
+      to: "type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' | 'AUTO'"
     }
   ])
 }

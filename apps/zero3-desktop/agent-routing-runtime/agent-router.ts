@@ -4,10 +4,38 @@ import type {
   Zero3TaskType
 } from './agent-contracts'
 
+// Health as reported by a real availability probe. `available`/`authenticated`
+// stay the required baseline; the optional fields carry the richer knowledge a
+// production probe has (quota exhausted / rate limited / overloaded / observed
+// latency) so the router can reject an executor for the *right* reason instead
+// of collapsing every unhealthy state into "offline".
+export type Zero3ProviderAvailabilityStatus =
+  | 'ready'
+  | 'offline'
+  | 'unauthenticated'
+  | 'rate_limited'
+  | 'quota_exhausted'
+  | 'overloaded'
+  | 'unregistered'
+
+export type Zero3ProviderAvailabilityState = {
+  available: boolean
+  authenticated: boolean | null
+  status?: Zero3ProviderAvailabilityStatus | null
+  // Non-sensitive probe detail. Never carries credentials.
+  detail?: string | null
+  // Observed latency for this executor (rolling p50 where a probe has history).
+  latencyMs?: number | null
+  observedAt?: string | null
+}
+
 export type Zero3ProviderAvailability = {
-  codex: { available: boolean; authenticated: boolean | null }
-  gemini: { available: boolean; authenticated: boolean | null }
-  claude: { available: boolean; authenticated: boolean | null }
+  codex: Zero3ProviderAvailabilityState
+  gemini: Zero3ProviderAvailabilityState
+  claude: Zero3ProviderAvailabilityState
+  // Optional: only present when a Zero3 API (profile-based model session)
+  // availability probe is registered. Absent means unregistered, never eligible.
+  zero3Api?: Zero3ProviderAvailabilityState
 }
 
 export type Zero3RouteDecision = {
@@ -22,6 +50,7 @@ const CODEX_PREFERRED = new Set<Zero3TaskType>(['IMPLEMENT', 'VERIFY', 'FIX', 'I
 function providerState(target: Zero3ResolvedAgentTarget, availability: Zero3ProviderAvailability) {
   if (target === 'CODEX') return availability.codex
   if (target === 'GEMINI') return availability.gemini
+  if (target === 'ZERO3_API') return availability.zero3Api ?? { available: false, authenticated: null }
   return availability.claude
 }
 

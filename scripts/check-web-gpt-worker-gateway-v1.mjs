@@ -70,6 +70,9 @@ for (const forbidden of [
 // It stays an exact switch entry point; anything that looks like a raw or
 // dynamic Codex/GPU/exec dispatch still means the boundary was widened.
 requireText(workerRpc, "case 'dispatch_codex_task':", 'Fast Path dispatch must stay an exact bounded Worker tool.')
+// Unified dispatch follows the same rule: one exact bounded switch entry that
+// hands a typed objective to the router, never a raw or dynamic executor call.
+requireText(workerRpc, "case 'dispatch_agent_task':", 'Unified agent dispatch must stay an exact bounded Worker tool.')
 for (const forbidden of [
   'runtime[lease.tool]',
   'runtime[tool]',

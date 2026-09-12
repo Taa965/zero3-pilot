@@ -39,6 +39,16 @@ export interface NativeCodexAppServerDriverOptions {
 
 const DEFAULT_TURN_TIMEOUT_MS = 10 * 60_000
 const DEFAULT_POLL_MS = 300
+// A freshly started non-ephemeral Codex Thread can be read before its durable
+// rollout exists, which pinned Codex reports as a thread-store internal error
+// ("rollout at ... is empty"). Zero3's remote task runner treats that state as
+// transient through isThreadMaterializationFailure(); the driver observes the
+// same Thread in a poll loop, so it keeps polling instead of failing the turn.
+// This is duplicated deliberately: executor-runtime must not import the
+// heavyweight remote-host runtime, and host-runtime is renamed by the desktop
+// overlay while executor-runtime keeps its name.
+const THREAD_MATERIALIZATION_PATTERN =
+  /rollout at .* is empty|is not materialized yet|list_turns is not supported yet/i
 const APPROVAL_METHODS = new Set([
   'item/commandExecution/requestApproval',
   'item/fileChange/requestApproval',
@@ -259,8 +269,16 @@ export class NativeCodexAppServerDriver implements NativeCodexDriver {
         try {
           turn = turnFromThreadRead(await this.#transport.request('thread/read', { threadId: id, includeTurns: true }), turnId)
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (THREAD_MATERIALIZATION_PATTERN.test(message)) {
+            // The Thread exists but its rollout is not durable yet; the turn was
+            // already accepted by turn/start, so keep observing until the store
+            // can serve history or the turn deadline expires.
+            await delay(this.#pollMs)
+            continue
+          }
           const reason = this.#lifecycleGeneration !== lifecycleGeneration ? 'process_crash' : failureReason(error, 'transport_lost')
-          yield { type: 'failure', reason, message: error instanceof Error ? error.message : String(error) }
+          yield { type: 'failure', reason, message }
           yield { type: 'completed', outcome: 'failed' }
           return
         }
