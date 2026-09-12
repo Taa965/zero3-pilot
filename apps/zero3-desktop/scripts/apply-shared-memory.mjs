@@ -39,6 +39,15 @@ ipcMain.handle('zero3:shared-memory:flush', async (_event, request: unknown) => 
   const status = await memory.flush()
   return { mode: 'shared', status }
 })
+ipcMain.handle('zero3:shared-memory:session-context', async (_event, request: unknown) => {
+  const input = request as { projectId?: string; logicalSessionId?: string; startSeq?: number; endSeq?: number; events?: unknown[] }
+  const projectId = input?.projectId
+  if (!projectId) throw new Error('请选择已登记的项目')
+  const memory = await zero3SharedMemoryForProject(projectId)
+  if (!memory) return { mode: 'unconfigured' }
+  try { return { mode: 'shared', result: await memory.publishSessionContext(input), status: memory.status() } }
+  catch (error) { return { mode: 'shared', result: null, status: memory.status(), error: error instanceof Error ? error.message : String(error) } }
+})
 ipcMain.handle('zero3:shared-memory:import', async () => {
   const chosen = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: '共享记忆连接配置', extensions: ['json'] }] })
   if (chosen.canceled || !chosen.filePaths[0]) return { imported: false }
@@ -79,8 +88,14 @@ export function applyZero3SharedMemory() {
   }
   const preloadFile = path.join(hermesDesktopDir, 'electron', 'preload.ts')
   let preload = fs.readFileSync(preloadFile, 'utf8')
-  if (!preload.includes("exposeInMainWorld('zero3SharedMemory'")) {
-    preload += `\ncontextBridge.exposeInMainWorld('zero3SharedMemory', {\n  read: request => ipcRenderer.invoke('zero3:shared-memory:read', request),\n  flush: request => ipcRenderer.invoke('zero3:shared-memory:flush', request),\n  importConfig: () => ipcRenderer.invoke('zero3:shared-memory:import')\n})\n`
-    fs.writeFileSync(preloadFile, preload)
+  const preloadSurface = `contextBridge.exposeInMainWorld('zero3SharedMemory', {\n  read: request => ipcRenderer.invoke('zero3:shared-memory:read', request),\n  flush: request => ipcRenderer.invoke('zero3:shared-memory:flush', request),\n  publishSessionContext: request => ipcRenderer.invoke('zero3:shared-memory:session-context', request),\n  importConfig: () => ipcRenderer.invoke('zero3:shared-memory:import')\n})`
+  const preloadStart = preload.indexOf("contextBridge.exposeInMainWorld('zero3SharedMemory', {")
+  if (preloadStart >= 0) {
+    const preloadEnd = preload.indexOf('\n})', preloadStart)
+    if (preloadEnd < 0) throw new Error('shared memory overlay: missing preload owned block end')
+    preload = preload.slice(0, preloadStart) + preloadSurface + preload.slice(preloadEnd + 3)
+  } else {
+    preload += '\n' + preloadSurface + '\n'
   }
+  fs.writeFileSync(preloadFile, preload)
 }

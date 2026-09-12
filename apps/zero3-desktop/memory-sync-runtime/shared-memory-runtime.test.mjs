@@ -83,3 +83,38 @@ test('shared runtime queues offline writes, survives reopen and distinguishes st
   await assert.rejects(() => shared.publish(event({ payload: { api_key: 'secret' } })), /forbidden|secret/i)
   await assert.rejects(() => shared.publish(event({ event_type: 'made.up' })), /event type/)
 })
+
+test('session context coverage advances only after an acknowledged shared-memory write', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'session-context-'))
+  let shared
+  t.after(async () => { await shared?.close(); await fs.rm(dir, { recursive: true, force: true }) })
+  const configPath = path.join(dir, 'config.json')
+  await fs.writeFile(configPath, JSON.stringify({ baseUrl: 'http://127.0.0.1:8792', token: 'test-token', clientId: 'test', deviceId: 'test', projects: ['project-a'], cacheDir: dir }))
+  const submitted = []
+  const fetchImpl = async (url, options) => {
+    if (String(url).endsWith('events:batch')) {
+      const { events } = JSON.parse(options.body)
+      submitted.push(...events)
+      return response(200, { results: events.map((item, index) => ({ event_id: item.event_id, status: 'accepted', sequence: 10 + index })) })
+    }
+    if (String(url).includes('/context')) return response(200, { projectId: 'project-a', version: 9, entities: [], sync: { source: 'memory_server', last_sequence: 9, stale: false } })
+    return response(200, { events: [] })
+  }
+  shared = await openSharedMemory({ configPath, projectId: 'project-a', fetchImpl, retryMs: 60000 })
+  const result = await shared.publishSessionContext({
+    logicalSessionId: 'session-1', startSeq: 4, endSeq: 5,
+    events: [{ session_seq: 4, created_at: '2026-09-12T01:00:00.000Z', type: 'userMessage', payload: { text: 'hello' } }, { session_seq: 5, created_at: '2026-09-12T01:00:01.000Z', type: 'agentMessage', payload: { text: 'world' } }]
+  })
+  assert.equal(result.state, 'acked')
+  assert.equal(typeof result.entity_id, 'string')
+  assert.equal(submitted.length, 1)
+  assert.equal(submitted[0].event_type, 'artifact.recorded')
+  assert.equal(submitted[0].memory.entity_type, 'session-context')
+  assert.equal(submitted[0].memory.expected_entity_version, 0)
+  assert.equal(submitted[0].payload.protocol, 'zero3.session-context.v1')
+  assert.deepEqual(submitted[0].payload.events.map(item => item.session_seq), [4, 5])
+  const retry = await shared.publishSessionContext({ logicalSessionId: 'session-1', startSeq: 4, endSeq: 5, events: submitted[0].payload.events })
+  assert.equal(retry.state, 'acked')
+  assert.equal(submitted.length, 1)
+  assert.equal(retry.entity_id, result.entity_id)
+})

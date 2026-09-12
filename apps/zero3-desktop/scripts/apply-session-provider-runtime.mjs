@@ -1068,7 +1068,20 @@ type Zero3ApiAgentRunOptions = {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | null
   onEvent?: (event: any) => void
 }
-type Zero3SessionWriterState = { generation: number; active: boolean }
+type Zero3SessionSwitchPhase = 'ACTIVE' | 'HANDOFF_PENDING' | 'HANDOFF_VERIFYING' | 'SWITCHING' | 'FAILED'
+type Zero3SessionWriterState = {
+  generation: number
+  phase: Zero3SessionSwitchPhase
+  profileId: string | null
+  projectId: string | null
+  writerToken: string | null
+  targetGeneration: number | null
+  targetProfileId: string | null
+  switchToken: string | null
+  handoffHash: string | null
+  updatedAt: string
+  lastError: string | null
+}
 const zero3SessionWriters = new Map<string, Zero3SessionWriterState>()
 function zero3SessionGeneration(value: unknown): number {
   if (value == null) return 1
@@ -1078,15 +1091,134 @@ function zero3SessionGeneration(value: unknown): number {
 function zero3ReasoningEffort(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | null {
   return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ? value : null
 }
-function zero3AcquireSessionWriter(logicalSessionId: string, generation: number) {
-  const current = zero3SessionWriters.get(logicalSessionId)
-  if (current?.active) throw new Error('该 Zero3 会话已有正在执行的 Turn；Provider 切换期间禁止双写')
-  if (current && generation < current.generation) throw new Error('该请求来自过期的 Provider generation，已拒绝写入')
-  const state = { generation: Math.max(current?.generation ?? 1, generation), active: true }
-  zero3SessionWriters.set(logicalSessionId, state)
-  return () => {
+function zero3SessionWriterSnapshot(logicalSessionId: string) {
+  const state = zero3SessionWriters.get(logicalSessionId)
+  return state ? { generation: state.generation, phase: state.phase, profileId: state.profileId, projectId: state.projectId, activeWriter: Boolean(state.writerToken), targetGeneration: state.targetGeneration, targetProfileId: state.targetProfileId, switchToken: state.switchToken, updatedAt: state.updatedAt, lastError: state.lastError } : null
+}
+function zero3SessionWriterState(logicalSessionId: string, generation: number, profileId: string | null, projectId: string | null) {
+  let state = zero3SessionWriters.get(logicalSessionId)
+  if (!state) {
+    state = { generation, phase: 'ACTIVE', profileId, projectId, writerToken: null, targetGeneration: null, targetProfileId: null, switchToken: null, handoffHash: null, updatedAt: new Date().toISOString(), lastError: null }
+    zero3SessionWriters.set(logicalSessionId, state)
+  }
+  return state
+}
+function zero3BeginSessionSwitch(requestValue: unknown) {
+  const request = zero3SessionRecord(requestValue)
+  const logicalSessionId = zero3SessionText(request.logicalSessionId, 'logicalSessionId', 256)
+  const sourceGeneration = zero3SessionGeneration(request.sourceGeneration)
+  const sourceProfileId = zero3SessionOptionalText(request.sourceProfileId, 128)
+  const targetProfileId = zero3SessionText(request.targetProfileId, 'targetProfileId', 128)
+  const projectId = zero3SessionText(request.projectId, 'projectId', 256)
+  const state = zero3SessionWriterState(logicalSessionId, sourceGeneration, sourceProfileId, projectId)
+  if (state.generation !== sourceGeneration) throw new Error('Provider switch source generation is stale')
+  if (state.phase !== 'ACTIVE' && state.phase !== 'FAILED') throw new Error('Provider switch is already in progress')
+  if (state.profileId && sourceProfileId && state.profileId !== sourceProfileId) throw new Error('Provider switch source profile is stale')
+  state.phase = 'HANDOFF_PENDING'
+  state.profileId = sourceProfileId ?? state.profileId
+  state.projectId = projectId
+  state.targetGeneration = sourceGeneration + 1
+  state.targetProfileId = targetProfileId
+  state.switchToken = crypto.randomUUID()
+  state.handoffHash = null
+  state.updatedAt = new Date().toISOString()
+  state.lastError = null
+  return zero3SessionWriterSnapshot(logicalSessionId)
+}
+function zero3ValidateSwitchHandoff(logicalSessionId: string, state: Zero3SessionWriterState, handoff: Record<string, unknown>) {
+  if (handoff.protocol !== 'zero3.session-provider-handoff.v1' || handoff.logical_session_id !== logicalSessionId) throw new Error('Provider handoff identity is invalid')
+  const metadata = zero3SessionRecord(handoff.handoff)
+  if (metadata.source_runtime_generation !== state.generation || metadata.target_runtime_generation !== state.targetGeneration) throw new Error('Provider handoff generation is stale')
+  const generatedAt = typeof metadata.generated_at === 'string' ? Date.parse(metadata.generated_at) : NaN
+  if (!Number.isFinite(generatedAt) || generatedAt > Date.now() + 60_000 || Date.now() - generatedAt > 10 * 60_000) throw new Error('Provider handoff is stale')
+  if (state.projectId && handoff.project_id !== state.projectId) throw new Error('Provider handoff project changed during switch')
+  const from = zero3SessionRecord(handoff.from)
+  const to = zero3SessionRecord(handoff.to)
+  if (state.profileId && from.profileId !== state.profileId) throw new Error('Provider handoff source profile is stale')
+  if (state.targetProfileId && to.profileId !== state.targetProfileId) throw new Error('Provider handoff target profile is stale')
+}
+function zero3SwitchHandoffHash(handoff: Record<string, unknown>) {
+  return crypto.createHash('sha256').update(JSON.stringify(handoff)).digest('hex')
+}
+function zero3VerifySessionSwitch(requestValue: unknown) {
+  const request = zero3SessionRecord(requestValue)
+  const logicalSessionId = zero3SessionText(request.logicalSessionId, 'logicalSessionId', 256)
+  const switchToken = zero3SessionText(request.switchToken, 'switchToken', 256)
+  const state = zero3SessionWriters.get(logicalSessionId)
+  if (!state || state.switchToken !== switchToken || state.phase !== 'HANDOFF_PENDING') throw new Error('Provider switch token is stale')
+  if (state.writerToken) throw new Error('Provider switch is waiting for the current Turn to finish')
+  state.phase = 'HANDOFF_VERIFYING'
+  state.updatedAt = new Date().toISOString()
+  try {
+    const handoff = zero3ProviderHandoff(request.handoff)
+    if (!handoff) throw new Error('Provider handoff is required')
+    zero3ValidateSwitchHandoff(logicalSessionId, state, handoff)
+    state.handoffHash = zero3SwitchHandoffHash(handoff)
+    state.phase = 'SWITCHING'
+    state.updatedAt = new Date().toISOString()
+    return zero3SessionWriterSnapshot(logicalSessionId)
+  } catch (error) {
+    state.phase = 'FAILED'
+    state.lastError = error instanceof Error ? error.message : String(error)
+    state.updatedAt = new Date().toISOString()
+    throw error
+  }
+}
+function zero3FailSessionSwitch(requestValue: unknown) {
+  const request = zero3SessionRecord(requestValue)
+  const logicalSessionId = zero3SessionText(request.logicalSessionId, 'logicalSessionId', 256)
+  const switchToken = zero3SessionOptionalText(request.switchToken, 256)
+  const state = zero3SessionWriters.get(logicalSessionId)
+  if (!state) return null
+  if (switchToken && state.switchToken && switchToken !== state.switchToken) return zero3SessionWriterSnapshot(logicalSessionId)
+  state.phase = 'FAILED'
+  state.targetGeneration = null
+  state.targetProfileId = null
+  state.switchToken = null
+  state.handoffHash = null
+  state.lastError = zero3SessionOptionalText(request.error, 4000)
+  state.updatedAt = new Date().toISOString()
+  return zero3SessionWriterSnapshot(logicalSessionId)
+}
+function zero3AcquireSessionWriter(logicalSessionId: string, generation: number, profileId: string, projectId: string, handoff: Record<string, unknown> | null) {
+  const state = zero3SessionWriterState(logicalSessionId, generation, profileId, projectId)
+  if (state.writerToken) throw new Error('该 Zero3 会话已有正在执行的 Turn；禁止双写')
+  if (state.phase === 'HANDOFF_PENDING' || state.phase === 'HANDOFF_VERIFYING') throw new Error('Provider handoff 尚未完成，暂时禁止启动新 Turn')
+  let switchedWriter = false
+  if (state.phase === 'SWITCHING') {
+    if (generation !== state.targetGeneration || profileId !== state.targetProfileId) throw new Error('新 Provider 尚未取得写权限')
+    if (!handoff) throw new Error('新 Provider 缺少已验证的 handoff')
+    zero3ValidateSwitchHandoff(logicalSessionId, state, handoff)
+    if (!state.handoffHash || zero3SwitchHandoffHash(handoff) !== state.handoffHash) throw new Error('Provider handoff changed after verification')
+    state.generation = generation
+    state.profileId = profileId
+    state.projectId = projectId
+    state.phase = 'ACTIVE'
+    state.targetGeneration = null
+    state.targetProfileId = null
+    state.switchToken = null
+    state.handoffHash = null
+    state.lastError = null
+    switchedWriter = true
+  } else {
+    if (generation !== state.generation) throw new Error('该请求来自非当前 Provider generation，已拒绝写入')
+    if (state.profileId && state.profileId !== profileId) throw new Error('API Profile 变更必须经过 Provider handoff')
+    state.profileId = profileId
+    state.projectId = projectId
+    if (state.phase === 'FAILED') state.phase = 'ACTIVE'
+  }
+  const writerToken = crypto.randomUUID()
+  state.writerToken = writerToken
+  state.updatedAt = new Date().toISOString()
+  return (failed = false) => {
     const latest = zero3SessionWriters.get(logicalSessionId)
-    if (latest === state) zero3SessionWriters.set(logicalSessionId, { generation: state.generation, active: false })
+    if (!latest || latest.writerToken !== writerToken) return
+    latest.writerToken = null
+    if (failed && switchedWriter) {
+      latest.phase = 'FAILED'
+      latest.lastError = 'target Provider Turn failed after writer handoff'
+    }
+    latest.updatedAt = new Date().toISOString()
   }
 }
 function zero3ProviderHandoff(value: unknown): Record<string, unknown> | null {
@@ -2134,6 +2266,13 @@ ipcMain.handle('zero3:session-providers:status', (_event, request: unknown) => {
 })
 ipcMain.handle('zero3:session-providers:authorize', (_event, request: unknown) => zero3OpenProviderAuthorization(zero3SessionProvider(zero3SessionRecord(request).provider)))
 ipcMain.handle('zero3:session-providers:zero3-profiles:list', () => zero3ListApiProfiles())
+ipcMain.handle('zero3:session-providers:zero3-switch:begin', (_event, request: unknown) => zero3BeginSessionSwitch(request))
+ipcMain.handle('zero3:session-providers:zero3-switch:verify', (_event, request: unknown) => zero3VerifySessionSwitch(request))
+ipcMain.handle('zero3:session-providers:zero3-switch:fail', (_event, request: unknown) => zero3FailSessionSwitch(request))
+ipcMain.handle('zero3:session-providers:zero3-switch:status', (_event, request: unknown) => {
+  const logicalSessionId = zero3SessionText(zero3SessionRecord(request).logicalSessionId, 'logicalSessionId', 256)
+  return zero3SessionWriterSnapshot(logicalSessionId)
+})
 ipcMain.handle('zero3:session-providers:zero3-profiles:models', async (_event, requestValue: unknown) => {
   const request = zero3SessionRecord(requestValue)
   const profileId = zero3SessionText(request.profileId, 'profileId', 128)
@@ -2187,15 +2326,20 @@ ipcMain.handle('zero3:session-providers:zero3-turn', async (event, requestValue:
   const state = await zero3ApiProfileRead()
   const profile = state.profiles[profileId]
   if (!profile) throw new Error('Zero3 API Profile 不存在')
-  const releaseWriter = zero3AcquireSessionWriter(logicalSessionId, generation)
+  const projectId = zero3SessionText(request.projectId, 'projectId', 256)
+  const handoff = zero3ProviderHandoff(request.handoff)
+  const releaseWriter = zero3AcquireSessionWriter(logicalSessionId, generation, profileId, projectId, handoff)
+  let failed = true
   try {
-    return await zero3ApiAgentTurn(profile, request, false, nativeEvent => {
+    const result = await zero3ApiAgentTurn(profile, { ...request, handoff }, false, nativeEvent => {
       if (!event.sender.isDestroyed()) event.sender.send('zero3:session-providers:zero3-event', {
         logicalSessionId, requestId, generation, event: nativeEvent
       })
     })
+    failed = false
+    return result
   } finally {
-    releaseWriter()
+    releaseWriter(failed)
   }
 })
 ipcMain.handle('zero3:session-providers:set-archived', (_event, request: unknown) => zero3SetSessionProviderArchived(request))
@@ -2215,6 +2359,10 @@ const preloadSurface = String.raw`contextBridge.exposeInMainWorld('zero3SessionP
   listZero3Models: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:models', request),
   saveZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:save', request),
   removeZero3Profile: request => ipcRenderer.invoke('zero3:session-providers:zero3-profiles:remove', request),
+  beginZero3ProviderSwitch: request => ipcRenderer.invoke('zero3:session-providers:zero3-switch:begin', request),
+  verifyZero3ProviderSwitch: request => ipcRenderer.invoke('zero3:session-providers:zero3-switch:verify', request),
+  failZero3ProviderSwitch: request => ipcRenderer.invoke('zero3:session-providers:zero3-switch:fail', request),
+  zero3ProviderSwitchStatus: request => ipcRenderer.invoke('zero3:session-providers:zero3-switch:status', request),
   zero3Turn: request => ipcRenderer.invoke('zero3:session-providers:zero3-turn', request),
   setArchived: request => ipcRenderer.invoke('zero3:session-providers:set-archived', request),
   claudeTurn: request => ipcRenderer.invoke('zero3:session-providers:claude-turn', request),
@@ -2246,6 +2394,8 @@ type Zero3SessionProviderStatus = {
 type Zero3SessionProviderStatusMap = Record<Zero3SessionProviderId, Zero3SessionProviderStatus>
 type Zero3CodexProgressEvent = { requestId: string; detail: string }
 type Zero3NativeSessionEvent = { logicalSessionId: string; requestId: string | null; generation: number; event: Zero3CodexEvent }
+type Zero3ProviderSwitchPhase = 'ACTIVE' | 'HANDOFF_PENDING' | 'HANDOFF_VERIFYING' | 'SWITCHING' | 'FAILED'
+type Zero3ProviderSwitchStatus = { generation: number; phase: Zero3ProviderSwitchPhase; profileId: string | null; projectId: string | null; activeWriter: boolean; targetGeneration: number | null; targetProfileId: string | null; switchToken: string | null; updatedAt: string; lastError: string | null }
 type Zero3ApiProfileProtocol = 'openai_compatible' | 'anthropic' | 'google_gemini'
 type Zero3ApiProfile = {
   id: string
@@ -2267,6 +2417,10 @@ const globalSurface = String.raw`    zero3SessionProviders: {
       listZero3Models: (request: { profileId: string }) => Promise<{ models: string[]; source: 'provider' | 'profile_default'; error?: string }>
       saveZero3Profile: (request: { id: string; name: string; protocol: Zero3ApiProfileProtocol; baseUrl: string; model: string; apiKey?: string | null }) => Promise<Zero3ApiProfile>
       removeZero3Profile: (request: { id: string }) => Promise<{ removed: boolean }>
+      beginZero3ProviderSwitch: (request: { logicalSessionId: string; sourceGeneration: number; sourceProfileId?: string | null; targetProfileId: string; projectId: string }) => Promise<Zero3ProviderSwitchStatus>
+      verifyZero3ProviderSwitch: (request: { logicalSessionId: string; switchToken: string; handoff: unknown }) => Promise<Zero3ProviderSwitchStatus>
+      failZero3ProviderSwitch: (request: { logicalSessionId: string; switchToken?: string | null; error?: string | null }) => Promise<Zero3ProviderSwitchStatus | null>
+      zero3ProviderSwitchStatus: (request: { logicalSessionId: string }) => Promise<Zero3ProviderSwitchStatus | null>
       zero3Turn: (request: { profileId: string; logicalSessionId: string; generation: number; requestId?: string | null; text: string; cwd: string; projectId: string; threadId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | null; handoff?: unknown; allowRuntimeRotation?: boolean; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) => Promise<{ text: string; model: string; effort: 'low' | 'medium' | 'high' | 'xhigh' | null; profileId: string; threadId: string; runtimeRotated: boolean }>
       setArchived: (request: { provider: Exclude<Zero3SessionProviderId, 'gpt' | 'gemini'>; runtimeId?: string | null; archived: boolean }) => Promise<{ native: boolean; detail: string }>
       claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null }) => Promise<{ text: string; sessionId: string | null }>
@@ -2281,7 +2435,7 @@ const globalSurface = String.raw`    zero3SessionProviders: {
 // so bump this whenever the injected payload changes: the previous revision then
 // becomes a repair candidate and an already-staged tree picks up the new runtime
 // on the next prepare, instead of silently keeping the old one.
-const SESSION_PROVIDER_REVISION = 'v1'
+const SESSION_PROVIDER_REVISION = 'v3'
 
 function sessionProviderMarkers(kind) {
   return {

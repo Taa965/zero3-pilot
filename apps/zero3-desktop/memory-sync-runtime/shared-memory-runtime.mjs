@@ -42,6 +42,13 @@ export async function openSharedMemory({ configPath, projectId, fetchImpl = fetc
   retry.unref?.()
   const headers = { authorization: `Bearer ${config.token}` }
   const assertScope = id => { if (id !== projectId) throw new Error('shared memory access denied for inactive project') }
+  const sessionContextIdentity = input => {
+    const identity = createHash('sha256').update(JSON.stringify([projectId, input.logicalSessionId])).digest('hex').slice(0, 32)
+    const contentHash = createHash('sha256').update(JSON.stringify(input.events)).digest('hex')
+    const eventHash = createHash('sha256').update(JSON.stringify(['zero3.session-context.v1', projectId, input.logicalSessionId, input.startSeq, input.endSeq, contentHash])).digest('hex')
+    const eventId = `${eventHash.slice(0, 8)}-${eventHash.slice(8, 12)}-${eventHash.slice(12, 16)}-${eventHash.slice(16, 20)}-${eventHash.slice(20, 32)}`
+    return { entityId: `session-context:${identity}:${input.startSeq}-${input.endSeq}:${contentHash.slice(0, 12)}`, contentHash, eventId }
+  }
   const runtime = {
     async getProject(id) {
       assertScope(id)
@@ -73,6 +80,36 @@ export async function openSharedMemory({ configPath, projectId, fetchImpl = fetc
       store.enqueue(event)
       try { await client.flushPending() } catch { lastError = 'memory_sync_unavailable' }
       return store.status(event.event_id)
+    },
+    async publishSessionContext(input) {
+      if (!input || typeof input.logicalSessionId !== 'string' || !input.logicalSessionId.trim() || input.logicalSessionId.length > 256) throw new Error('logicalSessionId is required')
+      if (!Number.isSafeInteger(input.startSeq) || !Number.isSafeInteger(input.endSeq) || input.startSeq < 1 || input.endSeq < input.startSeq) throw new Error('invalid session context sequence range')
+      if (!Array.isArray(input.events) || input.events.length < 1 || input.events.length > 64) throw new Error('session context batch must contain 1..64 events')
+      let expected = input.startSeq
+      for (const item of input.events) {
+        if (!item || typeof item !== 'object' || item.session_seq !== expected) throw new Error('session context events must be contiguous and ordered')
+        expected += 1
+      }
+      if (expected - 1 !== input.endSeq) throw new Error('session context range does not match events')
+      const { entityId, contentHash, eventId } = sessionContextIdentity(input)
+      const createdAt = input.events[0]?.created_at
+      if (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) throw new Error('session context events require a stable created_at')
+      const payload = { protocol: 'zero3.session-context.v1', logical_session_id: input.logicalSessionId, start_seq: input.startSeq, end_seq: input.endSeq, event_count: input.events.length, content_hash: contentHash, events: input.events }
+      const serialized = JSON.stringify(payload)
+      if (Buffer.byteLength(serialized, 'utf8') > 768 * 1024) throw new Error('session context batch exceeds 768 KiB')
+      try {
+        const context = await runtime.getProject(projectId)
+        const existing = Array.isArray(context.entities) ? context.entities.find(item => item?.entity_id === entityId) : null
+        const content = existing?.content && typeof existing.content === 'object' ? existing.content : null
+        if (content?.protocol === payload.protocol && content?.content_hash === contentHash && content?.start_seq === input.startSeq && content?.end_seq === input.endSeq) {
+          return { state: 'acked', server_sequence: existing.updated_sequence ?? context.sync?.last_sequence ?? null, entity_id: entityId, content_hash: contentHash, reused: true }
+        }
+      } catch { /* publish() will preserve an offline pending write below */ }
+      const status = await runtime.publish({ schema: 'zero3.memory.event.v1', event_id: eventId, created_at: createdAt,
+        scope: { project_id: projectId, session_id: input.logicalSessionId }, actor: { agent_id: config.clientId, agent_type: 'zero3', device_id: config.deviceId },
+        event_type: 'artifact.recorded', memory: { class: 'project', entity_type: 'session-context', entity_id: entityId, authority: 45, confidence: 1, expected_entity_version: 0 },
+        source: { type: 'chat', ref: input.logicalSessionId }, supersedes: [], payload })
+      return { ...status, entity_id: entityId, content_hash: contentHash, reused: false }
     },
     async getHandoff(taskId) {
       const context = await runtime.getProject(projectId)

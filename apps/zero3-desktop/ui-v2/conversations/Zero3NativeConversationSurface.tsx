@@ -13,6 +13,7 @@ type ApiProfile = Awaited<ReturnType<Window['zero3SessionProviders']['listZero3P
 type SharedMemoryBridge = {
   read: (request: { projectId: string }) => Promise<unknown>
   flush?: (request: { projectId: string }) => Promise<unknown>
+  publishSessionContext?: (request: { projectId: string; logicalSessionId: string; startSeq: number; endSeq: number; events: Array<Record<string, unknown>> }) => Promise<unknown>
 }
 
 type Zero3Window = Window & { zero3SharedMemory?: SharedMemoryBridge }
@@ -34,30 +35,45 @@ function profileDescriptor(profile: ApiProfile | undefined, fallbackId: string |
     runtimeThreadId: threadId
   }
 }
-async function sharedMemoryHandoff(projectId: string): Promise<Record<string, unknown>> {
+async function sharedMemoryHandoff(projectId: string, logicalSessionId: string): Promise<Record<string, unknown>> {
   const bridge = (window as Zero3Window).zero3SharedMemory
   const locator = `zero3-shared-memory://${projectId}`
+  const ackedRefs: string[] = []
   if (!bridge) return { locator, status: 'unconfigured', project_sequence: 0, task_sequence: 0, authority_refs: [], retrieval_refs: [] }
   try {
     if (bridge.flush) await bridge.flush({ projectId })
+    if (bridge.publishSessionContext) {
+      for (const batch of Zero3SessionEventStore.transferBatches(logicalSessionId)) {
+        const published = record(await bridge.publishSessionContext({ projectId, logicalSessionId, startSeq: batch.startSeq, endSeq: batch.endSeq, events: batch.events }))
+        const result = record(published.result)
+        if (published.mode === 'shared' && result.state === 'acked') {
+          Zero3SessionEventStore.markCoveredRange(logicalSessionId, batch.startSeq, batch.endSeq)
+          if (typeof result.entity_id === 'string') ackedRefs.push(result.entity_id)
+        }
+      }
+    }
+    if (bridge.flush) await bridge.flush({ projectId })
     const raw = record(await bridge.read({ projectId }))
-    if (raw.mode !== 'shared') return { locator, status: 'unconfigured', project_sequence: 0, task_sequence: 0, authority_refs: [], retrieval_refs: [] }
+    if (raw.mode !== 'shared') return { locator, status: 'unconfigured', project_sequence: 0, task_sequence: 0, authority_refs: [], retrieval_refs: ackedRefs }
     const context = record(raw.context)
     const sync = record(context.sync)
     const entities = Array.isArray(context.entities) ? context.entities.map(record) : []
     const sequence = typeof sync.last_sequence === 'number' ? sync.last_sequence : typeof context.version === 'number' ? context.version : 0
-    return {
-      locator,
-      status: raw.error ? 'unavailable' : sync.stale === true ? 'stale' : 'ready',
-      project_sequence: sequence,
-      task_sequence: 0,
-      context_version: typeof context.version === 'number' ? context.version : 0,
-      authority_refs: entities.filter(item => typeof item.entity_id === 'string').slice(-100).map(item => item.entity_id),
-      retrieval_refs: []
-    }
+    return { locator, status: raw.error ? 'unavailable' : sync.stale === true ? 'stale' : 'ready', project_sequence: sequence, task_sequence: 0, context_version: typeof context.version === 'number' ? context.version : 0, authority_refs: entities.filter(item => typeof item.entity_id === 'string').slice(-100).map(item => item.entity_id), retrieval_refs: ackedRefs }
   } catch (error) {
-    return { locator, status: 'unavailable', project_sequence: 0, task_sequence: 0, authority_refs: [], retrieval_refs: [], error: error instanceof Error ? error.message : String(error) }
+    return { locator, status: 'unavailable', project_sequence: 0, task_sequence: 0, authority_refs: [], retrieval_refs: ackedRefs, error: error instanceof Error ? error.message : String(error) }
   }
+}
+
+async function waitForSwitchWriter(logicalSessionId: string, switchToken: string) {
+  const deadline = Date.now() + 10 * 60_000
+  while (Date.now() < deadline) {
+    const status = await window.zero3SessionProviders.zero3ProviderSwitchStatus({ logicalSessionId })
+    if (!status || status.switchToken !== switchToken) throw new Error('Provider switch token expired')
+    if (!status.activeWriter) return status
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  throw new Error('等待当前 Turn 完成超时')
 }
 
 async function runZero3Turn(session: LocalSessionRecord, project: Zero3ProjectRecord, prompt: string, requestId: string) {
@@ -82,7 +98,7 @@ async function runZero3Turn(session: LocalSessionRecord, project: Zero3ProjectRe
   })
   if (result.threadId && result.threadId !== session.runtimeId) LocalSessionAdapter.setRuntimeId(session.id, result.threadId)
   Zero3SessionEventStore.setRuntimeThread(session.id, result.threadId)
-  if (pendingHandoff) Zero3SessionEventStore.clearPendingHandoff(session.id)
+  if (pendingHandoff) Zero3SessionEventStore.completeProviderSwitch(session.id)
   return result
 }
 interface Props {
@@ -138,7 +154,7 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
     return window.zero3SessionProviders.onZero3Event(payload => {
       if (payload.logicalSessionId !== session.id) return
       const current = Zero3SessionEventStore.snapshot(session.id)
-      if (payload.generation < current.binding.generation) return
+      if (payload.generation !== current.binding.generation) return
       Zero3SessionEventStore.ingestCodexEvent(session.id, payload.event)
     })
   }, [session?.id])
@@ -163,35 +179,45 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
     return () => { cancelled = true }
   }, [profiles, session?.zero3ProfileId])
   const currentProfile = useMemo(() => profiles.find(profile => profile.id === session?.zero3ProfileId), [profiles, session?.zero3ProfileId])
-  const canSend = Boolean(session && project && session.zero3ProfileId && input.trim() && !busy && !switching)
+  const canSend = Boolean(session && project && session.zero3ProfileId && input.trim() && !busy && !switching && !['HANDOFF_PENDING','HANDOFF_VERIFYING'].includes(Zero3SessionEventStore.switchState(session.id).phase))
 
   const switchProfile = async (profileId: string) => {
-    if (!session || !project || busy || switching || profileId === session.zero3ProfileId) return
+    if (!session || !project || switching || profileId === session.zero3ProfileId) return
     const next = profiles.find(profile => profile.id === profileId)
     if (!next) { setError('目标 API Profile 不存在'); return }
     setSwitching(true)
     setError(null)
+    let switchToken: string | null = null
     try {
-      const sharedMemory = await sharedMemoryHandoff(project.id)
+      const runtime = Zero3SessionEventStore.snapshot(session.id)
+      const begun = await window.zero3SessionProviders.beginZero3ProviderSwitch({ logicalSessionId: session.id, sourceGeneration: runtime.binding.generation, sourceProfileId: session.zero3ProfileId, targetProfileId: next.id, projectId: project.id })
+      switchToken = begun.switchToken
+      if (!switchToken || begun.targetGeneration == null) throw new Error('Provider switch 未返回有效 token/generation')
+      Zero3SessionEventStore.beginProviderSwitch(session.id, { token: switchToken, targetGeneration: begun.targetGeneration, targetProfileId: next.id })
+      if (begun.activeWriter) await waitForSwitchWriter(session.id, switchToken)
+      Zero3SessionEventStore.markProviderSwitchVerifying(session.id, switchToken)
+      const sharedMemory = await sharedMemoryHandoff(project.id, session.id)
+      const memoryReady = sharedMemory.status === 'ready'
       const handoff = Zero3SessionEventStore.buildProviderHandoff(session.id, {
         projectId: project.id,
         fromProfile: profileDescriptor(currentProfile, session.zero3ProfileId, session.model, session.runtimeId),
         toProfile: profileDescriptor(next, next.id, next.model, session.runtimeId),
-        sharedMemory
+        sharedMemory,
+        includeCoveredEvents: !memoryReady
       })
-      LocalSessionAdapter.setZero3RuntimeConfig(session.id, {
-        profileId: next.id, model: next.model, thinkingEffort: effortDraft || session.thinkingEffort
-      })
-      Zero3SessionEventStore.stageProviderSwitch(session.id, handoff, {
-        profileId: next.id, model: next.model,
-        thinkingEffort: (effortDraft || session.thinkingEffort) as LocalSessionThinkingEffort | null,
-        projectId: project.id
-      })
+      await window.zero3SessionProviders.verifyZero3ProviderSwitch({ logicalSessionId: session.id, switchToken, handoff })
+      LocalSessionAdapter.setZero3RuntimeConfig(session.id, { profileId: next.id, model: next.model, thinkingEffort: effortDraft || session.thinkingEffort })
+      Zero3SessionEventStore.stageProviderSwitch(session.id, handoff, { profileId: next.id, model: next.model, thinkingEffort: (effortDraft || session.thinkingEffort) as LocalSessionThinkingEffort | null, projectId: project.id })
       setModelDraft(next.model)
-      setNotice(`已切换至 ${next.name} · ${next.model}；交接包包含共享记忆引用和 ${handoff.uncovered_session_delta.events.length} 条未覆盖会话事件。`)
+      setNotice('Provider switch handoff verified; the next Turn will activate the target Provider.')
       onChanged()
     } catch (nextError) {
-      setError(localTurnFailureMessage(nextError))
+      const message = localTurnFailureMessage(nextError)
+      if (switchToken) {
+        try { await window.zero3SessionProviders.failZero3ProviderSwitch({ logicalSessionId: session.id, switchToken, error: message }) } catch {}
+        Zero3SessionEventStore.failProviderSwitch(session.id, switchToken, message)
+      }
+      setError(message)
     } finally {
       setSwitching(false)
     }
@@ -231,6 +257,11 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
       void withAssistant
     } catch (nextError) {
       const message = localTurnFailureMessage(nextError)
+      const switchState = Zero3SessionEventStore.switchState(session.id)
+      if (switchState.phase === 'SWITCHING') {
+        Zero3SessionEventStore.failProviderSwitch(session.id, switchState.token, message)
+        try { await window.zero3SessionProviders.failZero3ProviderSwitch({ logicalSessionId: session.id, switchToken: switchState.token, error: message }) } catch {}
+      }
       setError(message)
       try {
         LocalSessionAdapter.appendMessage(session.id, 'assistant', `执行失败：${message}`)
@@ -281,7 +312,7 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
           <select
             aria-label="API 服务商"
             value={session.zero3ProfileId ?? ''}
-            disabled={busy || switching}
+            disabled={switching}
             onChange={event => void switchProfile(event.target.value)}
             className="h-8 max-w-52 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-xs"
           >
