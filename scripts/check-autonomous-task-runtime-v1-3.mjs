@@ -34,6 +34,7 @@ for (const marker of [
   'autonomousLineage', 'resumeParentOnComplete', 'reconcileParentResume(',
   'evaluatePluginCapabilityBaseline(', 'agentDispatch?: AutonomousAgentDispatchPort',
   'ingestGuardEvent(', 'ingestExecutionGuardEvents(', 'ingestGptWebGuardEvents(', 'reconcileProjectNow(',
+  'memoryTimeoutMs', 'memoryCall(',
   'createGoal(', 'dashboard('
 ]) requireText(loop, marker, `Autonomous loop is missing v1.3 behavior ${marker}.`)
 
