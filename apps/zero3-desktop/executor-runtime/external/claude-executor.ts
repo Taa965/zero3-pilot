@@ -20,12 +20,19 @@ import {
 } from '../executor-types.ts'
 
 const MAX_CAPTURE_BYTES = 16 * 1024 * 1024
+// Windows rejects a CreateProcess command line above 32767 characters, so a
+// long task prompt is streamed on stdin instead of being passed as argv.
+const CLAUDE_STDIN_PROMPT_THRESHOLD = 12_000
 
 export type ClaudeCliRunRequest = {
   command: string
   args: string[]
   cwd?: string
   signal?: AbortSignal
+  // Prompts beyond the Windows command-line limit must travel on stdin: an
+  // argv prompt larger than ~32k characters makes spawn fail with ENAMETOOLONG
+  // before the CLI ever starts.
+  stdin?: string
 }
 
 export type ClaudeCliRunResult = {
@@ -89,7 +96,7 @@ export class NodeClaudeCliRunner implements ClaudeCliRunner {
         ...(request.cwd ? { cwd: request.cwd } : {}),
         env,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: [request.stdin == null ? 'ignore' : 'pipe', 'pipe', 'pipe']
       })
       const stdout: Buffer[] = []
       const stderr: Buffer[] = []
@@ -116,6 +123,13 @@ export class NodeClaudeCliRunner implements ClaudeCliRunner {
       }
       request.signal?.addEventListener('abort', onAbort, { once: true })
       if (request.signal?.aborted) onAbort()
+
+      if (request.stdin != null) {
+        // The prompt is delivered and the pipe is closed immediately, so the CLI
+        // never waits on a stdin that no one will write to.
+        child.stdin?.on('error', () => {})
+        child.stdin?.end(request.stdin, 'utf8')
+      }
 
       child.stdout.on('data', chunk => {
         const buffer = Buffer.from(chunk)
@@ -317,7 +331,10 @@ export class ClaudeExecutor implements Zero3Executor {
     state.abortController = controller
     let sequence = 0
     try {
-      const args = ['-p', input.text, '--output-format', 'json', '--permission-mode', state.permissionMode]
+      const useStdinPrompt = input.text.length > CLAUDE_STDIN_PROMPT_THRESHOLD
+      const args = useStdinPrompt
+        ? ['-p', '--output-format', 'json', '--permission-mode', state.permissionMode]
+        : ['-p', input.text, '--output-format', 'json', '--permission-mode', state.permissionMode]
       const mcpConfig = this.options.mcpConfig?.trim()
       if (mcpConfig) {
         if (this.options.strictMcpConfig !== false) args.push('--strict-mcp-config')
@@ -325,7 +342,13 @@ export class ClaudeExecutor implements Zero3Executor {
       }
       if (state.cliSessionId) args.push('--resume', state.cliSessionId)
       if (this.options.model?.trim()) args.push('--model', this.options.model.trim())
-      const run = await this.#runner.run({ command: this.#command, args, cwd: state.workspace, signal: controller.signal })
+      const run = await this.#runner.run({
+        command: this.#command,
+        args,
+        cwd: state.workspace,
+        signal: controller.signal,
+        ...(useStdinPrompt ? { stdin: input.text } : {})
+      })
       const parsed = parseJson(run.stdout)
       const failed = run.exitCode !== 0 || parsed?.is_error === true
       if (failed) {

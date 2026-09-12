@@ -329,7 +329,7 @@ export function applyZero3UnifiedAgentTaskDispatch() {
   patchFile('electron/main.ts', [
     {
       label: 'unified Web GPT dispatch tool',
-      appliedMarker: '    dispatchAgentTask: input => zero3DispatchAgentTask(input),',
+      appliedMarker: 'dispatchAgentTask: input => zero3DispatchAgentTask(input)',
       from: '    claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),\n    reportProgressV2: input => zero3WorkflowWorkerRuntime.reportProgressV2(input)\n  }',
       to: '    claimWorkV2: input => zero3WorkflowWorkerRuntime.claimWorkV2(input),\n    reportProgressV2: input => zero3WorkflowWorkerRuntime.reportProgressV2(input),\n    dispatchAgentTask: input => zero3DispatchAgentTask(input)\n  }'
     }

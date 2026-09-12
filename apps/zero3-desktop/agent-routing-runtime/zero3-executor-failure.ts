@@ -25,10 +25,13 @@ const FAILURE_CLASS_BY_CODE: Record<ExecutorFailureCode, Zero3ExecutorFailureCla
   // A missing credential is a provider condition for this task: another
   // executor may hold the credential the task needs, so the task continues.
   auth_required: 'reroute',
+  // The executor cannot do this kind of work (its tools are not enough for the
+  // objective). That is a routing problem, not a human decision: continue with
+  // an executor whose capabilities cover the task.
+  unsupported: 'reroute',
   budget_exhausted: 'waiting_human',
   permission_denied: 'waiting_human',
   policy_denied: 'waiting_human',
-  unsupported: 'waiting_human',
   bad_request: 'terminal',
   user_stopped: 'terminal',
   // The provider may already have executed work; Zero3 must reconcile the

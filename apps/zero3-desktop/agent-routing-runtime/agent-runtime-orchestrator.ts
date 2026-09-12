@@ -417,13 +417,21 @@ type PriorAttemptSummary = {
   reason: string
 }
 
-// Executor switches must not restart the task from zero. The next executor
+// Executor switches must not restart the task from zero. A *different* executor
 // receives the attempt chain (who ran, what happened, why it stopped) inside the
 // authoritative TaskSpec goal, while the TaskSpec identity fields stay untouched
-// so TaskSpec-driven idempotency and the CompletionGate are unaffected.
-function withPriorAttemptContext(task: Zero3TaskSpecV2, prior: readonly PriorAttemptSummary[]): Zero3TaskSpecV2 {
-  if (prior.length === 0) return task
-  const lines = prior.slice(-6).map(entry =>
+// so TaskSpec-driven idempotency and the CompletionGate are unaffected. A retry
+// of the same executor deliberately keeps the prompt byte-identical: the
+// executor-owned task mapping is keyed by task/execution identity, and a changed
+// prompt for the same identity is (correctly) rejected as a different task.
+function withPriorAttemptContext(
+  task: Zero3TaskSpecV2,
+  prior: readonly PriorAttemptSummary[],
+  executor: Zero3RoutingExecutorId
+): Zero3TaskSpecV2 {
+  const foreign = prior.filter(entry => entry.executor !== executor)
+  if (foreign.length === 0) return task
+  const lines = foreign.slice(-6).map(entry =>
     `- attempt executor=${entry.executor} status=${entry.status} reason=${entry.reason.replace(/\s+/g, ' ').trim().slice(0, 500)}`
   )
   return {
@@ -603,7 +611,8 @@ export class Zero3AgentRuntimeOrchestrator {
       const startedAt = Date.now()
       const attemptTask = withPriorAttemptContext(
         applyReviewerIndependence(task, decision.provider, profileName),
-        priorAttempts
+        priorAttempts,
+        decision.selectedExecutor
       )
       const resolvedSkills = this.deps.skills ? await this.deps.skills.resolve(attemptTask, decision.provider) : []
       await this.deps.taskStore.setSkills(task.taskId, resolvedSkills)

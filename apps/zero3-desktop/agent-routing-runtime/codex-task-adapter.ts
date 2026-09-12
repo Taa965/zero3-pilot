@@ -4,6 +4,7 @@ import {
   type Zero3TaskSpecV2
 } from './agent-contracts'
 import type { Zero3ResolvedTaskSkill } from '../skill-runtime/skill-types'
+import { classifyExecutorError } from './zero3-executor-failure'
 
 export type Zero3CodexRunnerLike = {
   run(lease: {
@@ -140,7 +141,29 @@ export class Zero3CodexTaskAdapter {
     } catch (error) {
       const name = error instanceof Error ? error.name : ''
       const message = error instanceof Error ? error.message : String(error)
-      const unknown = name.includes('OutcomeUnknown')
+      // A crashed Codex turn must be classified like every other executor
+      // failure, otherwise an app-server/transport/quota error parks the task on
+      // a human instead of re-routing it to an executor that can run.
+      const classified = name.includes('OutcomeUnknown')
+        ? {
+            code: 'context_lost' as const,
+            class: 'outcome_unknown' as const,
+            retryable: false,
+            detail: message
+          }
+        : classifyExecutorError(error)
+      // A crashed Codex turn is an executor-level failure: blame this executor
+      // and continue elsewhere, exactly like the orchestrator treats an
+      // undeclared crash. Policy/permission refusals still wait for a human, and
+      // an unknown outcome still belongs to the recovery reconciler.
+      const failure = classified.class === 'outcome_unknown' || classified.class === 'waiting_human'
+        ? classified
+        : { ...classified, class: 'reroute' as const, retryable: true }
+      const status: Zero3ExecutionResultV2['status'] = failure.class === 'outcome_unknown'
+        ? 'OUTCOME_UNKNOWN'
+        : failure.class === 'waiting_human'
+          ? 'BLOCKED'
+          : 'FAILED'
       return {
         protocol: ZERO3_EXECUTION_RESULT_V2,
         taskId: task.taskId,
@@ -148,7 +171,7 @@ export class Zero3CodexTaskAdapter {
         projectId: task.projectId,
         provider: 'CODEX',
         providerRuntime: 'CODEX_LOCAL',
-        status: unknown ? 'OUTCOME_UNKNOWN' : 'BLOCKED',
+        status,
         contextVersion: task.contextVersion,
         conversationId: null,
         summary: message,
@@ -158,7 +181,8 @@ export class Zero3CodexTaskAdapter {
         verification: [],
         knownIssues: [],
         blockers: [message],
-        recommendedAction: 'HUMAN_REVIEW',
+        failure,
+        recommendedAction: failure.class === 'waiting_human' || failure.class === 'outcome_unknown' ? 'HUMAN_REVIEW' : 'RETRY',
         completedAt: new Date().toISOString()
       }
     }

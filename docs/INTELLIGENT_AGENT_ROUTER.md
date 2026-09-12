@@ -164,8 +164,8 @@ decision each code implies:
 | Class | Meaning | Dispatch behaviour |
 | --- | --- | --- |
 | `retry_same_executor` | provider answered unusably (`provider_error`, `internal_error`) | retry, and the executor stays eligible |
-| `reroute` | provider condition (`quota_exhausted`, `rate_limited`, `provider_overloaded`, `transport_lost`, `auth_required`, `context_exhausted`, `process_crash`) | exclude the executor and re-route |
-| `waiting_human` | `policy_denied`, `permission_denied`, `budget_exhausted`, `unsupported` | surface to the user; never auto-switch |
+| `reroute` | provider condition or capability gap (`quota_exhausted`, `rate_limited`, `provider_overloaded`, `transport_lost`, `auth_required`, `context_exhausted`, `process_crash`, `unsupported`) | exclude the executor and re-route |
+| `waiting_human` | `policy_denied`, `permission_denied`, `budget_exhausted` | surface to the user; never auto-switch |
 | `terminal` | `bad_request`, `user_stopped` | end the task |
 | `outcome_unknown` | `context_lost` | hand to the recovery reconciler |
 
@@ -174,6 +174,12 @@ An adapter that declares `failure` decides the policy; an undeclared crash keeps
 chain (`ZERO3_PRIOR_ATTEMPT_CONTEXT` inside the TaskSpec goal) so it continues the same task instead of
 restarting, while Task identity, handoff, memory and artifacts stay untouched. `PINNED` tasks never
 switch; `PREFERRED` fails over only when the preference cannot run.
+
+A live run on 2026-09-12 proved the capability boundary is real: the Zero3 API executor answered a
+"read this document and summarise it" objective with `BLOCKED` because the read-only kernel sandbox
+rejects process spawn and exposes no filesystem-read tool (`exec_command ... blocked by policy`). The
+adapter classifies that as `unsupported` -> `reroute`, so the same Task continued on Claude instead of
+waiting for a human — and it did not silently claim the file had been read.
 
 ### Unified dispatch
 

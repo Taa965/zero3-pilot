@@ -256,13 +256,61 @@ test('an empty model response is a retryable same-executor failure', async () =>
   assert.equal(result.blockers.length, 1)
 })
 
-test('a task without a workspace fails closed with a typed unsupported capability', async () => {
+test('a task without a workspace fails closed as an unusable TaskSpec', async () => {
   const { adapter, session } = buildAdapter()
   const result = await adapter.dispatchTask(taskSpec({ worktreePath: null }))
+  assert.equal(result.status, 'FAILED')
+  // Switching executors cannot repair a TaskSpec defect, so this is terminal
+  // rather than a routable capability gap.
+  assert.equal(result.failure?.code, 'bad_request')
+  assert.equal(result.failure?.class, 'terminal')
+  assert.equal(result.failure?.retryable, false)
+  assert.equal(session.requests.length, 0, 'no provider turn may run without a workspace')
+})
+
+test('an executor that reports BLOCKED declares a capability gap that re-routes instead of waiting for a human', async () => {
+  const { adapter } = buildAdapter({
+    turn: async request => ({
+      text: '```json\n' + JSON.stringify({
+        status: 'BLOCKED',
+        summary: 'This executor cannot read the workspace with the tools it has.',
+        output: {},
+        knownIssues: [],
+        blockers: ['no filesystem-read capability in this sandbox'],
+        recommendedAction: 'HUMAN_REVIEW'
+      }) + '\n```',
+      threadId: 'thread-blocked',
+      model: 'test-model',
+      profileId: request.profileId
+    })
+  })
+  const result = await adapter.dispatchTask(taskSpec())
   assert.equal(result.status, 'BLOCKED')
   assert.equal(result.failure?.code, 'unsupported')
-  assert.equal(result.failure?.class, 'waiting_human')
-  assert.equal(session.requests.length, 0, 'no provider turn may run without a workspace')
+  assert.equal(result.failure?.class, 'reroute')
+  assert.equal(result.failure?.retryable, true)
+})
+
+test('a partial answer that carries a blocker also declares a capability gap', async () => {
+  const { adapter } = buildAdapter({
+    turn: async request => ({
+      text: '```json\n' + JSON.stringify({
+        status: 'PARTIAL',
+        summary: 'I could only review the supplied description.',
+        output: { sections: ['overview'] },
+        knownIssues: ['repository not inspected'],
+        blockers: ['read-only sandbox exposes no filesystem-read tool'],
+        recommendedAction: 'RETRY'
+      }) + '\n```',
+      threadId: 'thread-partial',
+      model: 'test-model',
+      profileId: request.profileId
+    })
+  })
+  const result = await adapter.dispatchTask(taskSpec())
+  assert.equal(result.status, 'PARTIAL')
+  assert.equal(result.failure?.code, 'unsupported')
+  assert.equal(result.failure?.class, 'reroute')
 })
 
 test('Zero3 API availability distinguishes unregistered, unauthenticated, ready, rate limited and quota exhausted', async () => {

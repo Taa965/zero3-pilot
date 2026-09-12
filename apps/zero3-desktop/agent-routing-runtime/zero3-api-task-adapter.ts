@@ -199,13 +199,16 @@ export class Zero3Zero3ApiTaskAdapter {
     const profiles = await this.#safeProfiles()
     const profile = this.#probe.selectProfile(profiles)
     if (!profile) {
-      const failure = createExecutorFailure('unsupported', 'no Zero3 API profile is configured')
+      const failure = createExecutorFailure('bad_request', 'no Zero3 API profile is configured')
       return this.#failureResult(task, null, failure, startedAtMs)
     }
 
     const workspace = task.worktreePath?.trim() || ''
     if (!workspace) {
-      const failure = createExecutorFailure('unsupported', 'Zero3 API tasks require an explicit workspace path')
+      // A TaskSpec without a workspace is unusable for every executor here, so
+      // switching providers cannot help: stop instead of burning the attempt
+      // budget on the same defect.
+      const failure = createExecutorFailure('bad_request', 'Zero3 API tasks require an explicit workspace path')
       return this.#failureResult(task, profile.id, failure, startedAtMs)
     }
 
@@ -251,6 +254,15 @@ export class Zero3Zero3ApiTaskAdapter {
       : { text: text(raw, MAX_OUTPUT_CHARS), structured: false }
     const knownIssues = stringArray(structured?.knownIssues)
     const blockers = stringArray(structured?.blockers)
+    // An executor that reports BLOCKED -- or a partial answer that carries a
+    // blocker -- is saying "my tools are not enough for this objective". The
+    // router treats that as a capability gap and continues with an executor that
+    // can finish the task, instead of parking it on a human. (The authoritative
+    // finalizer independently keeps any blocked result out of COMPLETE.)
+    const capabilityGap = status === 'BLOCKED' || (status === 'PARTIAL' && blockers.length > 0)
+    const declaredCapabilityGap = capabilityGap
+      ? createExecutorFailure('unsupported', summary || blockers[0] || 'the Zero3 API executor could not complete this objective')
+      : null
 
     return {
       protocol: ZERO3_EXECUTION_RESULT_V2,
@@ -289,7 +301,7 @@ export class Zero3Zero3ApiTaskAdapter {
         executionLatencyMs,
         totalLatencyMs: executionLatencyMs
       },
-      failure: null,
+      failure: declaredCapabilityGap,
       completedAt: this.#now()
     }
   }
