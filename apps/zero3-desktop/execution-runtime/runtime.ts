@@ -518,10 +518,14 @@ export class Zero3ExecutionRuntime {
       const current = snapshot.runtime.steps.find(step => step.stepId === stepId)
       if (!current) throw new Error(`execution step not found: ${stepId}`)
       if (current.status !== 'verifying') throw new Error('completion gate requires a verifying step')
+      const definition = snapshot.definition.steps.find(step => step.stepId === stepId)!
       if (evidence.source === 'human_task_review') {
         if (evidence.assignmentId !== current.assignmentId) throw new Error('review assignment is stale; refresh the task')
         if (typeof evidence.note !== 'string' || !evidence.note.trim()) throw new Error('human review requires evidence')
-        const definition = snapshot.definition.steps.find(step => step.stepId === stepId)!
+      }
+      // A declared `required_outputs` gate is enforced for every evidence source, not only
+      // human review: completing without the declared artifacts is never acceptable.
+      if (definition.completionGate.includes('required_outputs') || evidence.source === 'human_task_review') {
         const artifacts = (await this.store.readEvents(taskId)).filter(event => event.type === 'artifact.produced' && event.stepId === stepId && event.assignmentId === current.assignmentId)
         for (const output of definition.expectedOutputs.filter(output => output.required)) {
           const ids = new Set(artifacts.filter(event => event.payload?.logicalName === output.logicalName).map(event => event.payload?.artifactId ?? event.eventId))

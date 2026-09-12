@@ -99,6 +99,8 @@ export function registerExecutionDesktopIpc(port: ExecutionDesktopPort): () => v
     port.bindSession(id(assignmentId, 'assignmentId'), record(input, 'session binding') as unknown as BindExecutionSessionInput))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.updateSessionState, (_event, taskId: unknown, bindingId: unknown, state: unknown) =>
     port.updateSessionState(id(taskId, 'taskId'), id(bindingId, 'bindingId'), sessionState(state)))
+  ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.recordArtifact, (_event, taskId: unknown, stepId: unknown, artifact: unknown) =>
+    port.recordArtifact(id(taskId, 'taskId'), id(stepId, 'stepId'), record(artifact, 'artifact')))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.transitionStep, (_event, taskId: unknown, stepId: unknown, status: unknown, reason: unknown) =>
     port.transitionStep(id(taskId, 'taskId'), id(stepId, 'stepId'), stepState(status), reason == null ? undefined : text(reason, 'reason')))
   ipcMain.handle(EXECUTION_DESKTOP_CHANNELS.gatePassed, (_event, taskId: unknown, stepId: unknown, evidence: unknown) =>

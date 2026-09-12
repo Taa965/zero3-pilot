@@ -60,6 +60,21 @@ test('completion must pass through verifying instead of executor self-completing
   assert.doesNotThrow(() => assertStepTransition('verifying', 'completed'))
 })
 
+test('required_outputs gate fails closed for every evidence source until artifacts are reported', async () => {
+  await withRuntime(async runtime => {
+    const deliver = step('deliver')
+    deliver.expectedOutputs = [{ logicalName: 'rewrite-manifest.json', required: true }]
+    await runtime.createTask(taskInput([deliver]))
+    await runtime.createAssignment('video-001', 'deliver', 'GPT_WEB')
+    await runtime.transitionStep('video-001', 'deliver', 'verifying')
+    await assert.rejects(runtime.gatePassed('video-001', 'deliver', {}), /missing required output: rewrite-manifest\.json/)
+    await assert.rejects(runtime.gatePassed('video-001', 'deliver', { source: 'automated-verifier' }), /missing required output: rewrite-manifest\.json/)
+    await runtime.recordArtifact('video-001', 'deliver', { logicalName: 'rewrite-manifest.json', artifactId: 'manifest-1' })
+    const finished = await runtime.gatePassed('video-001', 'deliver', { source: 'automated-verifier' })
+    assert.equal(finished.runtime.steps.find(item => item.stepId === 'deliver')?.status, 'completed')
+  })
+})
+
 test('scheduler validates DAGs and enforces cross-app concurrency capacity', async () => {
   await withRuntime(async runtime => {
     const created = await runtime.createTask(taskInput([step('a'), step('b'), step('c')], 2))

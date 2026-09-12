@@ -46,6 +46,48 @@ function copySources() {
   }
 }
 
+const videoBridgeRuntime = String.raw`
+const zero3VideoGenerationTaskBridge = new Zero3VideoGenerationTaskBridge({
+  execution: {
+    getTask: taskId => zero3ExecutionRuntime.getTask(taskId) as any,
+    createAssignment: (taskId, stepId, executor, executorId) => zero3ExecutionRuntime.createAssignment(taskId, stepId, executor as any, executorId ?? null) as any,
+    bindSession: (assignmentId, input) => zero3ExecutionRuntime.bindSession(assignmentId, input as any),
+    recordProgress: (taskId, stepId, progress, activity) => zero3ExecutionRuntime.runtime.recordProgress(taskId, stepId, progress, activity),
+    recordArtifact: (taskId, stepId, artifact, identity) => zero3ExecutionRuntime.runtime.recordArtifact(taskId, stepId, artifact, identity),
+    requestCompletion: (taskId, stepId) => zero3ExecutionRuntime.runtime.requestCompletion(taskId, stepId),
+    gatePassed: (taskId, stepId, evidence) => zero3ExecutionRuntime.runtime.gatePassed(taskId, stepId, evidence),
+    gateFailed: (taskId, stepId, reason) => zero3ExecutionRuntime.runtime.gateFailed(taskId, stepId, reason),
+    transitionStep: (taskId, stepId, status, reason) => zero3ExecutionRuntime.transitionStep(taskId, stepId, status as any, reason) as any
+  },
+  worker: zero3WorkflowWorkerRuntime,
+  artifactContent: createLocalArtifactContentReader(),
+  hostCapability: {
+    run: async input => ({
+      ok: false as const, externalCapability: true,
+      reason: '宿主能力 ' + String(input.capability) + ' 尚未接入：云端 GPU / Remotion 渲染与剪映导出需要 Remote Compute 或本机能力注册后可用。'
+    })
+  },
+  productionProfiles: { get: projectId => zero3ProductionProfileStore.get(projectId) }
+})
+let zero3VideoBridgeTimer: NodeJS.Timeout | null = null
+let zero3VideoBridgeTicking = false
+async function zero3ReconcileVideoGenerationTasks() {
+  if (zero3VideoBridgeTicking) return
+  zero3VideoBridgeTicking = true
+  try {
+    const tasks = await zero3ExecutionRuntime.listTasks() as any[]
+    return await zero3VideoGenerationTaskBridge.reconcileTasks(tasks)
+  } finally { zero3VideoBridgeTicking = false }
+}
+void app.whenReady().then(() => {
+  zero3VideoBridgeTimer = setInterval(() => { void zero3ReconcileVideoGenerationTasks().catch(() => undefined) }, 10_000)
+  zero3VideoBridgeTimer.unref?.()
+})
+ipcMain.handle('zero3:video-generation:reconcile', () => zero3ReconcileVideoGenerationTasks())
+ipcMain.handle('zero3:video-generation:status', () => zero3VideoGenerationTaskBridge.status())
+app.on('before-quit', () => { if (zero3VideoBridgeTimer) clearInterval(zero3VideoBridgeTimer) })
+`
+
 const mainRuntime = String.raw`
 function zero3WorkerBindingSecret() {
   const file = path.join(app.getPath('userData'), 'zero3', 'worker-binding-secret')
@@ -311,6 +353,7 @@ ipcMain.handle('zero3:autonomous:create-goal', (_event, request: unknown) => zer
 ipcMain.handle('zero3:autonomous:dashboard', (_event, projectId: unknown, rootTaskId?: unknown) => zero3AutonomousTaskLoop.dashboard(String(projectId), typeof rootTaskId === 'string' ? rootTaskId : null))
 ipcMain.handle('zero3:autonomous:reconcile-project', (_event, projectId: unknown) => zero3AutonomousTaskLoop.reconcileProjectNow(String(projectId)))
 ipcMain.handle('zero3:autonomous:ingest-guard', (_event, request: unknown) => zero3AutonomousTaskLoop.ingestGuardEvent(request as any))
+${videoBridgeRuntime}
 function zero3WorkflowWorkerInput(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('workflow worker request must be an object')
   return value as Record<string, unknown>
@@ -410,7 +453,9 @@ contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
   openSession: input => ipcRenderer.invoke('zero3:workflow-worker:open-session', input),
   rotateSession: input => ipcRenderer.invoke('zero3:workflow-worker:rotate-session', input),
   snapshot: workflowRunId => ipcRenderer.invoke('zero3:workflow-worker:snapshot', workflowRunId),
-  expireLeases: input => ipcRenderer.invoke('zero3:workflow-worker:expire-leases', input)
+  expireLeases: input => ipcRenderer.invoke('zero3:workflow-worker:expire-leases', input),
+  videoBridgeStatus: () => ipcRenderer.invoke('zero3:video-generation:status'),
+  reconcileVideoGeneration: () => ipcRenderer.invoke('zero3:video-generation:reconcile')
 })
 
 contextBridge.exposeInMainWorld('hermesDesktop', {`
@@ -435,6 +480,8 @@ const globalBridge = String.raw`    zero3Autonomous: {
       rotateSession: (input: Record<string, unknown>) => Promise<unknown>
       snapshot: (workflowRunId: string) => Promise<unknown>
       expireLeases: (input: Record<string, unknown>) => Promise<unknown>
+      videoBridgeStatus: () => Promise<unknown>
+      reconcileVideoGeneration: () => Promise<unknown>
     }
     hermesDesktop: {`
 
@@ -455,10 +502,16 @@ export function applyZero3AgentLifecycleRuntime() {
     'electron/main.ts',
     [
       {
+        // The workflow-runtime import line is upgraded in place when an older overlay
+        // run already inserted it; a fresh tree falls through to the anchor candidate.
         label: 'Agent Lifecycle runtime import',
-        appliedMarker: 'installVideoGenerationWorkflow',
-        from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
-        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { ProjectProductionProfileStore, Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow, installVideoGenerationWorkflow, materializeVideoGenerationProductionPlan } from './zero3/workflow-runtime/index'\nimport { dispatchZero3CodexTask, loadZero3RemoteHostConfig, resolveZero3AgentWorkspace, summarizeZero3AgentFastPathTelemetry, verifyZero3Commit } from './zero3/remote-host/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+        appliedMarker: 'Zero3VideoGenerationTaskBridge',
+        from: {
+          from: "import { ProjectProductionProfileStore, Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow, installVideoGenerationWorkflow, materializeVideoGenerationProductionPlan } from './zero3/workflow-runtime/index'",
+          to: "import { ProjectProductionProfileStore, Zero3VideoGenerationTaskBridge, Zero3WorkerStationManager, Zero3WorkerWakeupController, createLocalArtifactContentReader, installCognitiveStoreWorkflow, installVideoGenerationWorkflow, materializeVideoGenerationProductionPlan } from './zero3/workflow-runtime/index'"
+        },
+        fromAny: ['const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR'],
+        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { ProjectProductionProfileStore, Zero3VideoGenerationTaskBridge, Zero3WorkerStationManager, Zero3WorkerWakeupController, createLocalArtifactContentReader, installCognitiveStoreWorkflow, installVideoGenerationWorkflow, materializeVideoGenerationProductionPlan } from './zero3/workflow-runtime/index'\nimport { dispatchZero3CodexTask, loadZero3RemoteHostConfig, resolveZero3AgentWorkspace, summarizeZero3AgentFastPathTelemetry, verifyZero3Commit } from './zero3/remote-host/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
       },
       {
         label: 'Capability Runtime import',
@@ -481,6 +534,15 @@ export function applyZero3AgentLifecycleRuntime() {
         to: match => match + mainRuntime,
         hint:
           'The Execution Runtime bridge overlay (apply-execution-runtime-bridge.mjs) composes it and must run first; use prepare-codex-upstream.mjs instead of applying overlays by hand.'
+      },
+      {
+        // Upgrades a tree that already carries the older mainRuntime block: the bridge
+        // composition is appended after the autonomous ingest-guard handler it sits
+        // behind. A freshly patched tree already contains the marker and skips.
+        label: 'Video generation task bridge composition',
+        appliedMarker: 'const zero3VideoGenerationTaskBridge = new Zero3VideoGenerationTaskBridge(',
+        from: "ipcMain.handle('zero3:autonomous:ingest-guard', (_event, request: unknown) => zero3AutonomousTaskLoop.ingestGuardEvent(request as any))",
+        to: match => `${match}\n${videoBridgeRuntime}`
       },
       {
         label: 'Capability Runtime composition',
@@ -522,7 +584,9 @@ export function applyZero3AgentLifecycleRuntime() {
       { label: 'Autonomous dashboard IPC', text: "zero3:autonomous:dashboard", count: 1 },
       { label: 'Video generation install IPC', text: "zero3:workflow-worker:install-video-generation", count: 1 },
       { label: 'Video generation plan IPC', text: "zero3:workflow-worker:materialize-video-generation-plan", count: 1 },
-      { label: 'Production profile IPC', text: "zero3:workflow-worker:upsert-production-profile", count: 1 }
+      { label: 'Production profile IPC', text: "zero3:workflow-worker:upsert-production-profile", count: 1 },
+      { label: 'Video generation task bridge composition', text: 'const zero3VideoGenerationTaskBridge = new Zero3VideoGenerationTaskBridge(', count: 1 },
+      { label: 'Video generation task bridge reconcile IPC', text: 'zero3:video-generation:reconcile', count: 1 }
     ]
   )
   patchFile('electron/preload.ts', [

@@ -8,6 +8,8 @@ export interface TaskWorkflowSummary {
   description: string
   category: string
   revision: number
+  /** 该工作流要求项目生产配置；新建任务前用户需要准备好生产输入。 */
+  requiresProductionProfile?: boolean
 }
 
 export interface TaskWorkflowCreateInput {

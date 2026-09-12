@@ -74,6 +74,9 @@ test('DC-style reporter records progress/artifacts and cannot self-complete past
     await reporter.report(report(assignmentId, ticket, 'r-artifact', 'ARTIFACT_PRODUCED', {
       logicalName: '导演审片单.md', artifactId: 'artifact-review', pathOrUri: 'artifact://video-001/director-review'
     }))
+    await reporter.report(report(assignmentId, ticket, 'r-artifact-2', 'ARTIFACT_PRODUCED', {
+      logicalName: '逐条完整提示词.md', artifactId: 'artifact-prompts', pathOrUri: 'artifact://video-001/prompts'
+    }))
     const requested = await reporter.report(report(assignmentId, ticket, 'r-complete', 'COMPLETION_REQUESTED'))
     assert.equal(requested.stepStatus, 'verifying')
     assert.equal(requested.nextAction, 'WAIT_FOR_ZERO3_GATE')

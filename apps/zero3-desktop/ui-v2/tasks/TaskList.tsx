@@ -79,6 +79,9 @@ export function TaskList() {
       {loading ? <p className="p-3 text-sm">正在加载任务…</p> : visible.length === 0 ? <p className="p-3 text-xs text-(--ui-text-secondary)">{error ? '暂时无法读取任务。' : tasks.length ? '没有符合筛选条件的任务。' : '暂无任务，点击“新建任务”开始。'}</p> : visible.map(task => {
         const definition = task.definition.task
         const attention = task.runtime.steps.filter(step => ['verifying', 'waiting_human', 'blocked', 'failed', 'fix_required', 'outcome_unknown'].includes(step.status))
+        const current = task.runtime.steps.find(step => ['dispatching', 'running', 'waiting_report', 'verifying', 'fix_required'].includes(step.status))
+          ?? task.runtime.steps.find(step => ['ready', 'blocked', 'waiting_human', 'outcome_unknown'].includes(step.status))
+        const currentDefinition = current ? task.definition.steps.find(step => step.stepId === current.stepId) : null
         return <button key={definition.taskId} type="button" aria-pressed={!creating && selectedId === definition.taskId} title="右键可归档或删除任务" onClick={() => { select(definition.taskId); setCreating(false) }} onContextMenu={event => openMenu(task, event)} className={`w-full rounded-lg border border-(--ui-border) p-3 text-left ${!creating && selectedId === definition.taskId ? 'bg-(--ui-control-active-background)' : 'hover:bg-(--ui-control-hover-background)'}`}>
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 break-words text-sm font-medium">{definition.title}</div>
@@ -89,6 +92,11 @@ export function TaskList() {
             </div>
           </div>
           <div className="mt-1 truncate text-xs text-(--ui-text-tertiary)" title={definition.taskId}>{definition.taskId}</div>
+          <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-(--ui-text-tertiary)">
+            <span>项目：{definition.projectId ?? '无项目'}</span>
+            <span className="truncate">{String(definition.metadata?.workflowName ?? definition.workflowId ?? '自定义任务')}</span>
+          </div>
+          {currentDefinition && current && <div className="mt-1 truncate text-xs text-(--ui-text-secondary)">当前：{currentDefinition.title} · {currentDefinition.executor} · {statusLabel(current.status)}</div>}
           <div className="mt-2 flex justify-between text-xs"><span>{statusLabel(task.runtime.task.status)}</span><span>{percent(task.runtime.task.progress)}</span></div>
           <progress aria-label={`${definition.title}进度`} className="mt-2 h-1 w-full" max={1} value={task.runtime.task.progress} />
           {attention.length > 0 && <div className="mt-2 text-xs text-amber-500">{[...new Set(attention.map(step => statusLabel(step.status)))].join(' · ')} · {attention.length} 步</div>}

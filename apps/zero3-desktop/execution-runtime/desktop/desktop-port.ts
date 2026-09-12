@@ -38,6 +38,7 @@ export interface ExecutionDesktopPort {
   createRoutedAssignment(taskId: string, stepId: string, executorId?: string | null): Promise<unknown>
   bindSession(assignmentId: string, input: BindExecutionSessionInput): Promise<unknown>
   updateSessionState(taskId: string, bindingId: string, state: ExecutionSessionBindingState): Promise<unknown>
+  recordArtifact(taskId: string, stepId: string, artifact: Readonly<Record<string, unknown>>): Promise<unknown>
   transitionStep(taskId: string, stepId: string, status: ExecutionStepStatus, reason?: string): Promise<unknown>
   gatePassed(taskId: string, stepId: string, evidence?: Readonly<Record<string, unknown>>): Promise<unknown>
   gateFailed(taskId: string, stepId: string, reason: string): Promise<unknown>
@@ -61,6 +62,7 @@ export const EXECUTION_DESKTOP_CHANNELS = {
   createRoutedAssignment: 'zero3:execution:create-routed-assignment',
   bindSession: 'zero3:execution:bind-session',
   updateSessionState: 'zero3:execution:update-session-state',
+  recordArtifact: 'zero3:execution:record-artifact',
   transitionStep: 'zero3:execution:transition-step',
   gatePassed: 'zero3:execution:gate-passed',
   gateFailed: 'zero3:execution:gate-failed',

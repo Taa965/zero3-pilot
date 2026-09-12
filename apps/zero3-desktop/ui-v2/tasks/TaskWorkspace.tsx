@@ -89,8 +89,10 @@ function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
     return () => { active = false }
   }, [])
   const selectedWorkflow = workflows.find(item => item.id === workflowId) ?? null
+  const needsProductionProfile = selectedWorkflow?.requiresProductionProfile === true
   const submit = async (event: FormEvent) => {
     event.preventDefault()
+    if (needsProductionProfile && !project) return
     let id = ''
     const success = await mutate(async () => {
       const created = await taskBridge().createWorkflowTask({
@@ -106,6 +108,7 @@ function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
       <h2 className="text-lg font-medium">新建任务</h2>
       <p className="text-xs text-(--ui-text-secondary)">所属项目：{project?.name ?? '无项目'}。工作流模块会自动生成执行步骤、Agent、Skill、依赖与审核规则。</p>
     </div>
+    {needsProductionProfile && !project && <p role="alert" className="rounded border border-amber-500/30 p-3 text-sm text-amber-600">该工作流需要项目生产配置，请先在「项目」中选择一个项目，再创建任务。</p>}
     <label className="block space-y-1 text-sm"><span>任务名称</span><input required value={title} onChange={event => setTitle(event.target.value)} className={inputClass} /></label>
     <label className="block space-y-1 text-sm"><span>任务说明</span><textarea required rows={6} value={description} onChange={event => setDescription(event.target.value)} placeholder="说明要完成什么、背景、约束和期望结果" className={inputClass} /></label>
     <label className="block space-y-1 text-sm">
@@ -118,10 +121,11 @@ function CreateTask({ project }: { project: Zero3ProjectRecord | null }) {
     {selectedWorkflow && <div className="rounded border border-(--ui-border) bg-(--ui-pane-background) p-3 text-xs text-(--ui-text-secondary)">
       <div className="font-medium text-foreground">{selectedWorkflow.name}</div>
       <div className="mt-1">{selectedWorkflow.description}</div>
+      {needsProductionProfile && <div className="mt-2 rounded border border-amber-500/30 p-2 text-amber-600">此工作流要求生产配置：第一步「生产输入与项目配置」由人工完成——任务创建后，请在该步骤登记生产输入（video-production-inputs.json），Zero3 之后的步骤才会自动推进。</div>}
       <div className="mt-2 text-(--ui-text-tertiary)">分类：{selectedWorkflow.category} · 模块版本：{selectedWorkflow.revision}</div>
     </div>}
     {workflowError && <p role="alert" className="text-sm text-red-500">{workflowError}</p>}
-    <div className="flex gap-2"><button disabled={busy || !workflowId} className={buttonClass}>{busy ? '正在创建…' : '创建任务'}</button><button type="button" disabled={busy} onClick={() => setCreating(false)} className={buttonClass}>取消</button></div>
+    <div className="flex gap-2"><button disabled={busy || !workflowId || (needsProductionProfile && !project)} className={buttonClass}>{busy ? '正在创建…' : '创建任务'}</button><button type="button" disabled={busy} onClick={() => setCreating(false)} className={buttonClass}>取消</button></div>
   </form>
 }
 function AutonomousPanel({ snapshot }: { snapshot: ExecutionTaskSnapshot }) {
@@ -169,6 +173,8 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
   const state = snapshot.runtime.steps.find(item => item.stepId === stepId)!
   const [reason, setReason] = useState('')
   const [sessionId, setSessionId] = useState('')
+  const [artifactName, setArtifactName] = useState('')
+  const [artifactContent, setArtifactContent] = useState('')
   const routedExecutor = state.skillPreflight?.executor ?? null
   const needsSkillRouting = step.executor === 'AUTO' || Boolean(step.requiredSkills?.length || step.optionalSkills?.length)
   const transitions = allowedStepTransitions(state.status)
@@ -177,7 +183,9 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
   const assignment = snapshot.runtime.assignments.find(item => item.assignmentId === state.assignmentId)
   const bindings = snapshot.runtime.sessionBindings.filter(item => item.assignmentId === state.assignmentId)
   const dependencyCancelled = state.status === 'waiting_dependency' && step.dependsOn.some(id => snapshot.runtime.steps.find(item => item.stepId === id)?.status === 'cancelled')
-  const run =(operation: () => Promise<unknown>) => { void mutate(operation).then(ok => { if (ok) setReason('') }) }
+  const canReportArtifacts = !terminal && Boolean(assignment) && step.expectedOutputs.length > 0 &&
+    ['dispatching', 'running', 'waiting_report', 'fix_required'].includes(state.status)
+  const run =(operation: () => Promise<unknown>) => { void mutate(operation).then(ok => { if (ok) { setReason(''); setArtifactContent('') } }) }
   const assign = async () => {
     const bridge = taskBridge()
     if (!needsSkillRouting) return bridge.createAssignment(snapshot.definition.task.taskId, stepId, step.executor)
@@ -214,6 +222,26 @@ function StepControl({ snapshot, stepId, review }: { snapshot: ExecutionTaskSnap
       {!terminal && assignment && !['completed', 'cancelled', 'failed'].includes(state.status) && !bindings.some(binding => binding.state !== 'closed') && <form className="flex flex-wrap gap-2" onSubmit={event => { event.preventDefault(); run(() => taskBridge().bindSession(assignment.assignmentId, { logicalSessionId: sessionId.trim() })) }}>
         <input required aria-label={`${step.title}会话编号`} value={sessionId} onChange={event => setSessionId(event.target.value)} placeholder="执行方的真实会话编号" className={inputClass} />
         <button disabled={busy || !sessionId.trim()} className={buttonClass}>绑定会话</button>
+      </form>}
+      {canReportArtifacts && <form className="space-y-2 rounded border border-(--ui-border) p-3" onSubmit={event => {
+        event.preventDefault()
+        const logicalName = artifactName.trim()
+        if (!logicalName) return
+        run(() => taskBridge().recordArtifact(snapshot.definition.task.taskId, stepId, {
+          logicalName,
+          kind: /json$/i.test(logicalName) ? 'json' : 'text',
+          mimeType: /json$/i.test(logicalName) ? 'application/json' : 'text/plain',
+          content: artifactContent.trim() || undefined,
+          reportedBy: 'task-board'
+        }))
+      }}>
+        <p className="text-xs text-(--ui-text-secondary)">人工步骤产物登记：填写预期产物名并粘贴内容，登记后才能通过完成门禁。尚缺：{gaps.length ? gaps.join('、') : '无'}</p>
+        <div className="flex flex-wrap gap-2">
+          <input required aria-label={`${step.title}产物名称`} list={`${stepId}-outputs`} value={artifactName} onChange={event => setArtifactName(event.target.value)} placeholder="产物名称（如 video-production-inputs.json）" className={`${inputClass} max-w-xs flex-1`} />
+          <datalist id={`${stepId}-outputs`}>{step.expectedOutputs.map(output => <option key={output.logicalName} value={output.logicalName} />)}</datalist>
+          <button disabled={busy || !artifactName.trim()} className={buttonClass}>登记产物</button>
+        </div>
+        <textarea aria-label={`${step.title}产物内容`} rows={4} value={artifactContent} onChange={event => setArtifactContent(event.target.value)} placeholder="产物内容（JSON 或文本；也可留空仅登记名称）" className={inputClass} />
       </form>}
     </>}
     {!terminal && transitions.length > 0 && <>

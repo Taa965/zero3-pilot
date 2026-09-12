@@ -7,6 +7,7 @@ export type TaskWorkflowSummary = {
   description: string
   category: string
   revision: number
+  requiresProductionProfile?: boolean
 }
 
 export type CreateWorkflowTaskInput = {
@@ -31,6 +32,7 @@ export interface TaskBridge {
   createAssignment(taskId: string, stepId: string, executor: string): Promise<unknown>
   createRoutedAssignment(taskId: string, stepId: string, executorId?: string | null): Promise<unknown>
   bindSession(assignmentId: string, input: Record<string, unknown>): Promise<unknown>
+  recordArtifact(taskId: string, stepId: string, artifact: Record<string, unknown>): Promise<unknown>
   transitionStep(taskId: string, stepId: string, status: string, reason?: string): Promise<unknown>
   gatePassed(taskId: string, stepId: string, evidence?: Record<string, unknown>): Promise<unknown>
   gateFailed(taskId: string, stepId: string, reason: string): Promise<unknown>

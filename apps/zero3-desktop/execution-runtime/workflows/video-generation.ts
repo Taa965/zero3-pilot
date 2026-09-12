@@ -6,9 +6,10 @@ export const videoGenerationWorkflow: TaskWorkflowModule = {
   summary: {
     id: VIDEO_GENERATION_WORKFLOW_ID,
     name: '视频生成任务',
-    description: '脚本重构、视觉规划、批量出图、云端 GPU/Remotion、剪映工程与最终验证的标准生产流程。',
+    description: '脚本重构、视觉规划、批量出图、云端 GPU/Remotion、剪映工程与最终验证的标准生产流程。需要项目生产配置与原始脚本，第一步「生产输入与项目配置」由人工在任务看板登记。',
     category: '内容生产',
-    revision: 1
+    revision: 1,
+    requiresProductionProfile: true
   },
   compile(input) {
     const description = input.description.trim()

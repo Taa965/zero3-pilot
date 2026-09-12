@@ -151,6 +151,9 @@ export class Zero3ExecutionDesktopRuntime implements ExecutionDesktopPort {
   updateSessionState(taskId: string, bindingId: string, state: ExecutionSessionBindingState): Promise<unknown> {
     return this.runtime.updateSessionBindingState(taskId, bindingId, state)
   }
+  recordArtifact(taskId: string, stepId: string, artifact: Readonly<Record<string, unknown>>): Promise<unknown> {
+    return this.runtime.recordArtifact(taskId, stepId, artifact)
+  }
   transitionStep(taskId: string, stepId: string, status: ExecutionStepStatus, reason?: string): Promise<unknown> {
     return this.runtime.transitionStep(taskId, stepId, status, reason)
   }
