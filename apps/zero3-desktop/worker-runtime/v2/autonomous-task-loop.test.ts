@@ -495,3 +495,28 @@ test('v1.3 guard event trigger and periodic reconciliation remain idempotent', a
     assert.equal(h.store.listAutonomousIntakes(PROJECT_ID).length, 1)
   } finally { await cleanup(h) }
 })
+
+test('v1.3 user Root Goal becomes one authoritative autonomous Execution Task', async () => {
+  const h = await makeHarness([])
+  try {
+    const created = await h.loop.createGoal({ title: 'Ship autonomous goal', goal: 'Finish the requested objective end to end.', projectId: PROJECT_ID, importance: 'high', requiredCapabilities: ['software.development'] }) as any
+    assert.equal(created.definition.task.metadata.autonomousRootGoal, true)
+    assert.equal(created.definition.task.metadata.autonomousLineage.rootTaskId, created.definition.task.taskId)
+    assert.equal(created.definition.steps[0].executor, 'AUTO')
+    assert.deepEqual(created.definition.steps[0].metadata.requiredCapabilities, ['software.development'])
+    assert.equal((await h.execution.listTasks() as any[]).length, 1)
+  } finally { await cleanup(h) }
+})
+
+test('v1.3 autonomy dashboard projects attention, graph, review and plan from authorities', async () => {
+  const h = await makeHarness([memoryEntity('warning', { title: 'Non blocking warning', message: 'Defer this.' })])
+  try {
+    await h.loop.tick()
+    const dashboard = await h.loop.dashboard(PROJECT_ID) as any
+    assert.equal(dashboard.projectId, PROJECT_ID)
+    assert.ok(dashboard.executionGraph)
+    assert.ok(dashboard.dailyReview)
+    assert.ok(dashboard.plan)
+    assert.ok(Array.isArray(dashboard.humanAttention))
+  } finally { await cleanup(h) }
+})

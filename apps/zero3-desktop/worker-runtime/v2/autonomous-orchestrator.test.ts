@@ -7,6 +7,8 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { Zero3AgentLifecycleStore } from './lifecycle-store.ts'
 import {
+  buildAutonomousAgentDispatchRequest,
+  createAutonomousPlanProposal,
   createBasicPlanProposal,
   decideAutonomousCandidate,
   evaluateAttentionBudget,
@@ -14,8 +16,7 @@ import {
   guardEventToCandidate,
   projectHumanAttention,
   projectExecutionGraph,
-  projectDailyReview,
-  routeAutonomousCapabilities
+  projectDailyReview
 } from './autonomous-orchestrator.ts'
 
 test('v1.3 governance keeps warnings deferred unless explicitly blocking', () => {
@@ -35,15 +36,6 @@ test('v1.3 post-plugin capability gate fails closed until every required capabil
     'session.bootstrap.project', 'memory.shared.lifecycle'
   ])
   assert.equal(ready.ready, true)
-})
-
-test('v1.3 capability router selects an available provider by capability and load', () => {
-  const route = routeAutonomousCapabilities(['code_edit'], [
-    { providerId: 'codex-busy', executor: 'CODEX', capabilities: ['code_edit'], available: true, currentLoad: 0.9 },
-    { providerId: 'codex-idle', executor: 'CODEX', capabilities: ['code_edit'], available: true, currentLoad: 0.1 }
-  ])
-  assert.equal(route.state, 'READY')
-  assert.equal(route.provider?.providerId, 'codex-idle')
 })
 
 test('v1.3 guard adapters produce intake candidates and never Tasks', () => {
@@ -121,4 +113,31 @@ test('v1.3 execution graph and daily review remain projection-only', () => {
   assert.equal(review.userRootTasks, 1)
   assert.equal(review.discoveredCandidates, 1)
   assert.equal(review.dispositions.DEFER, 1)
+})
+
+test('v1.3 unified dispatch request preserves Execution identity while delegating executor selection', () => {
+  const snapshot = {
+    definition: {
+      task: { taskId: 'goal-1', projectId: 'p1', workspace: 'C:/repo', workflowId: 'autonomous-root-goal', title: 'Goal', goal: 'Finish it', metadata: { autonomousRootGoal: true, importance: 'high' } },
+      steps: [{ stepId: 'goal-work', title: 'Goal', objective: 'Finish it', executor: 'AUTO', requiredSkills: [], optionalSkills: [], expectedOutputs: [], completionGate: ['verified'], metadata: { requiredCapabilities: ['software.development'] } }]
+    },
+    runtime: { task: { lastEventSequence: 7 }, steps: [{ stepId: 'goal-work', skillPreflight: { executor: 'CODEX' } }] }
+  } as any
+  const request = buildAutonomousAgentDispatchRequest(snapshot, 'goal-work', 1, '2026-09-12T00:00:00.000Z')
+  assert.equal(request.taskSpec.target, 'CODEX')
+  assert.equal(request.taskSpec.projectId, 'p1')
+  assert.deepEqual(request.taskSpec.requirements, ['software.development'])
+  assert.equal(request.context.routingMode, 'PINNED')
+})
+
+test('v1.3 context-aware planner escalates missing capabilities without mutating tasks', () => {
+  const proposal = createAutonomousPlanProposal({
+    projectId: 'p1', rootTaskId: 'root', tasks: [], capabilities: [], generatedAt: '2026-09-12T00:00:00.000Z',
+    intakes: [{ sourceKey: 'ati-cap', projectId: 'p1', entityType: 'blocker', entityId: 'cap', sourceTaskId: 'root', sourceVersion: 1,
+      fingerprint: 'e'.repeat(64), taskId: null, detail: { title: 'Needs GPU', requiredCapabilities: ['video.generation'] }, disposition: 'INTERRUPT',
+      severity: 'blocking', mainlineImpact: 'interrupt', firstSeenAt: '2026-09-12T00:00:00.000Z', lastSeenAt: '2026-09-12T00:00:00.000Z' }] as any
+  })
+  assert.equal(proposal.materialized, false)
+  assert.equal(proposal.actions[0].type, 'ESCALATE')
+  assert.match(proposal.actions[0].reason, /video.generation/)
 })
