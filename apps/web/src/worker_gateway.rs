@@ -1718,9 +1718,16 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "dispatch_agent_task")
             .expect("unified dispatch tool is registered");
-        let unified_schema =
-            serde_json::to_string(&unified["inputSchema"]).unwrap().to_lowercase();
-        for forbidden in ["\"command\"", "\"shell\"", "\"exec\"", "\"executable\"", "\"argv\""] {
+        let unified_schema = serde_json::to_string(&unified["inputSchema"])
+            .unwrap()
+            .to_lowercase();
+        for forbidden in [
+            "\"command\"",
+            "\"shell\"",
+            "\"exec\"",
+            "\"executable\"",
+            "\"argv\"",
+        ] {
             assert!(
                 !unified_schema.contains(forbidden),
                 "dispatch_agent_task must not accept {forbidden}"
