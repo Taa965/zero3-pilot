@@ -70,6 +70,7 @@ const zero3CapabilityRuntime = createZero3CapabilityRuntime({
   nodeId: process.env.ZERO3_WORKER_TUNNEL_NODE_ID?.trim() || 'zero3-desktop'
 })
 const zero3WorkflowWorkerStore = new Zero3WorkflowWorkerStore(path.join(app.getPath('userData'), 'zero3', 'workflow-worker.sqlite3'))
+const zero3ProductionProfileStore = new ProjectProductionProfileStore(path.join(app.getPath('userData'), 'zero3', 'production-profiles.json'))
 const zero3WorkflowWorkerRuntime = new Zero3WorkflowWorkerRuntime(zero3WorkflowWorkerStore, { ticketSecret: zero3WorkerBindingSecret() })
 const zero3WorkerStationManager = new Zero3WorkerStationManager(zero3WorkflowWorkerRuntime, {
   create: projectId => zero3GptWeb.create(projectId),
@@ -317,12 +318,22 @@ function zero3WorkflowWorkerInput(value: unknown): Record<string, unknown> {
 ipcMain.handle('zero3:workflow-worker:ensure-run', (_event, request: unknown) => zero3WorkflowWorkerRuntime.ensureWorkflowRun(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:ensure-binding', (_event, request: unknown) => zero3WorkflowWorkerRuntime.ensureWorkerBinding(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:add-items', (_event, request: unknown) => zero3WorkflowWorkerRuntime.addWorkItems(zero3WorkflowWorkerInput(request)))
+ipcMain.handle('zero3:workflow-worker:get-production-profile', (_event, projectId: unknown) => zero3ProductionProfileStore.get(String(projectId)))
+ipcMain.handle('zero3:workflow-worker:upsert-production-profile', (_event, request: unknown) => zero3ProductionProfileStore.upsert(zero3WorkflowWorkerInput(request) as never))
 ipcMain.handle('zero3:workflow-worker:install-cognitive-store', async (_event, request: unknown) => {
   const input = zero3WorkflowWorkerInput(request)
   const installed = installCognitiveStoreWorkflow(zero3WorkflowWorkerRuntime, input as never)
   const stations = await zero3WorkerStationManager.reconcileRun(String(input.workflowRunId), String(input.projectId))
   return { ...installed, stations }
 })
+ipcMain.handle('zero3:workflow-worker:install-video-generation', async (_event, request: unknown) => {
+  const input = zero3WorkflowWorkerInput(request)
+  const installed = installVideoGenerationWorkflow(zero3WorkflowWorkerRuntime, input as never)
+  const stations = await zero3WorkerStationManager.reconcileRun(String(input.workflowRunId), String(input.projectId))
+  return { ...installed, stations }
+})
+ipcMain.handle('zero3:workflow-worker:materialize-video-generation-plan', (_event, request: unknown) =>
+  materializeVideoGenerationProductionPlan(zero3WorkflowWorkerRuntime, zero3WorkflowWorkerInput(request) as never))
 ipcMain.handle('zero3:workflow-worker:open-session', (_event, request: unknown) => zero3WorkflowWorkerRuntime.openPhysicalSession(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:rotate-session', (_event, request: unknown) => zero3WorkflowWorkerRuntime.rotatePhysicalSession(zero3WorkflowWorkerInput(request)))
 ipcMain.handle('zero3:workflow-worker:snapshot', (_event, workflowRunId: unknown) => zero3WorkflowWorkerRuntime.workflowSnapshot(workflowRunId))
@@ -391,7 +402,11 @@ contextBridge.exposeInMainWorld('zero3WorkflowWorkers', {
   ensureRun: input => ipcRenderer.invoke('zero3:workflow-worker:ensure-run', input),
   ensureBinding: input => ipcRenderer.invoke('zero3:workflow-worker:ensure-binding', input),
   addItems: input => ipcRenderer.invoke('zero3:workflow-worker:add-items', input),
+  getProductionProfile: projectId => ipcRenderer.invoke('zero3:workflow-worker:get-production-profile', projectId),
+  upsertProductionProfile: input => ipcRenderer.invoke('zero3:workflow-worker:upsert-production-profile', input),
   installCognitiveStore: input => ipcRenderer.invoke('zero3:workflow-worker:install-cognitive-store', input),
+  installVideoGeneration: input => ipcRenderer.invoke('zero3:workflow-worker:install-video-generation', input),
+  materializeVideoGenerationPlan: input => ipcRenderer.invoke('zero3:workflow-worker:materialize-video-generation-plan', input),
   openSession: input => ipcRenderer.invoke('zero3:workflow-worker:open-session', input),
   rotateSession: input => ipcRenderer.invoke('zero3:workflow-worker:rotate-session', input),
   snapshot: workflowRunId => ipcRenderer.invoke('zero3:workflow-worker:snapshot', workflowRunId),
@@ -411,7 +426,11 @@ const globalBridge = String.raw`    zero3Autonomous: {
       ensureRun: (input: Record<string, unknown>) => Promise<unknown>
       ensureBinding: (input: Record<string, unknown>) => Promise<unknown>
       addItems: (input: Record<string, unknown>) => Promise<unknown>
+      getProductionProfile: (projectId: string) => Promise<unknown>
+      upsertProductionProfile: (input: Record<string, unknown>) => Promise<unknown>
       installCognitiveStore: (input: Record<string, unknown>) => Promise<unknown>
+      installVideoGeneration: (input: Record<string, unknown>) => Promise<unknown>
+      materializeVideoGenerationPlan: (input: Record<string, unknown>) => Promise<unknown>
       openSession: (input: Record<string, unknown>) => Promise<unknown>
       rotateSession: (input: Record<string, unknown>) => Promise<unknown>
       snapshot: (workflowRunId: string) => Promise<unknown>
@@ -437,9 +456,9 @@ export function applyZero3AgentLifecycleRuntime() {
     [
       {
         label: 'Agent Lifecycle runtime import',
-        appliedMarker: "from './zero3/worker-runtime/v2/index'",
+        appliedMarker: 'installVideoGenerationWorkflow',
         from: 'const USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR',
-        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow } from './zero3/workflow-runtime/index'\nimport { dispatchZero3CodexTask, loadZero3RemoteHostConfig, resolveZero3AgentWorkspace, summarizeZero3AgentFastPathTelemetry, verifyZero3Commit } from './zero3/remote-host/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
+        to: "import { Zero3AgentLifecycleRuntime, Zero3AgentLifecycleStore, Zero3WorkflowWorkerRuntime, Zero3WorkflowWorkerStore } from './zero3/worker-runtime/v2/index'\nimport { ProjectProductionProfileStore, Zero3WorkerStationManager, Zero3WorkerWakeupController, installCognitiveStoreWorkflow, installVideoGenerationWorkflow, materializeVideoGenerationProductionPlan } from './zero3/workflow-runtime/index'\nimport { dispatchZero3CodexTask, loadZero3RemoteHostConfig, resolveZero3AgentWorkspace, summarizeZero3AgentFastPathTelemetry, verifyZero3Commit } from './zero3/remote-host/index'\n\nconst USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR"
       },
       {
         label: 'Capability Runtime import',
@@ -500,7 +519,10 @@ export function applyZero3AgentLifecycleRuntime() {
       { label: 'Autonomous Task Loop teardown', text: 'zero3AutonomousTaskLoop.stop()', count: 1 },
       { label: 'Unified Autonomous Agent dispatch', text: 'async function zero3DispatchAutonomousAgent(', count: 1 },
       { label: 'Autonomous goal IPC', text: "zero3:autonomous:create-goal", count: 1 },
-      { label: 'Autonomous dashboard IPC', text: "zero3:autonomous:dashboard", count: 1 }
+      { label: 'Autonomous dashboard IPC', text: "zero3:autonomous:dashboard", count: 1 },
+      { label: 'Video generation install IPC', text: "zero3:workflow-worker:install-video-generation", count: 1 },
+      { label: 'Video generation plan IPC', text: "zero3:workflow-worker:materialize-video-generation-plan", count: 1 },
+      { label: 'Production profile IPC', text: "zero3:workflow-worker:upsert-production-profile", count: 1 }
     ]
   )
   patchFile('electron/preload.ts', [

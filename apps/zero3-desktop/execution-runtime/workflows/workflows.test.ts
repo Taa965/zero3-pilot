@@ -10,7 +10,7 @@ import { createDefaultTaskWorkflowRegistry, Zero3TaskWorkflowRegistry } from './
 test('default task workflows compile user intent into authoritative execution steps', () => {
   const registry = createDefaultTaskWorkflowRegistry()
   assert.deepEqual(registry.list().map(item => item.id), [
-    'generic-task', 'software-development', 'bug-fix', 'research'
+    'generic-task', 'software-development', 'bug-fix', 'research', 'video-generation-v1'
   ])
   const input = registry.compile({
     title: '修复输入框锁死',

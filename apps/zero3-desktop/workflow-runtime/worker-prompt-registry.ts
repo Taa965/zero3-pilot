@@ -1,7 +1,10 @@
 const PROMPT_RULES: Record<string, string> = {
   'cognitive-store-script-worker.v1': '处理脚本重构 Claim；必须使用 Claim 指定 Skill，输出结构化脚本 Artifact。',
   'cognitive-store-visual-worker.v1': '处理视觉规划 Claim；必须依据上游脚本 Artifact，输出完整视觉规划 Artifact。',
-  'cognitive-store-image-worker.v1': '处理图片生产 Claim；严格按 Claim 批次生成，不得自行扩大图片数量或扫描队列。'
+  'cognitive-store-image-worker.v1': '处理图片生产 Claim；严格按 Claim 批次生成，不得自行扩大图片数量或扫描队列。',
+  'video-generation-script-worker.v1': '处理视频脚本重构 Claim；必须使用 Claim 指定脚本 Skill，并登记要求的 Markdown Artifact。',
+  'video-generation-visual-worker.v1': '处理视频视觉规划 Claim；必须使用上游重构稿和视觉 Skill，输出 Markdown、zero3.visual-plan.v1 JSON 与 Remotion35 交接包。',
+  'video-generation-image-worker.v1': '处理视频图片生产 Claim；严格按 Shot ID 与 Claim 批次生成，单批不得超过 10 张，所有图片必须逐一登记 Artifact。'
 }
 
 export type WorkerBootstrapPromptInput = {

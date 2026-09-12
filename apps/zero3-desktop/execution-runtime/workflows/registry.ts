@@ -6,6 +6,7 @@ import type { TaskWorkflowCreateInput, TaskWorkflowModule, TaskWorkflowSummary }
 import { genericTaskWorkflow } from './generic-task.ts'
 import { researchWorkflow } from './research.ts'
 import { softwareDevelopmentWorkflow } from './software-development.ts'
+import { videoGenerationWorkflow } from './video-generation.ts'
 
 const ID_RE = /^[A-Za-z0-9._:-]{1,256}$/
 
@@ -107,6 +108,7 @@ export function createDefaultTaskWorkflowRegistry(): Zero3TaskWorkflowRegistry {
     genericTaskWorkflow,
     softwareDevelopmentWorkflow,
     bugFixWorkflow,
-    researchWorkflow
+    researchWorkflow,
+    videoGenerationWorkflow
   ])
 }
