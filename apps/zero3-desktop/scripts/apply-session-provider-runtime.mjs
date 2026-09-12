@@ -179,6 +179,25 @@ function zero3ApiAgentResponseItems(text: string, toolCalls: Array<{ id: string;
   }
   return items
 }
+
+// Final Responses items assembled from one streamed upstream response. Order
+// matches the streaming output indices: reasoning, then the assistant message,
+// then the tool calls whose arguments were accumulated across deltas.
+function zero3ApiAgentStreamItems(
+  text: string,
+  reasoning: string,
+  calls: Array<{ id: string; name: string; arguments: string }>,
+  ids: { reasoningId?: string; messageId?: string } = {}
+): Array<Record<string, unknown>> {
+  const items: Array<Record<string, unknown>> = []
+  if (reasoning.trim()) items.push({ type: 'reasoning', id: ids.reasoningId ?? 'zero3-stream-item-reasoning', summary: [{ type: 'summary_text', text: reasoning }] })
+  if (text.trim()) items.push({ type: 'message', id: ids.messageId ?? 'zero3-stream-item-message', role: 'assistant', content: [{ type: 'output_text', text }] })
+  for (const call of calls) {
+    if (!call.name || !call.id) continue
+    items.push({ type: 'function_call', call_id: call.id, name: call.name, arguments: call.arguments || '{}' })
+  }
+  return items
+}
 function zero3ApiAgentUsage(inputTokens = 0, outputTokens = 0) {
   return {
     input_tokens: inputTokens,
@@ -415,6 +434,110 @@ async function zero3ApiAgentReadJson(request: http.IncomingMessage): Promise<Rec
   }
 }
 
+// Parses upstream text/event-stream bodies frame by frame. Providers separate
+// frames with CRLF or LF, prefix fields with a colon for comments, and repeat
+// the event name inside the JSON payload, so frames are delivered with both the
+// event: field and the raw data: text and the consumer decides which wins.
+async function zero3ApiAgentStreamSse(
+  upstream: Response,
+  byteLimit: number,
+  onFrame: (frame: { event: string | null; data: string }) => void
+): Promise<void> {
+  const body = upstream.body
+  if (!body) throw new Error('上游 API 没有返回流式内容')
+  const decoder = new TextDecoder()
+  let pending = ''
+  let eventName: string | null = null
+  let dataLines: string[] = []
+  let bytes = 0
+  const flushFrame = () => {
+    if (eventName == null && !dataLines.length) return
+    onFrame({ event: eventName, data: dataLines.join('\n') })
+    eventName = null
+    dataLines = []
+  }
+  for await (const raw of body as unknown as AsyncIterable<Uint8Array>) {
+    bytes += raw.byteLength
+    if (bytes > byteLimit) throw new Error('上游 API 流式响应超过 16 MiB 限制')
+    pending += decoder.decode(Buffer.from(raw), { stream: true })
+    for (;;) {
+      const match = /\r?\n/.exec(pending)
+      if (!match || match.index == null) break
+      const line = pending.slice(0, match.index)
+      pending = pending.slice(match.index + match[0].length)
+      if (line === '') { flushFrame(); continue }
+      if (line.startsWith(':')) continue
+      if (line.startsWith('event:')) eventName = line.slice(6).trim()
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
+    }
+  }
+  flushFrame()
+}
+
+// Shared stream bookkeeping for the three provider protocols. The pinned
+// kernel requires a parseable response.output_item.added before it accepts
+// text or reasoning deltas ("OutputTextDelta without active item"), so every
+// streamed item opens with an added event carrying the same stable id that its
+// response.output_item.done finalizes with.
+class Zero3ApiAgentStreamEmitter {
+  private sequence = 0
+  private nextOutputIndex = 0
+  private readonly ids: Partial<Record<'message' | 'reasoning', string>> = {}
+  private readonly outputIndexById = new Map<string, number>()
+  private readonly emit: (kind: string, payload: Record<string, unknown>) => void
+
+  constructor(emit: (kind: string, payload: Record<string, unknown>) => void) {
+    this.emit = emit
+  }
+
+  nextItemId(kind: 'message' | 'reasoning'): string {
+    this.sequence += 1
+    return 'zero3-stream-item-' + String(this.sequence) + '-' + kind
+  }
+
+  startItem(kind: 'message' | 'reasoning'): string {
+    const id = this.nextItemId(kind)
+    const outputIndex = this.nextOutputIndex++
+    const item = kind === 'reasoning'
+      ? { type: 'reasoning', id, summary: [] }
+      : { type: 'message', id, role: 'assistant', content: [] }
+    this.ids[kind] = id
+    this.outputIndexById.set(id, outputIndex)
+    this.emit('response.output_item.added', { output_index: outputIndex, item })
+    return id
+  }
+
+  itemId(kind: 'message' | 'reasoning'): string | undefined {
+    return this.ids[kind]
+  }
+
+  textDelta(delta: string) {
+    this.emit('response.output_text.delta', { item_id: this.ids.message ?? null, delta })
+  }
+
+  reasoningDelta(delta: string, summaryIndex = 0) {
+    this.emit('response.reasoning_summary_text.delta', { item_id: this.ids.reasoning ?? null, delta, summary_index: summaryIndex })
+  }
+
+  doneItems(items: Array<Record<string, unknown>>) {
+    let fallbackIndex = this.nextOutputIndex
+    items.forEach(item => {
+      const id = typeof item.id === 'string' ? item.id : ''
+      const outputIndex = id && this.outputIndexById.has(id) ? this.outputIndexById.get(id)! : fallbackIndex++
+      this.emit('response.output_item.done', { output_index: outputIndex, item })
+    })
+  }
+}
+
+function zero3ApiAgentUpstreamError(response: Response, raw: string): Error {
+  let parsed: unknown = {}
+  try { parsed = raw ? JSON.parse(raw) : {} } catch { /* provider-specific error text */ }
+  const body = zero3SessionRecord(parsed)
+  const detail = zero3SessionRecord(body.error)
+  const message = typeof detail.message === 'string' ? detail.message : raw.slice(0, 500)
+  return new Error('上游 API HTTP ' + String(response.status) + ': ' + message)
+}
+
 class Zero3ApiAgentResponsesBridge {
   private server: http.Server | null = null
   private starting: Promise<void> | null = null
@@ -501,30 +624,37 @@ class Zero3ApiAgentResponsesBridge {
     }
     try {
       const body = await zero3ApiAgentReadJson(request)
-      const converted = await this.fetchUpstream(profile, body)
       const responseId = 'zero3-api-resp-' + String(++this.sequence)
-      const completed = {
-        id: responseId,
-        object: 'response',
-        status: 'completed',
-        output: converted.items,
-        usage: converted.usage
-      }
-      if (body.stream === true) {
-        response.writeHead(200, {
-          'cache-control': 'no-cache, no-transform',
-          connection: 'keep-alive',
-          'content-type': 'text/event-stream; charset=utf-8'
-        })
-        response.write(zero3GlmSseEvent('response.created', { response: { id: responseId, status: 'in_progress' } }))
-        converted.items.forEach((item, index) => {
-          response.write(zero3GlmSseEvent('response.output_item.done', { output_index: index, item }))
-        })
-        response.end(zero3GlmSseEvent('response.completed', { response: completed }))
+      if (body.stream !== true) {
+        const converted = await this.fetchUpstream(profile, body)
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify({ id: responseId, object: 'response', status: 'completed', output: converted.items, usage: converted.usage }))
         return
       }
-      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify(completed))
+      // Real upstream streaming: provider deltas are forwarded as Responses SSE
+      // events while the upstream is still producing them. A provider that
+      // rejects streaming falls back to one upstream round trip and one honest
+      // burst of events at the end - never fabricated incremental typing.
+      response.writeHead(200, {
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'content-type': 'text/event-stream; charset=utf-8'
+      })
+      const emit = (kind: string, payload: Record<string, unknown>) => {
+        if (!response.writableEnded) response.write(zero3GlmSseEvent(kind, payload))
+      }
+      emit('response.created', { response: { id: responseId, status: 'in_progress' } })
+      try {
+        const converted = await this.streamUpstream(profile, body, emit)
+        emit('response.completed', { response: { id: responseId, status: 'completed', output: converted.items, usage: converted.usage } })
+        response.end()
+      } catch (streamError) {
+        // Headers are already sent, so the failure travels as an SSE event the
+        // kernel maps to a stream error instead of an HTTP status.
+        const message = streamError instanceof Error && streamError.message ? streamError.message : 'Zero3 API Agent bridge 内部错误'
+        emit('response.failed', { response: { id: responseId, status: 'failed', error: { message } } })
+        response.end()
+      }
     } catch (error) {
       const message = error instanceof Error && error.message ? error.message : 'Zero3 API Agent bridge 内部错误'
       response.writeHead(502, { 'content-type': 'application/json; charset=utf-8' })
@@ -538,6 +668,282 @@ class Zero3ApiAgentResponsesBridge {
     if (profile.protocol === 'openai_compatible') return this.fetchOpenAiCompatible(profile, body, model)
     if (profile.protocol === 'anthropic') return this.fetchAnthropic(profile, body, model)
     return this.fetchGemini(profile, body, model)
+  }
+
+  // Streaming counterpart of fetchUpstream. Provider deltas are forwarded as
+  // Responses SSE events while the upstream is still producing them. A provider
+  // that rejects streaming - and only then, never after deltas were emitted -
+  // falls back to the proven non-streaming round trip, which returns one
+  // honest burst of events at the end instead of fabricated incremental typing.
+  private async streamUpstream(
+    profile: Zero3ApiAgentBridgeProfile,
+    body: Record<string, unknown>,
+    emit: (kind: string, payload: Record<string, unknown>) => void
+  ) {
+    let emittedAny = false
+    const guardedEmit = (kind: string, payload: Record<string, unknown>) => {
+      emittedAny = true
+      emit(kind, payload)
+    }
+    try {
+      const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : ''
+      if (!model) throw new Error('Codex Agent Kernel 请求缺少模型名称')
+      if (profile.protocol === 'openai_compatible') return await this.streamOpenAiCompatible(profile, body, model, guardedEmit)
+      if (profile.protocol === 'anthropic') return await this.streamAnthropic(profile, body, model, guardedEmit)
+      return await this.streamGemini(profile, body, model, guardedEmit)
+    } catch (error) {
+      if (emittedAny) throw error
+      const rawMessage = error && typeof error === 'object' && 'message' in error
+        ? String((error as { message?: unknown }).message ?? '')
+        : String(error ?? '')
+      const message = rawMessage.toLowerCase()
+      const streamingRejected = message.includes('stream') && (
+        message.includes('not supported') || message.includes('unsupported') ||
+        message.includes('does not support') || message.includes('unknown field') ||
+        message.includes('unknown parameter') || message.includes('invalid parameter')
+      )
+      if (!streamingRejected) throw error
+      const converted = await this.fetchUpstream(profile, body)
+      converted.items.forEach((item, index) => emit('response.output_item.done', { output_index: index, item }))
+      return converted
+    }
+  }
+
+  private async startUpstreamStream(url: string, init: Parameters<typeof fetch>[1]): Promise<{ upstream: Response; release: () => void }> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), ZERO3_API_TIMEOUT_MS)
+    try {
+      const upstream = await fetch(url, { ...init, signal: controller.signal })
+      if (!upstream.ok) {
+        const raw = await upstream.text()
+        throw zero3ApiAgentUpstreamError(upstream, raw.slice(0, ZERO3_API_MAX_RESPONSE_BYTES))
+      }
+      return { upstream, release: () => clearTimeout(timer) }
+    } catch (error) {
+      clearTimeout(timer)
+      throw error
+    }
+  }
+
+  private async streamOpenAiCompatible(
+    profile: Zero3ApiAgentBridgeProfile,
+    body: Record<string, unknown>,
+    model: string,
+    emit: (kind: string, payload: Record<string, unknown>) => void
+  ) {
+    const tools = zero3GlmTools(body.tools)
+    const messages = zero3GlmMessages(body.input, body.instructions, {})
+    if (!messages.length) throw new Error('OpenAI-Compatible 请求没有可转换的消息')
+    const headers = {
+      'content-type': 'application/json',
+      accept: 'text/event-stream',
+      ...(profile.apiKey ? { authorization: 'Bearer ' + profile.apiKey } : {})
+    }
+    const requestStream = (includeUsage: boolean) => {
+      const upstreamBody: Record<string, unknown> = { model, messages, stream: true }
+      if (includeUsage) upstreamBody.stream_options = { include_usage: true }
+      if (tools.length) upstreamBody.tools = tools
+      if (typeof body.temperature === 'number') upstreamBody.temperature = body.temperature
+      if (typeof body.max_output_tokens === 'number') upstreamBody.max_tokens = body.max_output_tokens
+      if (profile.baseUrl.includes('open.bigmodel.cn')) upstreamBody.thinking = { type: 'enabled' }
+      return this.startUpstreamStream(zero3Endpoint(profile.baseUrl, 'chat/completions'), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(upstreamBody)
+      })
+    }
+    let stream: { upstream: Response; release: () => void }
+    try {
+      stream = await requestStream(true)
+    } catch (usageError) {
+      // stream_options is an OpenAI extension; several compatible providers
+      // reject the whole request over it but stream fine without it.
+      if (!(usageError instanceof Error) || !usageError.message.includes('HTTP 400')) throw usageError
+      stream = await requestStream(false)
+    }
+    const emitter = new Zero3ApiAgentStreamEmitter(emit)
+    const text: string[] = []
+    const reasoning: string[] = []
+    const calls: Array<{ id: string; name: string; arguments: string }> = []
+    let usage: Record<string, unknown> = {}
+    let openedMessage = false
+    let openedReasoning = false
+    try {
+      await zero3ApiAgentStreamSse(stream.upstream, ZERO3_API_MAX_RESPONSE_BYTES, frame => {
+        const data = frame.data.trim()
+        if (!data || data === '[DONE]') return
+        let parsed: unknown
+        try { parsed = JSON.parse(data) } catch { return }
+        const payload = zero3SessionRecord(parsed)
+        const usageValue = zero3SessionRecord(payload.usage)
+        if (Object.keys(usageValue).length) usage = usageValue
+        const choice = Array.isArray(payload.choices) ? zero3SessionRecord(payload.choices[0]) : {}
+        const delta = zero3SessionRecord(choice.delta)
+        const reasoningDelta = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : ''
+        if (reasoningDelta) {
+          if (!openedReasoning) { emitter.startItem('reasoning'); openedReasoning = true }
+          reasoning.push(reasoningDelta)
+          emitter.reasoningDelta(reasoningDelta)
+        }
+        const textDelta = typeof delta.content === 'string' ? delta.content : ''
+        if (textDelta) {
+          if (!openedMessage) { emitter.startItem('message'); openedMessage = true }
+          text.push(textDelta)
+          emitter.textDelta(textDelta)
+        }
+        const toolDeltas = Array.isArray(delta.tool_calls) ? delta.tool_calls.map(value => zero3SessionRecord(value)) : []
+        for (const toolDelta of toolDeltas) {
+          const index = typeof toolDelta.index === 'number' ? toolDelta.index : calls.length
+          while (calls.length <= index) calls.push({ id: '', name: '', arguments: '' })
+          const call = calls[index]
+          if (typeof toolDelta.id === 'string' && toolDelta.id && !call.id) call.id = toolDelta.id
+          const fn = zero3SessionRecord(toolDelta.function)
+          if (typeof fn.name === 'string' && fn.name && !call.name) call.name = fn.name
+          if (typeof fn.arguments === 'string') call.arguments += fn.arguments
+        }
+      })
+    } finally {
+      stream.release()
+    }
+    const items = zero3ApiAgentStreamItems(text.join(''), reasoning.join(''), calls, { reasoningId: emitter.itemId('reasoning'), messageId: emitter.itemId('message') })
+    emitter.doneItems(items)
+    return { items, usage: zero3GlmResponseUsage(usage) }
+  }
+
+  private async streamAnthropic(
+    profile: Zero3ApiAgentBridgeProfile,
+    body: Record<string, unknown>,
+    model: string,
+    emit: (kind: string, payload: Record<string, unknown>) => void
+  ) {
+    if (!profile.apiKey) throw new Error('Anthropic profile requires an API Key')
+    const payload = { ...zero3ApiAnthropicPayload(body, model), stream: true }
+    const stream = await this.startUpstreamStream(
+      zero3Endpoint(profile.baseUrl, profile.baseUrl.endsWith('/v1') ? 'messages' : 'v1/messages'),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream', 'x-api-key': profile.apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify(payload)
+      }
+    )
+    const emitter = new Zero3ApiAgentStreamEmitter(emit)
+    const text: string[] = []
+    const reasoning: string[] = []
+    const calls: Array<{ id: string; name: string; arguments: string }> = []
+    let inputTokens = 0
+    let outputTokens = 0
+    const blocks = new Map<number, { kind: 'text' | 'reasoning' | 'tool'; callIndex: number }>()
+    try {
+      await zero3ApiAgentStreamSse(stream.upstream, ZERO3_API_MAX_RESPONSE_BYTES, frame => {
+        if (!frame.data.trim()) return
+        let parsed: unknown
+        try { parsed = JSON.parse(frame.data) } catch { return }
+        const event = zero3SessionRecord(parsed)
+        const kind = typeof event.type === 'string' ? event.type : frame.event ?? ''
+        if (kind === 'message_start') {
+          const message = zero3SessionRecord(event.message)
+          const usage = zero3SessionRecord(message.usage)
+          if (typeof usage.input_tokens === 'number') inputTokens = usage.input_tokens
+          return
+        }
+        if (kind === 'content_block_start') {
+          const block = zero3SessionRecord(event.content_block)
+          const index = typeof event.index === 'number' ? event.index : blocks.size
+          if (block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+            calls.push({ id: block.id, name: block.name, arguments: '' })
+            blocks.set(index, { kind: 'tool', callIndex: calls.length - 1 })
+          } else if (block.type === 'thinking') {
+            blocks.set(index, { kind: 'reasoning', callIndex: -1 })
+          } else {
+            blocks.set(index, { kind: 'text', callIndex: -1 })
+          }
+          return
+        }
+        if (kind === 'content_block_delta') {
+          const index = typeof event.index === 'number' ? event.index : -1
+          const block = blocks.get(index)
+          const delta = zero3SessionRecord(event.delta)
+          const deltaType = typeof delta.type === 'string' ? delta.type : ''
+          if (deltaType === 'text_delta' && typeof delta.text === 'string' && delta.text) {
+            if (!block || block.kind !== 'text') return
+            if (!text.length) emitter.startItem('message')
+            text.push(delta.text)
+            emitter.textDelta(delta.text)
+          } else if (deltaType === 'thinking_delta' && typeof delta.thinking === 'string' && delta.thinking) {
+            if (!reasoning.length) emitter.startItem('reasoning')
+            reasoning.push(delta.thinking)
+            emitter.reasoningDelta(delta.thinking)
+          } else if (deltaType === 'input_json_delta' && typeof delta.partial_json === 'string' && block && block.kind === 'tool') {
+            calls[block.callIndex].arguments += delta.partial_json
+          }
+          return
+        }
+        if (kind === 'message_delta') {
+          const usage = zero3SessionRecord(event.usage)
+          if (typeof usage.output_tokens === 'number') outputTokens = usage.output_tokens
+        }
+      })
+    } finally {
+      stream.release()
+    }
+    const items = zero3ApiAgentStreamItems(text.join(''), reasoning.join(''), calls, { reasoningId: emitter.itemId('reasoning'), messageId: emitter.itemId('message') })
+    emitter.doneItems(items)
+    return { items, usage: zero3ApiAgentUsage(inputTokens, outputTokens) }
+  }
+
+  private async streamGemini(
+    profile: Zero3ApiAgentBridgeProfile,
+    body: Record<string, unknown>,
+    model: string,
+    emit: (kind: string, payload: Record<string, unknown>) => void
+  ) {
+    if (!profile.apiKey) throw new Error('Google Gemini profile requires an API Key')
+    const url = zero3Endpoint(profile.baseUrl, 'models/' + encodeURIComponent(model) + ':streamGenerateContent') + '?alt=sse&key=' + encodeURIComponent(profile.apiKey)
+    const stream = await this.startUpstreamStream(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify(zero3ApiGeminiPayload(body))
+    })
+    const emitter = new Zero3ApiAgentStreamEmitter(emit)
+    const text: string[] = []
+    const calls: Array<{ id: string; name: string; arguments: string }> = []
+    let usage: Record<string, unknown> = {}
+    try {
+      await zero3ApiAgentStreamSse(stream.upstream, ZERO3_API_MAX_RESPONSE_BYTES, frame => {
+        if (!frame.data.trim()) return
+        let parsed: unknown
+        try { parsed = JSON.parse(frame.data) } catch { return }
+        const payload = zero3SessionRecord(parsed)
+        const usageValue = zero3SessionRecord(payload.usageMetadata)
+        if (Object.keys(usageValue).length) usage = usageValue
+        const candidate = Array.isArray(payload.candidates) ? zero3SessionRecord(payload.candidates[0]) : {}
+        const content = zero3SessionRecord(candidate.content)
+        const parts = Array.isArray(content.parts) ? content.parts.map(value => zero3SessionRecord(value)) : []
+        for (const part of parts) {
+          if (typeof part.text === 'string' && part.text) {
+            if (!text.length) emitter.startItem('message')
+            text.push(part.text)
+            emitter.textDelta(part.text)
+            continue
+          }
+          const call = zero3SessionRecord(part.functionCall)
+          if (typeof call.name === 'string' && call.name.trim()) {
+            calls.push({
+              id: 'gemini-call-' + String(Date.now()) + '-' + String(calls.length + 1),
+              name: call.name,
+              arguments: JSON.stringify(call.args ?? {})
+            })
+          }
+        }
+      })
+    } finally {
+      stream.release()
+    }
+    const items = zero3ApiAgentStreamItems(text.join(''), '', calls, { messageId: emitter.itemId('message') })
+    emitter.doneItems(items)
+    const promptTokens = typeof usage.promptTokenCount === 'number' ? usage.promptTokenCount : 0
+    const outputTokenCount = typeof usage.candidatesTokenCount === 'number' ? usage.candidatesTokenCount : 0
+    return { items, usage: zero3ApiAgentUsage(promptTokens, outputTokenCount) }
   }
 
   private async upstreamJson(url: string, init: Parameters<typeof fetch>[1]) {
