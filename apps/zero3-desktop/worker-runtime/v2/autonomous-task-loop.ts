@@ -87,6 +87,7 @@ export type AutonomousTaskLoopOptions = {
   maxCreatesPerProjectTick?: number
   attentionBudget?: Partial<AutonomousAttentionBudget>
   advertisedPluginCapabilities?: readonly string[]
+  memoryTimeoutMs?: number
   clock?: () => Date
 }
 
@@ -272,6 +273,7 @@ export class Zero3AutonomousTaskLoop {
   private readonly intervalMs: number
   private readonly maxCreates: number
   private readonly attentionBudget: AutonomousAttentionBudget
+  private readonly memoryTimeoutMs: number
   private readonly projectTails = new Map<string, Promise<void>>()
   private timer: NodeJS.Timeout | null = null
   private ticking = false
@@ -294,6 +296,7 @@ export class Zero3AutonomousTaskLoop {
     this.intervalMs = Math.max(5_000, Math.min(options.intervalMs ?? 30_000, 300_000))
     this.maxCreates = Math.max(1, Math.min(options.maxCreatesPerProjectTick ?? 20, 100))
     this.attentionBudget = { ...DEFAULT_AUTONOMOUS_ATTENTION_BUDGET, ...(options.attentionBudget ?? {}) }
+    this.memoryTimeoutMs = Math.max(50, Math.min(options.memoryTimeoutMs ?? 3_000, 30_000))
   }
 
   start(): void {
@@ -485,13 +488,31 @@ export class Zero3AutonomousTaskLoop {
     return current
   }
 
+  private async memoryCall<T>(label: string, operation: Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | null = null
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label} timed out after ${this.memoryTimeoutMs}ms`)), this.memoryTimeoutMs)
+          timer.unref?.()
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
   private async reconcileProject(project: ProjectRecord): Promise<void> {
     let memory: AutonomousTaskMemoryPort | null = null
-    try { memory = await this.ports.memoryForProject(project.id) } catch { return }
-    if (!memory) return
-    await this.flushPendingMemory(project.id, memory)
-    let context: any
-    try { context = await memory.getProject(project.id) } catch { return }
+    let context: any = null
+    try { memory = await this.memoryCall(`Shared Memory open for ${project.id}`, this.ports.memoryForProject(project.id)) }
+    catch (error) { this.noteError(error) }
+    if (memory) {
+      await this.flushPendingMemory(project.id, memory)
+      try { context = await this.memoryCall(`Shared Memory read for ${project.id}`, memory.getProject(project.id)) }
+      catch (error) { this.noteError(error) }
+    }
     const entities = Array.isArray(context?.entities) ? context.entities : []
     let created = 0
     for (const entity of entities) {
@@ -528,7 +549,7 @@ export class Zero3AutonomousTaskLoop {
         await this.reconcileTask(snapshot)
         const latest = await this.ports.execution.getTask(taskId)
         await this.reconcileParentResume(latest)
-        await this.publishOutcome(memory, context, latest)
+        if (memory) await this.publishOutcome(memory, context, latest)
       } catch (error) {
         this.noteError(error)
       }
@@ -821,7 +842,7 @@ export class Zero3AutonomousTaskLoop {
     for (const pending of this.store.memoryOutboxPending()) {
       if (record(pending.event.scope).project_id !== projectId) continue
       try {
-        await memory.publish(pending.event)
+        await this.memoryCall(`Shared Memory publish ${pending.eventId}`, memory.publish(pending.event))
         this.store.markMemory(pending.eventId, 'acked', null, nowIso(this.clock))
       } catch (error) {
         this.store.markMemory(pending.eventId, 'pending', error instanceof Error ? error.message : String(error), nowIso(this.clock))
@@ -849,7 +870,7 @@ export class Zero3AutonomousTaskLoop {
     if (existing?.state === 'acked') return
     if (existing?.state === 'pending') {
       try {
-        await memory.publish(existing.event)
+        await this.memoryCall(`Shared Memory publish ${eventId}`, memory.publish(existing.event))
         this.store.markMemory(eventId, 'acked', null, nowIso(this.clock))
       } catch (error) {
         this.store.markMemory(eventId, 'pending', error instanceof Error ? error.message : String(error), nowIso(this.clock))
@@ -893,7 +914,7 @@ export class Zero3AutonomousTaskLoop {
     }
     this.store.enqueueMemory(event, projectId, taskId, String(event.created_at))
     try {
-      await memory.publish(event)
+      await this.memoryCall(`Shared Memory publish ${eventId}`, memory.publish(event))
       this.store.markMemory(eventId, 'acked', null, nowIso(this.clock))
     } catch (error) {
       this.store.markMemory(eventId, 'pending', error instanceof Error ? error.message : String(error), nowIso(this.clock))

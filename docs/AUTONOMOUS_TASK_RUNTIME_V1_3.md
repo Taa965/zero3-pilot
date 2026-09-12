@@ -11,6 +11,7 @@ The v1.3 branch has been merged forward with current `main` and now consumes the
 - **Planner is context-aware and proposal-only.** It prioritizes unresolved candidates by disposition, severity and mainline impact, detects missing capabilities and emits ESCALATE/EXECUTE/DEFER/OBSERVE proposals. Materialization remains an Orchestrator/Policy action.
 - **Task Board exposes the autonomy control surface.** The same Task Board shows Root Goal/AUTO badges and a `自主编排` view for Daily Review, Human Attention, next actions and Execution Graph. No autonomous-only Task Store or board authority exists.
 - The autonomous loop and auto-dispatch are enabled by default in the prepared desktop composition but can be explicitly disabled through the existing environment flags.
+- **Shared Memory is non-blocking for execution scheduling.** Memory open/read/publish calls are bounded; unavailable or slow Memory degrades candidate discovery/outcome publication only. Root/Child Execution scheduling, Runtime Guards, unified Agent dispatch and Parent Resume continue, while outcome events remain durable in the Memory outbox for later retry.
 
 Status: branch implementation baseline for `codex/autonomous-task-runtime-v1.3`.
 

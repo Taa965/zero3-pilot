@@ -508,6 +508,42 @@ test('v1.3 user Root Goal becomes one authoritative autonomous Execution Task', 
   } finally { await cleanup(h) }
 })
 
+test('v1.3 Root Goal dispatch continues when Shared Memory is unavailable or slow', async () => {
+  const h = await makeHarness([])
+  const slowMemory = {
+    async getProject(): Promise<unknown> { return await new Promise(() => {}) },
+    async publish(): Promise<{ accepted: true }> { return { accepted: true } }
+  }
+  const loop = new Zero3AutonomousTaskLoop(
+    h.store,
+    {
+      ...h.loopPorts,
+      memoryForProject: async () => slowMemory,
+    },
+    {
+      enabled: true,
+      autoDispatch: true,
+      memoryTimeoutMs: 50,
+      advertisedPluginCapabilities: [
+        'zero3.full-capability.web-gpt', 'agent.dispatch.unified', 'agent.dispatch.codex.full',
+        'session.bootstrap.project', 'memory.shared.lifecycle'
+      ],
+      clock: () => new Date('2026-09-12T08:00:00.000Z')
+    }
+  )
+  try {
+    const created = await loop.createGoal({ title: 'Memory degraded goal', goal: 'Continue execution without waiting for memory.', projectId: PROJECT_ID }) as any
+    const latest = await h.execution.getTask(created.definition.task.taskId) as any
+    assert.equal(h.gpt.created.length, 1)
+    assert.ok(latest.runtime.steps[0].assignmentId)
+    assert.equal(latest.runtime.assignments[0].executor, 'GPT_WEB')
+    assert.equal(latest.runtime.sessionBindings.length, 1)
+  } finally {
+    loop.stop()
+    await cleanup(h)
+  }
+})
+
 test('v1.3 autonomy dashboard projects attention, graph, review and plan from authorities', async () => {
   const h = await makeHarness([memoryEntity('warning', { title: 'Non blocking warning', message: 'Defer this.' })])
   try {
