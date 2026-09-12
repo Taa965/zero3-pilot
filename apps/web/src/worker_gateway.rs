@@ -172,7 +172,12 @@ struct WorkerGateway {
 struct ApiError {
     status: StatusCode,
     message: String,
-    headers: HeaderMap,
+    // Boxed so the error stays small enough to return by value from every
+    // gateway handler without tripping clippy::result_large_err. The response
+    // headers are still the same HeaderMap; they are simply no longer inline in
+    // the returned error, which is what made every `Result<_, ApiError>` in this
+    // module a large-Err type.
+    headers: Box<HeaderMap>,
 }
 
 impl ApiError {
@@ -180,7 +185,7 @@ impl ApiError {
         Self {
             status,
             message: message.into(),
-            headers: HeaderMap::new(),
+            headers: Box::new(HeaderMap::new()),
         }
     }
 
@@ -192,11 +197,25 @@ impl ApiError {
     }
 }
 
+/// Terminal outcome of one Worker RPC request.
+///
+/// `complete` and `fail` are the only producers, and everything they hand to
+/// `finish` is one indivisible decision (the state plus the result-or-error that
+/// justifies it). Grouping them keeps `finish` inside the reviewed argument
+/// budget instead of suppressing clippy's argument-count lint on a security-
+/// relevant gateway method.
+#[derive(Debug)]
+struct WorkerOutcome {
+    result: Option<Value>,
+    error: Option<String>,
+    state: WorkerRequestState,
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
             self.status,
-            self.headers,
+            *self.headers,
             Json(json!({ "error": self.message })),
         )
             .into_response()
@@ -314,6 +333,11 @@ impl WorkerGateway {
             state: Mutex::new(state),
         })
     }
+    // Production dispatch always names the protocol explicitly through
+    // `submit_for`; the Worker-Protocol shorthand only exists for the tests that
+    // exercise the gateway queue, so it must not be compiled into the binary as
+    // dead code.
+    #[cfg(test)]
     fn submit(&self, tool: &str, arguments: Value) -> Result<WorkerRpcRecord, ApiError> {
         self.submit_for(WORKER_CAPABILITY, tool, arguments)
     }
@@ -401,6 +425,9 @@ impl WorkerGateway {
             .insert(record.request_id.clone(), record.clone());
         Ok(record)
     }
+    // Same rule as `submit`: the capability-scoped `try_lease_for` is the
+    // production entry point, and this shorthand only serves tests.
+    #[cfg(test)]
     fn try_lease(&self, node_id: &str) -> Result<Option<WorkerRpcLease>, ApiError> {
         self.try_lease_for(node_id, &[WORKER_CAPABILITY.to_string()])
     }
@@ -485,9 +512,11 @@ impl WorkerGateway {
             node_id,
             lease_id,
             fencing_token,
-            Some(result),
-            None,
-            WorkerRequestState::Completed,
+            WorkerOutcome {
+                result: Some(result),
+                error: None,
+                state: WorkerRequestState::Completed,
+            },
         )
     }
 
@@ -511,9 +540,11 @@ impl WorkerGateway {
             node_id,
             lease_id,
             fencing_token,
-            None,
-            Some(detail.to_string()),
-            WorkerRequestState::Failed,
+            WorkerOutcome {
+                result: None,
+                error: Some(detail.to_string()),
+                state: WorkerRequestState::Failed,
+            },
         )
     }
 
@@ -523,9 +554,7 @@ impl WorkerGateway {
         node_id: &str,
         lease_id: &str,
         fencing_token: u64,
-        result: Option<Value>,
-        error: Option<String>,
-        state_value: WorkerRequestState,
+        outcome: WorkerOutcome,
     ) -> Result<WorkerRpcRecord, ApiError> {
         validate_id("worker request_id", request_id)?;
         let mut state = self.state.lock().unwrap();
@@ -535,7 +564,10 @@ impl WorkerGateway {
                 ApiError::new(StatusCode::NOT_FOUND, "worker RPC request not found")
             })?;
         if record.state.is_terminal() {
-            if record.state == state_value && record.result == result && record.error == error {
+            if record.state == outcome.state
+                && record.result == outcome.result
+                && record.error == outcome.error
+            {
                 return Ok(record);
             }
             return Err(ApiError::new(
@@ -544,9 +576,9 @@ impl WorkerGateway {
             ));
         }
         validate_active_lease(&record, node_id, lease_id, fencing_token)?;
-        record.state = state_value;
-        record.result = result;
-        record.error = error;
+        record.state = outcome.state;
+        record.result = outcome.result;
+        record.error = outcome.error;
         record.updated_at = Utc::now();
         record.lease_expires_at = None;
         self.persist(&record).map_err(ApiError::internal)?;
