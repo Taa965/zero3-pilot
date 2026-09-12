@@ -28,12 +28,13 @@ export type WorkspaceSession = {
 }
 
 export type LocalSessionProvider = Exclude<WorkspaceProvider, 'gpt' | 'gemini'>
-export type LocalSessionThinkingEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type LocalSessionThinkingEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 
 export type LocalSessionRuntimeConfig = {
   projectBinding?: import('../adapters/ProjectLinkAdapter').ProjectBinding | null
   model?: string | null
   thinkingEffort?: LocalSessionThinkingEffort | null
+  serviceTier?: string | null
 }
 
 export type LocalSessionMessage = {
@@ -57,6 +58,7 @@ export type LocalSessionRecord = {
   zero3ProfileId: string | null
   model: string | null
   thinkingEffort: LocalSessionThinkingEffort | null
+  serviceTier: string | null
   archived?: boolean
   messages: LocalSessionMessage[]
 }

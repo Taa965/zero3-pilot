@@ -10,6 +10,17 @@ import { ProviderUsageBadge } from './ProviderUsageBadge'
 import { localTurnFailureMessage } from './local-turn-failure'
 
 type ApiProfile = Awaited<ReturnType<Window['zero3SessionProviders']['listZero3Profiles']>>[number]
+type NativeModelCapability = {
+  id: string
+  model: string
+  displayName: string
+  isDefault: boolean
+  defaultReasoningEffort: LocalSessionThinkingEffort | null
+  supportedReasoningEfforts: Array<{ reasoningEffort: LocalSessionThinkingEffort; description: string }>
+  serviceTiers: Array<{ id: string; name: string; description: string }>
+  defaultServiceTier: string | null
+}
+
 type SharedMemoryBridge = {
   read: (request: { projectId: string }) => Promise<unknown>
   flush?: (request: { projectId: string }) => Promise<unknown>
@@ -22,19 +33,58 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 function string(value: unknown): string { return typeof value === 'string' ? value : '' }
-function effort(value: LocalSessionThinkingEffort | null): 'low' | 'medium' | 'high' | 'xhigh' | null {
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ? value : null
+function effort(value: LocalSessionThinkingEffort | null): LocalSessionThinkingEffort | null {
+  return value && ['minimal','low','medium','high','xhigh','max','ultra'].includes(value) ? value : null
 }
-function profileDescriptor(profile: ApiProfile | undefined, fallbackId: string | null, model: string | null, threadId: string | null) {
+function parseNativeModelCapabilities(value: unknown): NativeModelCapability[] {
+  const root = record(value)
+  const data = Array.isArray(root.data) ? root.data.map(record) : []
+  const allowedEfforts = new Set<LocalSessionThinkingEffort>(['minimal','low','medium','high','xhigh','max','ultra'])
+  return data.flatMap(item => {
+    const id = string(item.id) || string(item.model)
+    const model = string(item.model) || id
+    if (!id || !model || item.hidden === true) return []
+    const efforts = Array.isArray(item.supportedReasoningEfforts) ? item.supportedReasoningEfforts.map(record).flatMap(raw => {
+      const candidate = string(raw.reasoningEffort) as LocalSessionThinkingEffort
+      return allowedEfforts.has(candidate) ? [{ reasoningEffort: candidate, description: string(raw.description) }] : []
+    }) : []
+    const tiers = Array.isArray(item.serviceTiers) ? item.serviceTiers.map(record).flatMap(raw => {
+      const tierId = string(raw.id)
+      return tierId ? [{ id: tierId, name: string(raw.name) || tierId, description: string(raw.description) }] : []
+    }) : []
+    const defaultEffort = string(item.defaultReasoningEffort) as LocalSessionThinkingEffort
+    return [{ id, model, displayName: string(item.displayName) || model, isDefault: item.isDefault === true,
+      defaultReasoningEffort: allowedEfforts.has(defaultEffort) ? defaultEffort : null,
+      supportedReasoningEfforts: efforts, serviceTiers: tiers,
+      defaultServiceTier: string(item.defaultServiceTier) || null }]
+  })
+}
+
+function profileDescriptor(profile: ApiProfile | undefined, fallbackId: string | null, model: string | null, serviceTier: string | null, threadId: string | null) {
   return {
     profileId: profile?.id ?? fallbackId,
     name: profile?.name ?? fallbackId,
     protocol: profile?.protocol ?? null,
     baseUrl: profile?.baseUrl ?? null,
     model: model ?? profile?.model ?? null,
+    serviceTier,
     runtimeThreadId: threadId
   }
 }
+async function listNativeModelCapabilities(): Promise<NativeModelCapability[]> {
+  if (typeof window.zero3Codex?.model?.list !== 'function') return []
+  const result: NativeModelCapability[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < 5; page += 1) {
+    const response = await window.zero3Codex.model.list({ includeHidden: false, limit: 100, ...(cursor ? { cursor } : {}) })
+    result.push(...parseNativeModelCapabilities(response))
+    const next = string(record(response).nextCursor)
+    if (!next) break
+    cursor = next
+  }
+  return result
+}
+
 async function sharedMemoryHandoff(projectId: string, logicalSessionId: string): Promise<Record<string, unknown>> {
   const bridge = (window as Zero3Window).zero3SharedMemory
   const locator = `zero3-shared-memory://${projectId}`
@@ -93,6 +143,7 @@ async function runZero3Turn(session: LocalSessionRecord, project: Zero3ProjectRe
     threadId: session.runtimeId,
     model: session.model,
     effort: effort(session.thinkingEffort),
+    serviceTier: session.serviceTier,
     handoff: pendingHandoff,
     allowRuntimeRotation: Boolean(pendingHandoff),
     recoveryHandoff,
@@ -120,8 +171,10 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
   const [events, setEvents] = useState<Zero3SessionEvent[]>([])
   const [profiles, setProfiles] = useState<ApiProfile[]>([])
   const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [nativeModels, setNativeModels] = useState<NativeModelCapability[]>([])
   const [modelDraft, setModelDraft] = useState('')
   const [effortDraft, setEffortDraft] = useState<LocalSessionThinkingEffort | ''>('')
+  const [serviceTierDraft, setServiceTierDraft] = useState('')
   const [restoredSessionId, setRestoredSessionId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -139,12 +192,13 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
       if (cancelled) return
       const state = Zero3SessionEventStore.ensureMigrated(session)
       Zero3SessionEventStore.setBinding(session.id, {
-        profileId: session.zero3ProfileId, model: session.model, thinkingEffort: session.thinkingEffort,
+        profileId: session.zero3ProfileId, model: session.model, thinkingEffort: session.thinkingEffort, serviceTier: session.serviceTier,
         runtimeThreadId: session.runtimeId, projectId: session.projectId
       })
       setEvents(state.events)
       setModelDraft(session.model ?? '')
       setEffortDraft(session.thinkingEffort ?? '')
+      setServiceTierDraft(session.serviceTier ?? '')
       setError(null)
       setRestoredSessionId(session.id)
       if (session.runtimeId && typeof window.zero3Codex?.thread?.read === 'function') {
@@ -159,6 +213,7 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
     if (!session || restoredSessionId !== session.id) return
     setModelDraft(session.model ?? '')
     setEffortDraft(session.thinkingEffort ?? '')
+    setServiceTierDraft(session.serviceTier ?? '')
     Zero3SessionEventStore.setBinding(session.id, {
       profileId: session.zero3ProfileId, model: session.model, thinkingEffort: session.thinkingEffort,
       runtimeThreadId: session.runtimeId, projectId: session.projectId
@@ -184,6 +239,14 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
   }, [session?.id])
 
   useEffect(() => {
+    let cancelled = false
+    void listNativeModelCapabilities().then(items => { if (!cancelled) setNativeModels(items) }).catch(() => {
+      if (!cancelled) setNativeModels([])
+    })
+    return () => { cancelled = true }
+  }, [session?.id])
+
+  useEffect(() => {
     if (!session?.zero3ProfileId) { setModelOptions([]); return }
     let cancelled = false
     void window.zero3SessionProviders.listZero3Models({ profileId: session.zero3ProfileId }).then(result => {
@@ -195,6 +258,28 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
     return () => { cancelled = true }
   }, [profiles, session?.zero3ProfileId])
   const currentProfile = useMemo(() => profiles.find(profile => profile.id === session?.zero3ProfileId), [profiles, session?.zero3ProfileId])
+  const currentNativeModel = useMemo(() => {
+    const selected = modelDraft.trim() || session?.model || currentProfile?.model || ''
+    return nativeModels.find(item => item.model === selected || item.id === selected)
+  }, [currentProfile?.model, modelDraft, nativeModels, session?.model])
+  const effortOptions = currentNativeModel?.supportedReasoningEfforts.length
+    ? currentNativeModel.supportedReasoningEfforts
+    : (['minimal','low','medium','high','xhigh','max','ultra'] as LocalSessionThinkingEffort[]).map(reasoningEffort => ({ reasoningEffort, description: '' }))
+  const serviceTierOptions = currentNativeModel?.serviceTiers ?? []
+  useEffect(() => {
+    if (!currentNativeModel) return
+    const supported = currentNativeModel.supportedReasoningEfforts.map(item => item.reasoningEffort)
+    if (supported.length && (!effortDraft || !supported.includes(effortDraft))) {
+      setEffortDraft(currentNativeModel.defaultReasoningEffort ?? supported[0] ?? '')
+    }
+    const tierIds = currentNativeModel.serviceTiers.map(item => item.id)
+    if (tierIds.length && (!serviceTierDraft || !tierIds.includes(serviceTierDraft))) {
+      setServiceTierDraft(currentNativeModel.defaultServiceTier ?? tierIds[0] ?? '')
+    } else if (!tierIds.length && serviceTierDraft) {
+      setServiceTierDraft('')
+    }
+  }, [currentNativeModel?.id])
+
   const canSend = Boolean(session && restoredSessionId === session.id && project && session.zero3ProfileId && input.trim() && !busy && !switching && !['HANDOFF_PENDING','HANDOFF_VERIFYING'].includes(Zero3SessionEventStore.switchState(session.id).phase))
 
   const switchProfile = async (profileId: string) => {
@@ -216,15 +301,22 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
       const memoryReady = sharedMemory.status === 'ready'
       const handoff = Zero3SessionEventStore.buildProviderHandoff(session.id, {
         projectId: project.id,
-        fromProfile: profileDescriptor(currentProfile, session.zero3ProfileId, session.model, session.runtimeId),
-        toProfile: profileDescriptor(next, next.id, next.model, session.runtimeId),
+        fromProfile: profileDescriptor(currentProfile, session.zero3ProfileId, session.model, session.serviceTier, session.runtimeId),
+        toProfile: profileDescriptor(next, next.id, next.model, null, session.runtimeId),
         sharedMemory,
         includeCoveredEvents: !memoryReady
       })
       await window.zero3SessionProviders.verifyZero3ProviderSwitch({ logicalSessionId: session.id, switchToken, handoff })
-      LocalSessionAdapter.setZero3RuntimeConfig(session.id, { profileId: next.id, model: next.model, thinkingEffort: effortDraft || session.thinkingEffort })
-      Zero3SessionEventStore.stageProviderSwitch(session.id, handoff, { profileId: next.id, model: next.model, thinkingEffort: (effortDraft || session.thinkingEffort) as LocalSessionThinkingEffort | null, projectId: project.id })
+      const targetNativeModel = nativeModels.find(item => item.model === next.model || item.id === next.model)
+      const supportedEfforts = targetNativeModel?.supportedReasoningEfforts.map(item => item.reasoningEffort) ?? []
+      const targetEffort = effortDraft && (!supportedEfforts.length || supportedEfforts.includes(effortDraft))
+        ? effortDraft : targetNativeModel?.defaultReasoningEffort ?? session.thinkingEffort
+      const targetServiceTier = targetNativeModel?.defaultServiceTier ?? null
+      LocalSessionAdapter.setZero3RuntimeConfig(session.id, { profileId: next.id, model: next.model, thinkingEffort: targetEffort, serviceTier: targetServiceTier })
+      Zero3SessionEventStore.stageProviderSwitch(session.id, handoff, { profileId: next.id, model: next.model, thinkingEffort: targetEffort, serviceTier: targetServiceTier, projectId: project.id })
       setModelDraft(next.model)
+      setEffortDraft(targetEffort ?? '')
+      setServiceTierDraft(targetServiceTier ?? '')
       setNotice('Provider switch handoff verified; the next Turn will activate the target Provider.')
       onChanged()
     } catch (nextError) {
@@ -242,10 +334,11 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
   const applyRuntimeConfig = () => {
     if (!session?.zero3ProfileId) return
     const model = modelDraft.trim() || currentProfile?.model || null
-    const nextEffort = effortDraft || null
-    LocalSessionAdapter.setZero3RuntimeConfig(session.id, { profileId: session.zero3ProfileId, model, thinkingEffort: nextEffort })
-    Zero3SessionEventStore.setBinding(session.id, { profileId: session.zero3ProfileId, model, thinkingEffort: nextEffort })
-    setNotice(`后续 Turn 将使用 ${model ?? 'Provider 默认模型'}${nextEffort ? ` · ${nextEffort}` : ''}。`)
+    const nextEffort = effortDraft || currentNativeModel?.defaultReasoningEffort || null
+    const nextServiceTier = serviceTierDraft || currentNativeModel?.defaultServiceTier || null
+    LocalSessionAdapter.setZero3RuntimeConfig(session.id, { profileId: session.zero3ProfileId, model, thinkingEffort: nextEffort, serviceTier: nextServiceTier })
+    Zero3SessionEventStore.setBinding(session.id, { profileId: session.zero3ProfileId, model, thinkingEffort: nextEffort, serviceTier: nextServiceTier })
+    setNotice(`后续 Turn 将使用 ${model ?? 'Provider 默认模型'}${nextEffort ? ` · ${nextEffort}` : ''}${nextServiceTier ? ` · ${nextServiceTier}` : ''}。`)
     onChanged()
   }
   const send = async () => {
@@ -261,7 +354,7 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
       const withUser = LocalSessionAdapter.appendMessage(latest.id, 'user', prompt)
       Zero3SessionEventStore.appendUser(session.id, prompt, { profileId: withUser.zero3ProfileId ?? undefined, runtimeThreadId: withUser.runtimeId ?? undefined })
       Zero3SessionEventStore.setBinding(session.id, {
-        profileId: withUser.zero3ProfileId, model: withUser.model, thinkingEffort: withUser.thinkingEffort,
+        profileId: withUser.zero3ProfileId, model: withUser.model, thinkingEffort: withUser.thinkingEffort, serviceTier: withUser.serviceTier,
         runtimeThreadId: withUser.runtimeId, projectId: project.id
       })
       const result = await runZero3Turn(withUser, project, prompt, requestId)
@@ -303,7 +396,7 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
       <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-3 border-b border-(--ui-border) px-4 py-2">
         <div className="font-medium">Zero3 本体</div>
         <div className="min-w-0 flex-1 truncate text-xs text-(--ui-text-tertiary)">
-          {currentProfile ? `${currentProfile.name} · ${session.model ?? currentProfile.model}${session.thinkingEffort ? ` · ${session.thinkingEffort}` : ''}` : '未绑定 API Profile'}
+          {currentProfile ? `${currentProfile.name} · ${session.model ?? currentProfile.model}${session.thinkingEffort ? ` · ${session.thinkingEffort}` : ''}${session.serviceTier ? ` · ${session.serviceTier}` : ''}` : '未绑定 API Profile'}
           {session.runtimeId ? ` · Runtime ${session.runtimeId}` : ''}
         </div>
         <ProviderUsageBadge provider="zero3" profileId={session.zero3ProfileId} refreshToken={session.updatedAt} />
@@ -354,12 +447,17 @@ export function Zero3NativeConversationSurface({ session, project, onChanged, on
             onChange={event => setEffortDraft(event.target.value as LocalSessionThinkingEffort | '')}
             className="h-8 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-xs"
           >
-            <option value="">默认思考</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="xhigh">XHigh</option>
+            <option value="">{currentNativeModel?.defaultReasoningEffort ? `默认 · ${currentNativeModel.defaultReasoningEffort}` : '默认思考'}</option>
+            {effortOptions.map(option => <option key={option.reasoningEffort} value={option.reasoningEffort}>{option.reasoningEffort}</option>)}
           </select>
+          {serviceTierOptions.length > 0 && (
+            <select aria-label="服务档位" value={serviceTierDraft} disabled={busy || switching}
+              onChange={event => setServiceTierDraft(event.target.value)}
+              className="h-8 rounded-md border border-(--ui-border) bg-(--ui-control-background) px-2 text-xs">
+              <option value="">{currentNativeModel?.defaultServiceTier ? `默认 · ${currentNativeModel.defaultServiceTier}` : '默认档位'}</option>
+              {serviceTierOptions.map(tier => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
+            </select>
+          )}
           <button
             type="button"
             disabled={busy || switching || !session.zero3ProfileId}

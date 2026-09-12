@@ -1065,7 +1065,8 @@ function zero3ApiAgentPrompt(text: string, historyValue: unknown) {
 }
 type Zero3ApiAgentRunOptions = {
   model?: string | null
-  effort?: 'low' | 'medium' | 'high' | 'xhigh' | null
+  effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null
+  serviceTier?: string | null
   onEvent?: (event: any) => void
 }
 type Zero3SessionSwitchPhase = 'ACTIVE' | 'HANDOFF_PENDING' | 'HANDOFF_VERIFYING' | 'SWITCHING' | 'FAILED'
@@ -1088,9 +1089,10 @@ function zero3SessionGeneration(value: unknown): number {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error('generation must be a positive integer')
   return Number(value)
 }
-function zero3ReasoningEffort(value: unknown): 'low' | 'medium' | 'high' | 'xhigh' | null {
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ? value : null
+function zero3ReasoningEffort(value: unknown): 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null {
+  return value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max' || value === 'ultra' ? value : null
 }
+
 function zero3SessionWriterSnapshot(logicalSessionId: string) {
   const state = zero3SessionWriters.get(logicalSessionId)
   return state ? { generation: state.generation, phase: state.phase, profileId: state.profileId, projectId: state.projectId, activeWriter: Boolean(state.writerToken), targetGeneration: state.targetGeneration, targetProfileId: state.targetProfileId, switchToken: state.switchToken, updatedAt: state.updatedAt, lastError: state.lastError } : null
@@ -1329,7 +1331,8 @@ async function zero3ApiAgentRunTurn(threadId: string, input: Array<Record<string
       threadId,
       input,
       ...(options.model ? { model: options.model } : {}),
-      ...(options.effort ? { effort: options.effort } : {})
+      ...(options.effort ? { effort: options.effort } : {}),
+      ...(options.serviceTier ? { serviceTier: options.serviceTier } : {})
     })
     const turnId = zero3ApiAgentId(started, 'turn')
     while (Date.now() < deadline) {
@@ -1358,6 +1361,7 @@ async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: u
   const requestedModel = zero3SessionOptionalText(request.model, 256)
   const model = requestedModel ?? profile.model
   const effort = zero3ReasoningEffort(request.effort)
+  const serviceTier = zero3SessionOptionalText(request.serviceTier, 128)
   const handoff = zero3ProviderHandoff(request.handoff)
   const recoveryHandoff = zero3RecoveryHandoff(request.recoveryHandoff)
   const apiKey = await zero3DecryptApiKey(profile.encryptedApiKey)
@@ -1371,6 +1375,7 @@ async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: u
   const runtimeOverrides = {
     model,
     modelProvider: bridge.providerId,
+    ...(serviceTier ? { serviceTier } : {}),
     cwd,
     approvalPolicy: 'never',
     sandbox: robotSafe ? 'read-only' : 'danger-full-access',
@@ -1407,8 +1412,8 @@ async function zero3ApiAgentTurn(profile: Zero3ApiProfileStored, requestValue: u
   }
   const responseText = await zero3ApiAgentRunTurn(threadId, [
     { type: 'text', text: zero3ApiAgentPrompt(text, request.history), textElements: [] }
-  ], { model, effort, onEvent })
-  return { text: responseText, model, effort, profileId: profile.id, threadId, runtimeRotated }
+  ], { model, effort, serviceTier, onEvent })
+  return { text: responseText, model, effort, serviceTier, profileId: profile.id, threadId, runtimeRotated }
 }
 
 async function zero3ApiRobotTurn(profile: Zero3ApiProfileStored, requestValue: unknown) {
@@ -2470,7 +2475,7 @@ const globalSurface = String.raw`    zero3SessionProviders: {
       verifyZero3ProviderSwitch: (request: { logicalSessionId: string; switchToken: string; handoff: unknown }) => Promise<Zero3ProviderSwitchStatus>
       failZero3ProviderSwitch: (request: { logicalSessionId: string; switchToken?: string | null; error?: string | null }) => Promise<Zero3ProviderSwitchStatus | null>
       zero3ProviderSwitchStatus: (request: { logicalSessionId: string }) => Promise<Zero3ProviderSwitchStatus | null>
-      zero3Turn: (request: { profileId: string; logicalSessionId: string; generation: number; requestId?: string | null; text: string; cwd: string; projectId: string; threadId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | null; handoff?: unknown; allowRuntimeRotation?: boolean; recoveryHandoff?: unknown; allowRuntimeRecovery?: boolean; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) => Promise<{ text: string; model: string; effort: 'low' | 'medium' | 'high' | 'xhigh' | null; profileId: string; threadId: string; runtimeRotated: boolean }>
+      zero3Turn: (request: { profileId: string; logicalSessionId: string; generation: number; requestId?: string | null; text: string; cwd: string; projectId: string; threadId?: string | null; model?: string | null; effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null; serviceTier?: string | null; handoff?: unknown; allowRuntimeRotation?: boolean; recoveryHandoff?: unknown; allowRuntimeRecovery?: boolean; history?: Array<{ role: 'user' | 'assistant'; content: string }> }) => Promise<{ text: string; model: string; effort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null; serviceTier: string | null; profileId: string; threadId: string; runtimeRotated: boolean }>
       setArchived: (request: { provider: Exclude<Zero3SessionProviderId, 'gpt' | 'gemini'>; runtimeId?: string | null; archived: boolean }) => Promise<{ native: boolean; detail: string }>
       claudeTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null }) => Promise<{ text: string; sessionId: string | null }>
       workbuddyTurn: (request: { text: string; cwd?: string | null; sessionId?: string | null; model?: string | null; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null }) => Promise<{ text: string; sessionId: string | null }>

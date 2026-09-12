@@ -46,9 +46,13 @@ function normalizeModel(value: unknown): string | null {
 }
 
 function normalizeThinkingEffort(value: unknown): LocalSessionThinkingEffort | null {
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max'
+  return value === 'minimal' || value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max' || value === 'ultra'
     ? value
     : null
+}
+
+function normalizeServiceTier(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 128) : null
 }
 
 function normalizeMessage(value: unknown): LocalSessionMessage | null {
@@ -89,6 +93,7 @@ function normalizeRecord(value: unknown): LocalSessionRecord | null {
     zero3ProfileId: typeof raw.zero3ProfileId === 'string' && raw.zero3ProfileId.trim() ? raw.zero3ProfileId.trim() : null,
     model: normalizeModel(raw.model),
     thinkingEffort: normalizeThinkingEffort(raw.thinkingEffort),
+    serviceTier: normalizeServiceTier(raw.serviceTier),
     archived: raw.archived === true,
     messages
   }
@@ -177,6 +182,7 @@ export const LocalSessionAdapter = {
       zero3ProfileId: provider === 'zero3' ? zero3ProfileId : null,
       model: normalizeModel(runtimeConfig.model),
       thinkingEffort: normalizeThinkingEffort(runtimeConfig.thinkingEffort),
+      serviceTier: normalizeServiceTier(runtimeConfig.serviceTier),
       archived: false,
       messages: []
     }
@@ -213,15 +219,15 @@ export const LocalSessionAdapter = {
   },
 
   resetRuntimeConfig(id: string): LocalSessionRecord {
-    return mutate(id, record => ({ ...record, model: null, thinkingEffort: null, updatedAt: now() }))
+    return mutate(id, record => ({ ...record, model: null, thinkingEffort: null, serviceTier: null, updatedAt: now() }))
   },
 
-  setZero3RuntimeConfig(id: string, input: { profileId: string; model?: string | null; thinkingEffort?: LocalSessionThinkingEffort | null }): LocalSessionRecord {
+  setZero3RuntimeConfig(id: string, input: { profileId: string; model?: string | null; thinkingEffort?: LocalSessionThinkingEffort | null; serviceTier?: string | null }): LocalSessionRecord {
     const profileId = input.profileId.trim()
     if (!profileId) throw new Error('Zero3 API Profile 不能为空')
     return mutate(id, record => {
       if (record.provider !== 'zero3') throw new Error('只有 Zero3 本体会话可以切换 API Profile')
-      return { ...record, zero3ProfileId: profileId, model: normalizeModel(input.model), thinkingEffort: normalizeThinkingEffort(input.thinkingEffort), updatedAt: now() }
+      return { ...record, zero3ProfileId: profileId, model: normalizeModel(input.model), thinkingEffort: normalizeThinkingEffort(input.thinkingEffort), serviceTier: normalizeServiceTier(input.serviceTier), updatedAt: now() }
     })
   },
 

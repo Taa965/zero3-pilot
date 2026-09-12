@@ -59,7 +59,9 @@ async function runClaudeTurn(session: LocalSessionRecord, project: Zero3ProjectR
     cwd: session.projectBinding?.rootPath ?? project?.rootPath ?? null,
     sessionId: session.runtimeId,
     model: session.model,
-    effort: session.thinkingEffort
+    effort: session.thinkingEffort === 'low' || session.thinkingEffort === 'medium' || session.thinkingEffort === 'high' || session.thinkingEffort === 'xhigh' || session.thinkingEffort === 'max'
+      ? session.thinkingEffort
+      : null
   })
   if (result.sessionId && result.sessionId !== session.runtimeId) {
     LocalSessionAdapter.setRuntimeId(session.id, result.sessionId)
@@ -76,7 +78,9 @@ async function runWorkbuddyTurn(session: LocalSessionRecord, project: Zero3Proje
     cwd: session.projectBinding?.rootPath ?? project?.rootPath ?? null,
     sessionId: session.runtimeId,
     model: session.model,
-    effort: session.thinkingEffort
+    effort: session.thinkingEffort === 'low' || session.thinkingEffort === 'medium' || session.thinkingEffort === 'high' || session.thinkingEffort === 'xhigh' || session.thinkingEffort === 'max'
+      ? session.thinkingEffort
+      : null
   })
   if (result.sessionId && result.sessionId !== session.runtimeId) {
     LocalSessionAdapter.setRuntimeId(session.id, result.sessionId)

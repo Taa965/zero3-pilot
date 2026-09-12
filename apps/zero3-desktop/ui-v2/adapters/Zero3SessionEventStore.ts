@@ -36,6 +36,7 @@ export type Zero3SessionRuntimeBinding = {
   profileId: string | null
   model: string | null
   thinkingEffort: LocalSessionThinkingEffort | null
+  serviceTier: string | null
   runtimeThreadId: string | null
   projectId: string | null
   updatedAt: string
@@ -119,7 +120,7 @@ function boundedPayload(value: Record<string, unknown>): Record<string, unknown>
   return { truncated: true, preview: json.slice(0, 90_000) }
 }
 function emptyBinding(): Zero3SessionRuntimeBinding {
-  return { generation: 1, profileId: null, model: null, thinkingEffort: null, runtimeThreadId: null, projectId: null, updatedAt: now() }
+  return { generation: 1, profileId: null, model: null, thinkingEffort: null, serviceTier: null, runtimeThreadId: null, projectId: null, updatedAt: now() }
 }
 function emptySwitchState(generation = 1): Zero3ProviderSwitchState {
   return { phase: 'ACTIVE', sourceGeneration: generation, targetGeneration: null, token: null, targetProfileId: null, error: null, updatedAt: now() }
@@ -163,7 +164,8 @@ function normalizeSession(value: unknown): StoredSession {
     generation: Number.isSafeInteger(bindingRaw.generation) && Number(bindingRaw.generation) > 0 ? Number(bindingRaw.generation) : 1,
     profileId: typeof bindingRaw.profileId === 'string' ? bindingRaw.profileId : null,
     model: typeof bindingRaw.model === 'string' ? bindingRaw.model : null,
-    thinkingEffort: ['low','medium','high','xhigh','max'].includes(String(bindingRaw.thinkingEffort)) ? bindingRaw.thinkingEffort as LocalSessionThinkingEffort : null,
+    thinkingEffort: ['minimal','low','medium','high','xhigh','max','ultra'].includes(String(bindingRaw.thinkingEffort)) ? bindingRaw.thinkingEffort as LocalSessionThinkingEffort : null,
+    serviceTier: typeof bindingRaw.serviceTier === 'string' ? bindingRaw.serviceTier : null,
     runtimeThreadId: typeof bindingRaw.runtimeThreadId === 'string' ? bindingRaw.runtimeThreadId : null,
     projectId: typeof bindingRaw.projectId === 'string' ? bindingRaw.projectId : null,
     updatedAt: typeof bindingRaw.updatedAt === 'string' ? bindingRaw.updatedAt : now()
@@ -376,7 +378,7 @@ export const Zero3SessionEventStore = {
       else this.appendAssistant(session.id, message.content, meta)
     }
     this.setBinding(session.id, {
-      profileId: session.zero3ProfileId, model: session.model, thinkingEffort: session.thinkingEffort,
+      profileId: session.zero3ProfileId, model: session.model, thinkingEffort: session.thinkingEffort, serviceTier: session.serviceTier,
       runtimeThreadId: session.runtimeId, projectId: session.projectId
     })
     return this.snapshot(session.id)
@@ -489,7 +491,7 @@ export const Zero3SessionEventStore = {
     }
   },
   stageProviderSwitch(logicalSessionId: string, handoff: Zero3ProviderHandoff, binding: {
-    profileId: string; model: string | null; thinkingEffort: LocalSessionThinkingEffort | null; projectId: string | null
+    profileId: string; model: string | null; thinkingEffort: LocalSessionThinkingEffort | null; serviceTier: string | null; projectId: string | null
   }) {
     const before = this.snapshot(logicalSessionId)
     if (before.switchState.phase !== 'HANDOFF_VERIFYING') throw switchError('handoff has not been verified')
@@ -497,7 +499,7 @@ export const Zero3SessionEventStore = {
     if (before.switchState.targetProfileId !== binding.profileId) throw switchError('handoff target profile changed during switch')
     mutate(logicalSessionId, session => ({
       ...session,
-      binding: { ...session.binding, generation: handoff.handoff.target_runtime_generation, profileId: binding.profileId, model: binding.model, thinkingEffort: binding.thinkingEffort, projectId: binding.projectId, updatedAt: now() },
+      binding: { ...session.binding, generation: handoff.handoff.target_runtime_generation, profileId: binding.profileId, model: binding.model, thinkingEffort: binding.thinkingEffort, serviceTier: binding.serviceTier, projectId: binding.projectId, updatedAt: now() },
       switchState: { ...session.switchState, phase: 'SWITCHING', error: null, updatedAt: now() },
       pendingHandoff: handoff
     }))
