@@ -51,6 +51,12 @@ Fast Path P0 adds bounded composites for the common development path:
 
 - `task_bootstrap` — session start/resume + GPT_WEB claim + filtered context/handoff resolve in one call.
 - `dispatch_codex_task` — typed high-level Remote Host/Codex task submission for an allow-listed workspace.
+- `dispatch_agent_task` — unified task submission: Web GPT submits a typed objective and the Zero3
+  Intelligent Agent Task Router decides whether Codex, Claude, Gemini or the Zero3 API executes it. It
+  accepts `routingMode` (`AUTO`/`PINNED`/`PREFERRED`), an optional `preferredExecutor`, `taskType`,
+  `importance`, constraints and acceptance criteria — never a command, shell string, executable or
+  credential. The response carries the routing decision, attempt chain and the executor's structured
+  result under one unchanged Task identity.
 - `verify_commit` — fixed static checks + explicit task-owned path staging + one scoped commit/push.
 
 Workflow Worker v2 lifecycle also exposes `bootstrap_worker`, `commit_and_claim_next`, `report_blocked`, and `recover_worker`. See `WEB_GPT_FAST_PATH_P0.md` for the P0 retry, security, batching and timing policy.

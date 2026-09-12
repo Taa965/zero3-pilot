@@ -1,3 +1,5 @@
+import type { ExecutorFailureCode } from '../executor-runtime/executor-types'
+
 export const ZERO3_TASK_SPEC_V2 = 'zero3.pilot.task-spec.v2' as const
 export const ZERO3_EXECUTION_RESULT_V2 = 'zero3.pilot.execution-result.v2' as const
 export const ZERO3_REVIEW_PACKET_V1 = 'zero3.pilot.review-packet.v1' as const
@@ -31,6 +33,48 @@ export type Zero3VerificationResult = {
   command?: string | null
   evidence?: string | null
   reason?: string | null
+}
+
+// Failure classification shared by every executor adapter and by the dispatch
+// loop. The class -- never the raw provider string -- decides what Zero3 does
+// next: retry the same executor, re-route, wait for a human, stop, or hand the
+// task to recovery because the outcome cannot be proven.
+export type Zero3ExecutorFailureClass =
+  // Retryable without switching executors (malformed/empty provider output).
+  | 'retry_same_executor'
+  // Routable failure: exclude/re-rank and continue with another eligible executor.
+  | 'reroute'
+  // Failure that must reach the user (missing auth, policy/permission gate).
+  | 'waiting_human'
+  // Failure that ends the task.
+  | 'terminal'
+  // The provider may have executed work; authoritative reconciliation is required.
+  | 'outcome_unknown'
+
+export type Zero3ExecutionFailure = {
+  // Reuses the existing executor failure taxonomy (executor-runtime
+  // `EXECUTOR_FAILURE_CODES`) instead of introducing a parallel one.
+  code: ExecutorFailureCode
+  class: Zero3ExecutorFailureClass
+  // True when re-running the same task may succeed without a human decision.
+  retryable: boolean
+  // Non-sensitive reason. Never contains credentials, prompts or raw responses.
+  detail: string
+}
+
+export type Zero3ExecutionUsage = {
+  // Null means "not reported by the provider" -- never a fabricated zero.
+  inputTokens?: number | null
+  outputTokens?: number | null
+  totalTokens?: number | null
+  costUsd?: number | null
+  model?: string | null
+}
+
+export type Zero3ExecutionTiming = {
+  queueLatencyMs?: number | null
+  executionLatencyMs?: number | null
+  totalLatencyMs: number
 }
 
 export type Zero3TaskSpecV2 = {
@@ -73,10 +117,16 @@ export type Zero3ExecutionResultV2 = {
   projectId: string
   provider: Zero3ResolvedAgentTarget
   providerRuntime: 'CODEX_LOCAL' | 'GEMINI_AGENT' | 'CLAUDE_CODE' | 'ZERO3_API_SESSION'
+  // Concrete executor instance behind the provider (for example the Zero3 API
+  // profile id). Optional so results written before P1 still load unchanged.
+  executorId?: string | null
   status: 'COMPLETE' | 'PARTIAL' | 'BLOCKED' | 'FAILED' | 'OUTCOME_UNKNOWN'
   contextVersion: number
   conversationId?: string | null
   summary: string
+  // Structured provider output. A bare string is never a sufficient executor
+  // result: adapters keep the model payload here, never inline in the summary.
+  output?: Record<string, unknown> | null
   changedFiles: string[]
   artifacts: Zero3ArtifactRef[]
   git?: {
@@ -89,6 +139,9 @@ export type Zero3ExecutionResultV2 = {
   knownIssues: string[]
   blockers: string[]
   recommendedAction: 'GPT_REVIEW' | 'HUMAN_REVIEW' | 'CODEX_IMPLEMENT' | 'RETRY'
+  usage?: Zero3ExecutionUsage | null
+  timing?: Zero3ExecutionTiming | null
+  failure?: Zero3ExecutionFailure | null
   completedAt: string
 }
 

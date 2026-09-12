@@ -7,11 +7,13 @@ import type { Zero3ResolvedTaskSkill } from '../skill-runtime/skill-types'
 import type {
   Zero3CrossAgentBinding,
   Zero3ExecutionResultV2,
+  Zero3ExecutorFailureClass,
   Zero3ResolvedAgentTarget,
   Zero3ReviewState,
   Zero3TaskImportance,
   Zero3TaskSpecV2
 } from './agent-contracts'
+import type { ExecutorFailureCode } from '../executor-runtime/executor-types'
 import type {
   Zero3IntelligentRouteDecision,
   Zero3RoutingMode,
@@ -39,6 +41,13 @@ export type Zero3TaskAttemptRecord = {
   conversationId?: string | null
   failureReason?: string | null
   failoverReason?: string | null
+  // Concrete executor instance (for example the Zero3 API profile id) so a
+  // failover chain names the exact executor that ran each attempt.
+  executorId?: string | null
+  // Classified failure. Optional: attempts written before P1 carry only
+  // `failureReason`, and those records must keep loading unchanged.
+  failureCode?: ExecutorFailureCode | null
+  failureClass?: Zero3ExecutorFailureClass | null
 }
 
 export type Zero3RoutingMeta = {

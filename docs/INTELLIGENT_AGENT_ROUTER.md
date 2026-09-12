@@ -113,3 +113,75 @@ Attempts append under the same `taskId`/`executionId`; a switch updates `resolve
 - The desktop bridge now accepts explicit `CLAUDE`/`ZERO3_API` targets (previously rejected) and validates optional routing context fields.
 - The router is a pure decision component: no child processes, no shell, no network. Every executor still runs through its own reviewed adapter; workspace allow-lists, control-plane boundaries and the completion gate are unchanged.
 - Guard: `node scripts/check-intelligent-agent-router.mjs` (CI lane `r4a-executor-contract.yml`).
+
+## 10. P1 — production executor wiring
+
+P0 shipped the routing brain with a Zero3 API adapter that only existed in tests, so production treated
+`ZERO3_API` as offline forever. P1 closes that gap without touching the router contract.
+
+### Zero3 API executor
+
+`Zero3Zero3ApiTaskAdapter` (`zero3-api-task-adapter.ts`) is the real production adapter. It reuses the
+session-provider runtime the chat surface already owns — an API profile selects the model, the profile
+is exposed to the pinned Codex Agent Kernel through the existing local responses bridge, and the turn
+runs as a Codex thread — so there is **no second model API runtime, keystore or agent loop**. The
+adapter never sees an API key: it only ever handles a profile id and the bridge's local URL.
+
+What it produces: a structured `Zero3ExecutionResultV2` with `provider: 'ZERO3_API'`,
+`providerRuntime: 'ZERO3_API_SESSION'`, `executorId: 'ZERO3_API:<profileId>'`, a structured `output`
+(the model's fenced JSON envelope, or the raw answer flagged `structured: false`), `usage`, `timing`
+and a classified `failure`. A bare string is never returned as the result.
+
+Capability honesty: the executor is pinned to a **read-only sandbox**, so the advertised profile keeps
+`research` / `code_review` / `architecture_reasoning` / `large_context` / `documentation` and never
+claims `repository_write`, `shell`, `git`, `build` or `test`. A host whose adapter proves read-only
+workspace inspection may add `repository_read` through `catalogOverrides`; the shipped desktop host
+keeps the conservative profile so repository-mutating task types stay with Codex/Claude/Gemini.
+
+### Availability, auth, quota and latency probes
+
+`Zero3Zero3ApiAvailabilityProbe` (`zero3-api-availability.ts`) answers four separate questions instead
+of one boolean:
+
+| Signal | Source | Routing effect |
+| --- | --- | --- |
+| registered | API profile store (id/name/protocol/model, never the key) | `unregistered` when no profile exists |
+| authenticated | presence of a stored credential for the selected profile | `unauthenticated` (key-required protocols) or `unknown` (optional-key protocols) |
+| quota / rate limit / overload | provider usage reading plus the adapter's last real attempt | `quota_exhausted` / `rate_limited` / `overloaded` rejection for a bounded health window |
+| latency | observed `latencyMs`, else rolling p50/avg from `Zero3RoutingMetricsStore` | scales the catalog latency weight (1s → 1.0, 100s → 0.7) |
+
+Security rules: the probe never reads, logs, stores or forwards an API key; presence of a credential is
+reduced to `authenticated=true/false/unknown`. Health is a *bounded* observation (default 15 minutes,
+durable across restarts) rather than a permanent penalty, and adapter failures feed it back so the next
+decision already excludes a provider that just answered "quota exhausted" — while a provider that
+cannot report usage stays `unknown`, never `offline`.
+
+### Failure classification and failover
+
+Classification reuses the executor-runtime failure taxonomy (`failure-normalizer.ts`) and adds only the
+decision each code implies:
+
+| Class | Meaning | Dispatch behaviour |
+| --- | --- | --- |
+| `retry_same_executor` | provider answered unusably (`provider_error`, `internal_error`) | retry, and the executor stays eligible |
+| `reroute` | provider condition (`quota_exhausted`, `rate_limited`, `provider_overloaded`, `transport_lost`, `auth_required`, `context_exhausted`, `process_crash`) | exclude the executor and re-route |
+| `waiting_human` | `policy_denied`, `permission_denied`, `budget_exhausted`, `unsupported` | surface to the user; never auto-switch |
+| `terminal` | `bad_request`, `user_stopped` | end the task |
+| `outcome_unknown` | `context_lost` | hand to the recovery reconciler |
+
+An adapter that declares `failure` decides the policy; an undeclared crash keeps the P0 behaviour
+(blame the executor, continue elsewhere). On a switch the next executor receives the previous attempt
+chain (`ZERO3_PRIOR_ATTEMPT_CONTEXT` inside the TaskSpec goal) so it continues the same task instead of
+restarting, while Task identity, handoff, memory and artifacts stay untouched. `PINNED` tasks never
+switch; `PREFERRED` fails over only when the preference cannot run.
+
+### Unified dispatch
+
+The desktop business entry (`zero3:agent-task:dispatch` -> `Zero3AgentRuntimeOrchestrator.dispatch`)
+already routes through `dispatchAgentTask` whenever intelligent routing is configured, and the
+production overlay now binds `zero3Api: zero3Zero3ApiTaskAdapter` plus the availability probe into that
+composition. Web GPT gets the same router through the bounded `dispatch_agent_task` Worker RPC/MCP
+tool: it accepts a typed objective, optional workspace (must be in the Remote Host allow-list), routing
+mode, preferred executor, task type, importance, constraints and acceptance criteria — and rejects
+anything shaped like a raw command, shell string or executable. `dispatch_codex_task`, `task_bootstrap`
+and `verify_commit` remain untouched explicit fast paths.

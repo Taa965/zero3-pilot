@@ -23,6 +23,8 @@ export type Zero3WorkerRuntimePort = {
   recoverWorker(input: Record<string, unknown>): unknown
   taskBootstrap(input: Record<string, unknown>): unknown
   dispatchCodexTask(input: Record<string, unknown>): unknown
+  // Unified task dispatch: the router -- not the caller -- picks the executor.
+  dispatchAgentTask(input: Record<string, unknown>): unknown
   verifyCommit(input: Record<string, unknown>): unknown
   listCapabilities(input: Record<string, unknown>): unknown
   describeCapability(input: Record<string, unknown>): unknown
@@ -52,6 +54,7 @@ const WORKER_TOOLS = new Set<Zero3WorkerRpcTool>([
   'recover_worker',
   'task_bootstrap',
   'dispatch_codex_task',
+  'dispatch_agent_task',
   'verify_commit'
 ])
 
@@ -128,6 +131,8 @@ export async function executeZero3WorkerRpc(
       return runtime.taskBootstrap(input)
     case 'dispatch_codex_task':
       return runtime.dispatchCodexTask(input)
+    case 'dispatch_agent_task':
+      return runtime.dispatchAgentTask(input)
     case 'verify_commit':
       return runtime.verifyCommit(input)
     case 'list_capabilities':

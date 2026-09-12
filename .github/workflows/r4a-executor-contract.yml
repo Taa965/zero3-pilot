@@ -8,6 +8,7 @@ on:
       - 'apps/zero3-desktop/agent-routing-runtime/**'
       - 'apps/zero3-desktop/agent-desktop-bridge/**'
       - 'apps/zero3-desktop/scripts/apply-agent-claude-runtime.mjs'
+      - 'apps/zero3-desktop/scripts/apply-agent-zero3-api-runtime.mjs'
       - 'apps/zero3-desktop/scripts/apply-agent-integration-runtime.mjs'
       - 'apps/zero3-desktop/scripts/prepare-gemini-integration.mjs'
       - 'scripts/check-executor-runtime-architecture.mjs'
@@ -40,6 +41,7 @@ jobs:
           node scripts/check-executor-runtime-architecture.mjs
           node scripts/check-intelligent-agent-router.mjs
           node --check apps/zero3-desktop/scripts/apply-agent-claude-runtime.mjs
+          node --check apps/zero3-desktop/scripts/apply-agent-zero3-api-runtime.mjs
           node --check apps/zero3-desktop/scripts/apply-agent-integration-runtime.mjs
 
       - name: Strict TypeScript contract check
@@ -70,3 +72,4 @@ jobs:
           apps/zero3-desktop/agent-routing-runtime/intelligent-router.test.ts
           apps/zero3-desktop/agent-routing-runtime/routing-metrics-store.test.ts
           apps/zero3-desktop/agent-routing-runtime/agent-runtime-orchestrator.test.ts
+          apps/zero3-desktop/agent-routing-runtime/zero3-api-task-adapter.test.ts

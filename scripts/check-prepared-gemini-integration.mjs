@@ -21,6 +21,9 @@ const staged = [
   'electron/zero3/agent-routing/agent-runtime-orchestrator.ts',
   'electron/zero3/agent-routing/agent-recovery-controller.ts',
   'electron/zero3/agent-routing/codex-task-adapter.ts',
+  'electron/zero3/agent-routing/zero3-api-task-adapter.ts',
+  'electron/zero3/agent-routing/zero3-api-availability.ts',
+  'electron/zero3/agent-routing/zero3-executor-failure.ts',
   'electron/zero3/agent-routing/authoritative-result-finalizer.ts',
   'electron/zero3/agent-routing/verification-collector.ts',
   'electron/zero3/agent-routing/task-prompt.ts',
@@ -58,6 +61,11 @@ requireAll(main, mainPath, [
   'Antigravity terminal structured output conflicts with the task-scoped MCP result candidate.',
   'finally { await scoped.lease.restore() }',
   'const zero3AgentRuntime = new Zero3AgentRuntimeOrchestrator({',
+  'const zero3Zero3ApiTaskAdapter = new Zero3Zero3ApiTaskAdapter({',
+  'zero3Api: zero3Zero3ApiTaskAdapter,',
+  'const zero3ApiAvailability = await zero3Zero3ApiAvailabilityProbe.probe()',
+  'zero3Api: zero3ApiAvailability',
+  'sandbox: \'read-only\'',
   'const zero3AgentRecovery = new Zero3AgentRecoveryController({',
   'const zero3AgentDesktopHandlers = createZero3AgentDesktopHandlers({',
   "ipcMain.handle('zero3:agent-tasks:dispatch'",
@@ -89,7 +97,7 @@ requireAll(preload, preloadPath, ["contextBridge.exposeInMainWorld('zero3AgentTa
 
 const globalPath = 'src/global.d.ts'
 const global = read(globalPath)
-requireAll(global, globalPath, ["type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'AUTO'",'zero3AgentTask: {','zero3AgentTasks: {','recoveryInspect:','recoveryResolve:'])
+requireAll(global, globalPath, ["type Zero3AgentTaskTarget = 'CODEX' | 'GEMINI' | 'CLAUDE' | 'ZERO3_API' | 'AUTO'",'zero3AgentTask: {','zero3AgentTasks: {','recoveryInspect:','recoveryResolve:'])
 
 const handoffPath = 'src/app/chat/sidebar/gpt-web-handoff-actions.tsx'
 const handoff = read(handoffPath)

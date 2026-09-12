@@ -1,5 +1,5 @@
 import type { Zero3ResolvedAgentTarget, Zero3TaskSpecV2, Zero3TaskType } from './agent-contracts'
-import { validateTaskSpecV2, type Zero3ProviderAvailability } from './agent-router'
+import { validateTaskSpecV2, type Zero3ProviderAvailability, type Zero3ProviderAvailabilityState } from './agent-router'
 import {
   ZERO3_INTELLIGENT_ROUTE_DECISION_V1,
   verificationProfileFor,
@@ -70,6 +70,11 @@ const DEFAULT_CATALOG: readonly Zero3RoutingExecutorCandidate[] = [
     executorId: 'ZERO3_API',
     provider: 'ZERO3_API',
     label: 'Zero3 API model session',
+    // Honest capability floor for a profile-based model session that cannot
+    // mutate a repository. A host whose Zero3 API adapter provably runs the
+    // session in a read-only workspace sandbox may add `repository_read` through
+    // `catalogOverrides`; write/shell/git/build/test stay absent because this
+    // executor never gets write access.
     capabilities: [
       'general_reasoning', 'research', 'code_review', 'architecture_reasoning', 'large_context',
       'documentation', 'multimodal'
@@ -127,7 +132,7 @@ function round3(value: number): number {
 function availabilityState(
   executorId: Zero3RoutingExecutorId,
   availability: Zero3ProviderAvailability
-): { available: boolean; authenticated: boolean | null } {
+): Zero3ProviderAvailabilityState {
   switch (executorId) {
     case 'CODEX': return availability.codex
     case 'GEMINI': return availability.gemini
@@ -136,17 +141,25 @@ function availabilityState(
   }
 }
 
-// A catalog status other than 'ready' wins (it carries richer health knowledge);
-// otherwise the availability probe decides. `authenticated: null` means the
-// probe could not prove authentication either way: the executor stays eligible
-// with a penalty instead of blocking the whole system, because execution
-// failures are caught by the dispatcher's failover loop.
+const PROBE_HEALTH_STATUSES: readonly Zero3RoutingExecutorStatus[] = [
+  'offline', 'unauthenticated', 'rate_limited', 'quota_exhausted', 'overloaded', 'unregistered'
+]
+
+// A catalog status other than 'ready' wins (it carries operator knowledge);
+// otherwise the live availability probe decides, including the richer health
+// states a production probe reports (quota_exhausted / rate_limited /
+// overloaded). `authenticated: null` means the probe could not prove
+// authentication either way: the executor stays eligible with a penalty instead
+// of blocking the whole system, because execution failures are caught by the
+// dispatcher's failover loop.
 function effectiveStatus(
   candidate: Zero3RoutingExecutorCandidate,
   availability: Zero3ProviderAvailability
 ): Zero3RoutingExecutorStatus {
   if (candidate.status !== 'ready') return candidate.status
   const state = availabilityState(candidate.executorId, availability)
+  const reported = state.status ?? null
+  if (reported && reported !== 'ready' && PROBE_HEALTH_STATUSES.includes(reported)) return reported
   if (!state.available) return 'offline'
   if (state.authenticated === false) return 'unauthenticated'
   return 'ready'
@@ -167,6 +180,31 @@ function blockedStatusReason(status: Zero3RoutingExecutorStatus): string | null 
 function availabilityFactor(status: Zero3RoutingExecutorStatus, authenticated: boolean | null): number {
   if (status !== 'ready') return 0
   return authenticated === true ? 1 : AVAILABILITY_UNPROVEN_PENALTY
+}
+
+// Observed latency (probe reading, else rolling p50 from the shared routing
+// metrics store) scales the catalog latency weight. Missing history is neutral:
+// an executor without latency evidence keeps its catalog weight rather than
+// being penalised for data that does not exist.
+function latencyFactor(
+  candidate: Zero3RoutingExecutorCandidate,
+  state: Zero3ProviderAvailabilityState,
+  task: Zero3TaskSpecV2,
+  metrics: Zero3RoutingMetricsSnapshot | null | undefined
+): number {
+  const base = clamp01(candidate.latencyWeight)
+  const stats = metrics?.executors?.[candidate.executorId]?.[task.type]
+  const candidates = [
+    state.latencyMs,
+    stats && stats.p50LatencyMs > 0 ? stats.p50LatencyMs : null,
+    stats && stats.avgLatencyMs > 0 ? stats.avgLatencyMs : null
+  ].filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
+  if (candidates.length === 0) return round3(base)
+  const observed = Math.min(...candidates)
+  // 1s -> 1, 10s -> 0.85, 100s -> 0.7, 1000s -> 0.55. Deterministic, bounded,
+  // and only applied to evidence the system actually observed.
+  const score = clamp01(1 - clamp01(Math.log10(Math.max(observed, 1_000) / 1_000) / 2) * 0.6)
+  return round3(clamp01(base * score))
 }
 
 function historicalFactor(
@@ -269,7 +307,7 @@ export class Zero3IntelligentTaskRouter {
         availability: round3(availabilityFactor(status, authState.authenticated)),
         taskType: round3(TASK_TYPE_AFFINITY[candidate.executorId][task.type]),
         contextAffinity: round3(clamp01(candidate.contextAffinity)),
-        latency: round3(clamp01(candidate.latencyWeight)),
+        latency: latencyFactor(candidate, authState, task, request.metrics),
         cost: round3(clamp01(candidate.costWeight)),
         historicalSuccess: round3(historicalFactor(candidate.executorId, task, request.metrics))
       }

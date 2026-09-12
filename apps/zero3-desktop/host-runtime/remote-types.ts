@@ -82,6 +82,7 @@ export type Zero3WorkerRpcTool =
   | 'recover_worker'
   | 'task_bootstrap'
   | 'dispatch_codex_task'
+  | 'dispatch_agent_task'
   | 'verify_commit'
 
 export type Zero3RemoteRpcTool = Zero3WorkerRpcTool | Zero3SkillRpcTool | Zero3CapabilityRpcTool

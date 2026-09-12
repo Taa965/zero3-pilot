@@ -305,6 +305,21 @@ Older audit/POC PRs for R4B/R4C are historical exploration and must not be treat
 
 The agent-routing layer now owns an importance-independent executor choice. `Zero3AgentRuntimeOrchestrator.dispatchAgentTask` is the unified business entry: it asks the `Zero3IntelligentTaskRouter` for a structured, auditable decision (capability/availability hard filters plus task-type, context-affinity, latency, cost and historical-success factors), dispatches through the executor's own reviewed adapter, records every attempt in the Task Ledger under an unchanged Task identity, and re-routes with exclusions under bounded failover (`maxAttempts`/`maxExecutorSwitches`) on retryable failures. Task importance maps to verification/review strength (`low`/`standard`/`high`/`critical` profiles), never to a specific executor; `AUTO`/`PINNED`/`PREFERRED` routing modes honor explicit user choice without silent switching. Historical executor performance is persisted per `(executor, taskClass)` by `Zero3RoutingMetricsStore`. See [`INTELLIGENT_AGENT_ROUTER.md`](INTELLIGENT_AGENT_ROUTER.md).
 
+### Zero3 API executor and unified Web GPT dispatch — P1
+
+`ZERO3_API` is a real production executor, not a test-only adapter. `Zero3Zero3ApiTaskAdapter` runs one
+read-only turn through the existing session-provider bridge (API profile -> model provider -> pinned
+Codex Agent Kernel thread), so no second model API runtime, credential store or agent loop exists.
+`Zero3Zero3ApiAvailabilityProbe` reports registration, authentication, quota, rate limits, overload and
+observed latency, keeps a bounded provider-health window that the adapter feeds back after every real
+attempt, and reads rolling latency from `Zero3RoutingMetricsStore` instead of keeping its own
+statistics. Failure classification reuses the executor-runtime failure taxonomy and adds only the
+decision it implies (`retry_same_executor` / `reroute` / `waiting_human` / `terminal` /
+`outcome_unknown`); a reroute excludes the failed executor, a same-executor retry keeps it eligible, and
+every attempt still lands on one Task identity with the prior attempt context carried forward. Web GPT
+reaches the same router through the bounded `dispatch_agent_task` Worker RPC/MCP tool, which accepts a
+typed objective/routing contract and never a shell command or executable.
+
 ## 8. First-alpha closeout and remaining reliability work
 
 [PR #49](https://github.com/Taa965/zero3-pilot/pull/49) is merged. Zero3 now explicitly launches pinned Codex with `--session-source app-server`, lists the matching `sourceKinds: ['appServer']` namespace, and carries a real first-Turn cold-restart persistence smoke for two durable Threads.

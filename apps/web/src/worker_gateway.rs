@@ -41,7 +41,7 @@ const CAPABILITY_TOOLS: [&str; 5] = [
     "cancel_operation",
 ];
 const SKILL_TOOLS: [&str; 4] = ["list_skills", "search_skills", "get_skill", "invoke_skill"];
-const WORKER_TOOLS: [&str; 21] = [
+const WORKER_TOOLS: [&str; 22] = [
     "register_worker",
     "claim_work",
     "report_progress",
@@ -58,12 +58,19 @@ const WORKER_TOOLS: [&str; 21] = [
     "handoff_create",
     "task_bootstrap",
     "dispatch_codex_task",
+    "dispatch_agent_task",
     "verify_commit",
     "bootstrap_worker",
     "commit_and_claim_next",
     "report_blocked",
     "recover_worker",
 ];
+// Tools whose result only arrives after a long local execution. They get the
+// long request/lease window so a real agent task is not fenced out mid-flight by
+// the default 30s lease.
+fn is_long_running_worker_tool(tool: &str) -> bool {
+    matches!(tool, "verify_commit" | "dispatch_agent_task")
+}
 #[derive(Clone)]
 pub struct WorkerGatewayRuntime {
     gateway: Option<Arc<WorkerGateway>>,
@@ -382,7 +389,7 @@ impl WorkerGateway {
             created_at: now,
             updated_at: now,
             expires_at: now
-                + if capability == SKILL_CAPABILITY || tool == "verify_commit" {
+                + if capability == SKILL_CAPABILITY || is_long_running_worker_tool(tool) {
                     Duration::seconds(SKILL_REQUEST_TTL_SECONDS)
                 } else {
                     self.request_ttl
@@ -441,7 +448,9 @@ impl WorkerGateway {
         })?;
         record.lease_expires_at = Some(
             Utc::now()
-                + if record.capability == SKILL_CAPABILITY || record.tool == "verify_commit" {
+                + if record.capability == SKILL_CAPABILITY
+                    || is_long_running_worker_tool(&record.tool)
+                {
                     Duration::seconds(SKILL_LEASE_TTL_SECONDS)
                 } else {
                     self.lease_ttl
@@ -1295,6 +1304,24 @@ fn worker_tool_catalog() -> Vec<Value> {
                 "requireRemoteSyncOnSuccess":{"type":"boolean"}, "idempotencyKey":id_schema()
             }), &["sessionId","workspace","objective","idempotencyKey"], false,
         ),
+        // Unified task entry: Zero3 decides which executor runs the task. The
+        // schema intentionally exposes only a typed objective/task contract --
+        // never a command, a shell string, or an executable.
+        tool_definition(
+            "dispatch_agent_task", "Dispatch Unified Zero3 Agent Task",
+            "Dispatch one objective through the Zero3 Intelligent Agent Task Router, which selects Codex, Claude, Gemini or the Zero3 API from capability, availability and history. Only a typed objective, constraints and acceptance criteria are accepted; no shell command, executable, credential, or routing internals are exposed.",
+            json!({
+                "sessionId":id_schema(), "objective":{"type":"string","minLength":1,"maxLength":64000},
+                "projectId":id_schema(), "workspace":{"type":"string","maxLength":4096},
+                "routingMode":{"type":"string","enum":["AUTO","PINNED","PREFERRED"]},
+                "preferredExecutor":{"type":"string","enum":["CODEX","CLAUDE","GEMINI","ZERO3_API"]},
+                "taskType":{"type":"string","enum":["DESIGN","IMPLEMENT","VERIFY","FIX","REVIEW","INTEGRATE","RESEARCH"]},
+                "importance":{"type":"string","enum":["low","normal","high","critical"]},
+                "constraints":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}},
+                "acceptanceCriteria":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":4096}},
+                "idempotencyKey":id_schema()
+            }), &["sessionId","objective","idempotencyKey"], false,
+        ),
         tool_definition(
             "verify_commit", "Verify Commit And Push",
             "Run only allow-listed static checks, then stage only declared task-owned paths, create one scoped Git commit and non-force push the current branch. Fails closed on unrelated staged changes or unsafe repository state.",
@@ -1680,10 +1707,25 @@ mod tests {
         assert_eq!(names, WORKER_TOOLS);
         let serialized = serde_json::to_string(&catalog).unwrap();
         assert!(serialized.contains("dispatch_codex_task"));
+        assert!(serialized.contains("dispatch_agent_task"));
         assert!(serialized.contains("verify_commit"));
         assert!(serialized.contains("task_bootstrap"));
         assert!(!serialized.contains("run_gpu"));
         assert!(!serialized.contains("workflow_admin"));
+        // The unified entry accepts a typed objective only: no raw shell, no
+        // arbitrary command and no executable may ever appear in its schema.
+        let unified = catalog
+            .iter()
+            .find(|tool| tool["name"] == "dispatch_agent_task")
+            .expect("unified dispatch tool is registered");
+        let unified_schema =
+            serde_json::to_string(&unified["inputSchema"]).unwrap().to_lowercase();
+        for forbidden in ["\"command\"", "\"shell\"", "\"exec\"", "\"executable\"", "\"argv\""] {
+            assert!(
+                !unified_schema.contains(forbidden),
+                "dispatch_agent_task must not accept {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -1736,6 +1778,29 @@ mod tests {
         );
         let lease = gateway.try_lease("node-1").unwrap().unwrap();
         assert_eq!(lease.tool, "verify_commit");
+        let expiry = DateTime::parse_from_rfc3339(&lease.lease_expires_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(expiry - Utc::now() > Duration::minutes(10));
+    }
+
+    #[test]
+    fn dispatch_agent_task_is_deduplicated_and_gets_a_long_execution_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        let gateway = WorkerGateway::open(dir.path().to_path_buf(), "node-1".into()).unwrap();
+        let args = json!({
+            "sessionId":"session-1", "objective":"Summarize the architecture", "workspace":"C:/repo",
+            "routingMode":"AUTO", "importance":"normal", "idempotencyKey":"agent-1"
+        });
+        let first = gateway.submit("dispatch_agent_task", args.clone()).unwrap();
+        let replay = gateway.submit("dispatch_agent_task", args).unwrap();
+        assert_eq!(first.request_id, replay.request_id);
+        assert!(
+            first.expires_at - first.created_at >= Duration::seconds(SKILL_REQUEST_TTL_SECONDS)
+        );
+        let lease = gateway.try_lease("node-1").unwrap().unwrap();
+        assert_eq!(lease.tool, "dispatch_agent_task");
+        assert_eq!(lease.arguments["objective"], "Summarize the architecture");
         let expiry = DateTime::parse_from_rfc3339(&lease.lease_expires_at)
             .unwrap()
             .with_timezone(&Utc);

@@ -3,12 +3,14 @@ import {
   type Zero3ArtifactRef,
   type Zero3CrossAgentBinding,
   type Zero3ExecutionResultV2,
+  type Zero3ExecutorFailureClass,
   type Zero3ResolvedAgentTarget,
   type Zero3ReviewDecision,
   type Zero3TaskImportance,
   type Zero3TaskSpecV2,
   type Zero3VerificationResult
 } from './agent-contracts'
+import type { ExecutorFailureCode } from '../executor-runtime/executor-types'
 import type { Zero3ResolvedTaskSkill, Zero3SkillUsageRecord } from '../skill-runtime/skill-types'
 import { Zero3AgentRouter, type Zero3ProviderAvailability } from './agent-router'
 import { Zero3AgentTaskStore, type Zero3AgentTaskRecord, type Zero3AgentTaskState, type Zero3TaskAttemptRecord } from './agent-task-store'
@@ -16,6 +18,7 @@ import { Zero3ReviewLoopStore } from './review-loop-store'
 import { verificationProfile, verificationProfileFor, type Zero3IntelligentRouteDecision, type Zero3RoutingExecutorId, type Zero3RoutingMode, type Zero3RoutingRequest, type Zero3VerificationProfileName } from './intelligent-router-contracts'
 import type { Zero3IntelligentTaskRouter } from './intelligent-router'
 import type { Zero3RoutingMetricsStore, Zero3RoutingOutcomeInput } from './routing-metrics-store'
+import { classifyExecutorError } from './zero3-executor-failure'
 
 export type Zero3CodexTaskDispatcher = {
   dispatchTask(task: Zero3TaskSpecV2, skills?: readonly Zero3ResolvedTaskSkill[]): Promise<Zero3ExecutionResultV2>
@@ -253,6 +256,20 @@ function stateForResult(result: Zero3ExecutionResultV2, reviewRequired: boolean)
   }
 }
 
+function attemptStatusFor(status: Zero3ExecutionResultV2['status'] | null): Zero3TaskAttemptRecord['status'] {
+  switch (status) {
+    case 'COMPLETE':
+    case 'PARTIAL':
+      return 'SUCCEEDED'
+    case 'BLOCKED':
+      return 'BLOCKED'
+    case 'OUTCOME_UNKNOWN':
+      return 'OUTCOME_UNKNOWN'
+    default:
+      return 'FAILED'
+  }
+}
+
 function bindingFor(task: Zero3TaskSpecV2, context: Zero3AgentDispatchContext): Zero3CrossAgentBinding {
   const timestamp = new Date().toISOString()
   return {
@@ -313,7 +330,13 @@ function applyReviewerIndependence(
 }
 
 type AttemptFailure = {
+  // A different executor may legally pick the task up.
   switchEligible: boolean
+  // The executor itself failed, so it is excluded for the rest of this task.
+  // `retry_same_executor` failures keep the executor eligible.
+  blameExecutor: boolean
+  code: ExecutorFailureCode | null
+  failureClass: Zero3ExecutorFailureClass | null
   reason: string
 }
 
@@ -321,23 +344,97 @@ type AttemptFailure = {
 // the current authority: they are human-review/recovery situations, never
 // automatic provider switches.
 function classifyAttemptFailure(result: Zero3ExecutionResultV2 | null, thrown: unknown): AttemptFailure {
+  // An adapter that classified its own failure is authoritative: the routing
+  // decision (re-route vs retry vs waiting-human) is read from its class.
+  const declared = result?.failure ?? null
+  if (declared) {
+    return {
+      switchEligible: declared.class === 'reroute' || declared.class === 'retry_same_executor',
+      blameExecutor: declared.class === 'reroute',
+      code: declared.code,
+      failureClass: declared.class,
+      reason: `${declared.code} (${declared.class}): ${declared.detail}`
+    }
+  }
   if (!result) {
-    const message = thrown instanceof Error ? thrown.message : String(thrown)
-    return { switchEligible: true, reason: `executor raised an error: ${message}` }
+    // An undeclared crash carries no trustworthy class, so Zero3 keeps the
+    // pre-P1 policy for it: blame the executor and continue elsewhere. Only an
+    // adapter that explicitly declares its failure may ask for a same-executor
+    // retry or a human gate.
+    const failure = classifyExecutorError(thrown)
+    const failureClass: Zero3ExecutorFailureClass =
+      failure.class === 'outcome_unknown' || failure.class === 'waiting_human' ? failure.class : 'reroute'
+    return {
+      switchEligible: failureClass === 'reroute',
+      blameExecutor: failureClass === 'reroute',
+      code: failure.code,
+      failureClass,
+      reason: `executor raised an error: ${failure.code} (${failureClass}): ${failure.detail}`
+    }
   }
   switch (result.status) {
     case 'COMPLETE':
     case 'PARTIAL':
-      return { switchEligible: false, reason: 'succeeded' }
+      return { switchEligible: false, blameExecutor: false, code: null, failureClass: null, reason: 'succeeded' }
     case 'FAILED':
       return {
         switchEligible: true,
+        blameExecutor: true,
+        code: 'provider_error',
+        failureClass: 'reroute',
         reason: `executor reported FAILED: ${result.summary || result.blockers[0] || 'no failure detail'}`
       }
     case 'BLOCKED':
-      return { switchEligible: false, reason: `executor blocked the task: ${result.summary || result.blockers[0] || 'policy gate'}` }
+      return {
+        switchEligible: false,
+        blameExecutor: false,
+        code: 'policy_denied',
+        failureClass: 'waiting_human',
+        reason: `executor blocked the task: ${result.summary || result.blockers[0] || 'policy gate'}`
+      }
     case 'OUTCOME_UNKNOWN':
-      return { switchEligible: false, reason: 'executor outcome is unknown; recovery reconciliation is required' }
+      return {
+        switchEligible: false,
+        blameExecutor: false,
+        code: 'context_lost',
+        failureClass: 'outcome_unknown',
+        reason: 'executor outcome is unknown; recovery reconciliation is required'
+      }
+    default:
+      return {
+        switchEligible: false,
+        blameExecutor: false,
+        code: null,
+        failureClass: null,
+        reason: `executor returned an unrecognized terminal status ${String(result.status)}`
+      }
+  }
+}
+
+type PriorAttemptSummary = {
+  executor: Zero3RoutingExecutorId
+  status: Zero3TaskAttemptRecord['status']
+  reason: string
+}
+
+// Executor switches must not restart the task from zero. The next executor
+// receives the attempt chain (who ran, what happened, why it stopped) inside the
+// authoritative TaskSpec goal, while the TaskSpec identity fields stay untouched
+// so TaskSpec-driven idempotency and the CompletionGate are unaffected.
+function withPriorAttemptContext(task: Zero3TaskSpecV2, prior: readonly PriorAttemptSummary[]): Zero3TaskSpecV2 {
+  if (prior.length === 0) return task
+  const lines = prior.slice(-6).map(entry =>
+    `- attempt executor=${entry.executor} status=${entry.status} reason=${entry.reason.replace(/\s+/g, ' ').trim().slice(0, 500)}`
+  )
+  return {
+    ...task,
+    goal: [
+      task.goal,
+      '',
+      'ZERO3_PRIOR_ATTEMPT_CONTEXT:',
+      'This task already ran under another executor. Continue the same TaskSpec; do not restart from scratch and do not discard valid earlier work.',
+      ...lines
+    ].join('\n')
   }
 }
 
@@ -463,6 +560,7 @@ export class Zero3AgentRuntimeOrchestrator {
     const { mode, requestedExecutor } = resolveRoutingMode(task, context)
 
     const exclusions: Zero3RoutingExecutorId[] = []
+    const priorAttempts: PriorAttemptSummary[] = []
     let attempts = 0
     let switches = 0
     let created = false
@@ -503,7 +601,10 @@ export class Zero3AgentRuntimeOrchestrator {
       const attemptNumber = attempts + 1
       const attemptId = `${task.executionId}:attempt-${attemptNumber}`
       const startedAt = Date.now()
-      const attemptTask = applyReviewerIndependence(task, decision.provider, profileName)
+      const attemptTask = withPriorAttemptContext(
+        applyReviewerIndependence(task, decision.provider, profileName),
+        priorAttempts
+      )
       const resolvedSkills = this.deps.skills ? await this.deps.skills.resolve(attemptTask, decision.provider) : []
       await this.deps.taskStore.setSkills(task.taskId, resolvedSkills)
       await this.recordSkillUsage(attemptTask, decision.provider, resolvedSkills, 'selected', null)
@@ -536,27 +637,27 @@ export class Zero3AgentRuntimeOrchestrator {
       }
       const latencyMs = Date.now() - startedAt
       const succeeded = result != null && (result.status === 'COMPLETE' || result.status === 'PARTIAL')
+      const failure = classifyAttemptFailure(result, thrown)
 
       if (result) {
-        const attemptStatus: Zero3TaskAttemptRecord['status'] =
-          result.status === 'COMPLETE' || result.status === 'PARTIAL'
-            ? 'SUCCEEDED'
-            : result.status === 'BLOCKED'
-              ? 'BLOCKED'
-              : result.status === 'OUTCOME_UNKNOWN'
-                ? 'OUTCOME_UNKNOWN'
-                : 'FAILED'
+        const attemptStatus = attemptStatusFor(result.status)
         await this.deps.taskStore.updateAttempt(task.taskId, attemptId, {
           finishedAt: new Date().toISOString(),
           status: attemptStatus,
           conversationId: result.conversationId ?? null,
-          failureReason: succeeded ? null : (result.summary || result.blockers[0] || result.status)
+          failureReason: succeeded ? null : (result.summary || result.blockers[0] || result.status),
+          executorId: result.executorId ?? null,
+          failureCode: succeeded ? null : failure.code,
+          failureClass: succeeded ? null : failure.failureClass
         })
       } else {
         await this.deps.taskStore.updateAttempt(task.taskId, attemptId, {
           finishedAt: new Date().toISOString(),
           status: 'FAILED',
-          failureReason: thrown instanceof Error ? thrown.message : String(thrown)
+          failureReason: thrown instanceof Error ? thrown.message : String(thrown),
+          executorId: null,
+          failureCode: failure.code,
+          failureClass: failure.failureClass
         })
       }
       await this.recordSkillUsage(attemptTask, decision.provider, resolvedSkills, succeeded ? 'completed' : 'failed', latencyMs)
@@ -586,10 +687,14 @@ export class Zero3AgentRuntimeOrchestrator {
         return (await this.deps.taskStore.get(task.taskId))!
       }
 
-      const failure = classifyAttemptFailure(result, thrown)
       if (result) {
         await this.deps.taskStore.setResult(task.taskId, result, stateForResult(result, attemptTask.reviewPolicy.required))
       }
+      priorAttempts.push({
+        executor: decision.selectedExecutor,
+        status: attemptStatusFor(result?.status ?? null),
+        reason: failure.reason
+      })
 
       // PINNED tasks never switch executors: a pinned failure is surfaced to
       // the user instead of being silently re-routed to another provider.
@@ -602,8 +707,13 @@ export class Zero3AgentRuntimeOrchestrator {
         await this.deps.taskStore.setState(task.taskId, 'FAILED')
         throw thrown ?? new Error(`agent task dispatch failed: ${failure.reason}`)
       }
-      await this.deps.taskStore.updateAttempt(task.taskId, attemptId, { failoverReason: failure.reason })
-      exclusions.push(decision.selectedExecutor)
+      await this.deps.taskStore.updateAttempt(task.taskId, attemptId, {
+        failoverReason: `${failure.reason} -> re-route (${failure.blameExecutor ? 'executor excluded' : 'executor kept eligible for a retry'})`
+      })
+      // Only an executor that actually failed is excluded. A retryable
+      // same-executor failure keeps it in the candidate set, so the router
+      // re-evaluates instead of being forced onto the next slot in a list.
+      if (failure.blameExecutor) exclusions.push(decision.selectedExecutor)
       switches += 1
       attempts += 1
     }

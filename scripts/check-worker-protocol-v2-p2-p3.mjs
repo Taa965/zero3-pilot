@@ -25,13 +25,13 @@ for (const method of [
 
 for (const tool of [
   'bootstrap_worker', 'commit_and_claim_next', 'report_blocked', 'recover_worker',
-  'task_bootstrap', 'dispatch_codex_task', 'verify_commit'
+  'task_bootstrap', 'dispatch_codex_task', 'dispatch_agent_task', 'verify_commit'
 ]) {
   requireText(rpc, `'${tool}'`, `Worker RPC v2 tool missing: ${tool}`)
   requireText(gateway, `\"${tool}\"`, `Private Gateway v2 tool missing: ${tool}`)
 }
 requireText(rpc, "'bindingTicket' in input", 'claim_work/report_progress must preserve v1/v2 polymorphic compatibility.')
-requireText(gateway, 'const WORKER_TOOLS: [&str; 21]', 'Private Gateway v2 catalog size is stale.')
+requireText(gateway, 'const WORKER_TOOLS: [&str; 22]', 'Private Gateway v2 catalog size is stale.')
 requireText(runtime, "status='COMPLETED'", 'StageRun commit path must persist completion before downstream release.')
 requireText(runtime, 'recalculateStageReadiness', 'Per-item downstream Stage release is missing.')
 requireText(runtime, 'verifyWorkerBindingTicket', 'Generation-fenced Binding Ticket verification is missing from Worker Runtime v2.')
