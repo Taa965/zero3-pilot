@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 
-import { zero3RemoteWorkspaceAllowed } from './remote-config'
-import { Zero3RemoteEvidenceCollector } from './remote-evidence'
-import { Zero3RemoteMappingStore } from './remote-mapping-store'
+// Explicit .ts specifiers keep this module loadable by the node:test runner, the
+// way web-gpt-fast-path.ts already is; the remote-host overlay strips them again
+// when it stages the runtime into the prepared Electron tree.
+import { zero3RemoteWorkspaceAllowed } from './remote-config.ts'
+import { Zero3RemoteEvidenceCollector } from './remote-evidence.ts'
+import { Zero3RemoteMappingStore } from './remote-mapping-store.ts'
 import type {
   Zero3RemoteCodexMapping,
   Zero3RemoteExecutionResult,
@@ -12,8 +15,8 @@ import type {
   Zero3RemoteLease,
   Zero3RemoteProjectContextRef,
   Zero3RemoteTask
-} from './remote-types'
-import { ZERO3_REMOTE_EXECUTION_RESULT_PROTOCOL, ZERO3_REMOTE_TASK_PROTOCOL } from './remote-types'
+} from './remote-types.ts'
+import { ZERO3_REMOTE_EXECUTION_RESULT_PROTOCOL, ZERO3_REMOTE_TASK_PROTOCOL } from './remote-types.ts'
 
 export type Zero3CodexRuntime = {
   startThread(params: unknown): Promise<unknown>
@@ -40,6 +43,38 @@ type Zero3RemoteGitPostflight = Zero3RemoteGitPreflight & {
 const GIT_COMMAND_TIMEOUT_MS = 10_000
 const GIT_COMMAND_REQUEST_TIMEOUT_MS = 15_000
 const GIT_OUTPUT_BYTES_CAP = 64 * 1024
+
+// A freshly started non-ephemeral Codex Thread does not necessarily have its
+// durable rollout on disk at the instant Zero3 reads it. Pinned Codex
+// materializes the rollout around `thread/start`/first Turn, so for a short
+// window `thread/read` answers with a thread-store internal error
+// ("rollout at ... is empty", "is not materialized yet"). That window is a
+// normal transient state of the Codex durable-history contract, not an executor
+// failure: on 2026-09-12 six AUTO -> CODEX attempts were failed by this race
+// while their rollout files ended up 89-91 KB on disk.
+const THREAD_MATERIALIZATION_PATTERN =
+  /rollout at .* is empty|is not materialized yet|list_turns is not supported yet/i
+const DEFAULT_THREAD_MATERIALIZATION_TIMEOUT_MS = 30_000
+const MAX_THREAD_MATERIALIZATION_POLL_MS = 1_500
+
+/**
+ * True when a Codex thread read failed because the Thread's durable rollout has
+ * not been materialized yet. Exported so the desktop driver and tests share one
+ * definition of the transient state instead of re-matching the message.
+ */
+export function isThreadMaterializationFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return THREAD_MATERIALIZATION_PATTERN.test(message)
+}
+
+export type Zero3RemoteTaskRunnerOptions = {
+  /**
+   * How long one `thread/read` may wait for the rollout to materialize before the
+   * original thread-store error is surfaced. Tests lower it; production keeps
+   * the default so a genuinely broken Thread still fails the attempt.
+   */
+  threadMaterializationTimeoutMs?: number
+}
 
 export class Zero3RemoteTaskBlockedError extends Error {
   constructor(message: string) {
@@ -460,16 +495,66 @@ function delay(ms: number): Promise<void> {
 }
 
 export class Zero3RemoteTaskRunner {
+  private readonly threadMaterializationTimeoutMs: number
+
   constructor(
     private readonly config: Zero3RemoteHostConfig,
     private readonly codex: Zero3CodexRuntime,
-    private readonly mappings = new Zero3RemoteMappingStore(config.mappingStateFile)
-  ) {}
+    private readonly mappings = new Zero3RemoteMappingStore(config.mappingStateFile),
+    options: Zero3RemoteTaskRunnerOptions = {}
+  ) {
+    this.threadMaterializationTimeoutMs =
+      options.threadMaterializationTimeoutMs ?? DEFAULT_THREAD_MATERIALIZATION_TIMEOUT_MS
+  }
+
+  /**
+   * `thread/read` for a Thread whose durable rollout may still be materializing.
+   *
+   * The wait is bounded and only covers the documented not-materialized family of
+   * thread-store errors. Any other failure (policy, transport, a genuinely
+   * corrupt rollout) is rethrown unchanged, and once the budget is spent the
+   * original store error is surfaced too, so this can never turn a real Codex
+   * failure into a silent success.
+   */
+  private async readThreadWhenMaterialized(
+    params: { threadId: string; includeTurns: boolean },
+    options: {
+      timeoutMs?: number
+      onWait?: (attempt: number, error: unknown) => Promise<void>
+    } = {}
+  ): Promise<unknown> {
+    const deadline = Date.now() + (options.timeoutMs ?? this.threadMaterializationTimeoutMs)
+    let attempt = 0
+    for (;;) {
+      try {
+        return await this.codex.readThread(params)
+      } catch (error) {
+        if (!isThreadMaterializationFailure(error)) throw error
+        if (Date.now() >= deadline) throw error
+        attempt += 1
+        if (options.onWait) await options.onWait(attempt, error)
+        await delay(Math.min(250 * attempt, MAX_THREAD_MATERIALIZATION_POLL_MS))
+      }
+    }
+  }
 
   private async recoverPendingTurn(mapping: Zero3RemoteCodexMapping, clientId: string): Promise<string | null> {
     const deadline = Date.now() + 5_000
     do {
-      const snapshot = await this.codex.readThread({ threadId: mapping.threadId, includeTurns: true })
+      // A persisted turn-start intent may predate the rollout that proves it, so
+      // the wait here is bounded by the recovery deadline rather than failing the
+      // task. If the Turn still cannot be proven, the caller fails closed with
+      // OUTCOME_UNKNOWN instead of starting a duplicate Turn.
+      let snapshot: unknown
+      try {
+        snapshot = await this.readThreadWhenMaterialized(
+          { threadId: mapping.threadId, includeTurns: true },
+          { timeoutMs: Math.max(250, deadline - Date.now()) }
+        )
+      } catch (error) {
+        if (isThreadMaterializationFailure(error)) return null
+        throw error
+      }
       const recovered = findTurnByClientId(snapshot, clientId)
       if (recovered) return recovered.turnId
       if (Date.now() < deadline) await delay(250)
@@ -597,9 +682,26 @@ export class Zero3RemoteTaskRunner {
     const timeoutMs = (task.execution?.timeout_seconds ?? 3600) * 1000
     const deadline = Date.now() + timeoutMs
     let lastStatus = ''
+    let materializationObserved = false
 
     while (Date.now() < deadline) {
-      const snapshot = await this.codex.readThread({ threadId: mapping.threadId, includeTurns: true })
+      const snapshot = await this.readThreadWhenMaterialized(
+        { threadId: mapping.threadId, includeTurns: true },
+        {
+          // Never outlive the task's own observation deadline.
+          timeoutMs: Math.max(250, Math.min(this.threadMaterializationTimeoutMs, deadline - Date.now())),
+          onWait: async attempt => {
+            if (materializationObserved) return
+            materializationObserved = true
+            const pending = evidence.push('remote.thread.materializing', {
+              threadId: mapping.threadId,
+              attempt,
+              reason: 'Codex rollout is not materialized yet; waiting for the durable history instead of failing the attempt'
+            })
+            if (onEvidence) await onEvidence(pending.sequence, pending.method, pending.params)
+          }
+        }
+      )
       const turn = findTurn(snapshot, turnId)
       if (!turn) {
         await delay(750)

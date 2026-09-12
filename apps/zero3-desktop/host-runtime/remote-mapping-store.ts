@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file'
+// Explicit .ts specifier (stripped again by the remote-host overlay) so the
+// remote task runner stays loadable from node:test.
+import { zero3AtomicWriteFile } from '../workspace-runtime/atomic-file.ts'
 
 import type { Zero3RemoteCodexMapping } from './remote-types'
 
