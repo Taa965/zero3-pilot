@@ -210,3 +210,17 @@ test('the shipped overlays keep the repair candidates and post-condition invaria
   assert.ok(lifecycle.includes('Capability RPC methods'), 'Agent Lifecycle overlay must repair the composite RPC port with ZRCP methods.')
   assert.ok(lifecycle.includes('zero3CapabilityRuntime.close()'), 'Agent Lifecycle overlay must tear down local Capability Runtime.')
 })
+
+test('the Codex transport overlay and prepare are safe to replay', () => {
+  const transport = read('scripts/apply-codex-transport.mjs')
+  assert.ok(transport.includes('patchOverlaySource'), 'Codex transport overlay must use the shared patch engine.')
+  assert.ok(transport.includes('appliedMarker:'), 'Codex transport overlay must mark injected blocks instead of matching its own output.')
+  assert.ok(transport.includes('Codex app-server transport types'), 'Codex transport overlay must assert one transport type surface.')
+  assert.ok(transport.includes('Zero3 Codex preload surface'), 'Codex transport overlay must assert one preload bridge.')
+
+  const prepare = read('scripts/prepare-upstream.mjs')
+  assert.ok(prepare.includes('function restoreGeneratedShell()'), 'prepare must restore the pinned shell before replaying overlays.')
+  const restore = prepare.indexOf('\nrestoreGeneratedShell()')
+  assert.ok(restore > 0, 'prepare must call restoreGeneratedShell.')
+  assert.ok(restore > prepare.indexOf('--refresh-generated'), 'prepare must snapshot the previous output before restoring.')
+})

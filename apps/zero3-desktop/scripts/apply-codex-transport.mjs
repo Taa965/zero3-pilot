@@ -2,24 +2,22 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { hermesDesktopDir } from './config.mjs'
+import { patchOverlaySource } from './overlay-patch.mjs'
 
-function patchFile(relativePath, replacements) {
+function patchFile(relativePath, replacements, invariants) {
   const file = path.join(hermesDesktopDir, ...relativePath.split('/'))
-  let source = fs.readFileSync(file, 'utf8')
-
-  for (const replacement of replacements) {
-    if (replacement.appliedMarkers?.every(marker => source.includes(marker))) continue
-    if (source.includes(replacement.to)) continue
-    if (!source.includes(replacement.from)) {
-      throw new Error(
-        `Zero3 Codex transport drift in ${relativePath}: could not find ${replacement.label}. ` +
-          'The pinned Hermes Desktop source changed; review the R1 transport overlay before updating the pin.'
-      )
-    }
-    source = source.replace(replacement.from, replacement.to)
-  }
-
-  fs.writeFileSync(file, source)
+  const source = fs.readFileSync(file, 'utf8')
+  // Later overlays rewrite the transport block in place (agent runtimes extend
+  // zero3CodexAppServer), so the injected text is not by itself proof that this
+  // overlay already ran. Explicit markers and invariants are.
+  const patched = patchOverlaySource({
+    relativePath,
+    source,
+    replacements,
+    invariants,
+    driftPrefix: 'Zero3 Codex transport'
+  })
+  if (patched !== source) fs.writeFileSync(file, patched)
 }
 
 const mainTransport = String.raw`
@@ -1117,18 +1115,25 @@ type Zero3CodexEvent =
 export function applyZero3CodexTransport() {
   patchFile('electron/main.ts', [
     {
+      appliedMarker: 'type Zero3CodexRpcId = number | string',
       label: 'Codex app-server transport before Hermes compatibility API',
       from: "ipcMain.handle('hermes:api', async (_event, request) => {",
       to: mainTransport + "\nipcMain.handle('hermes:api', async (_event, request) => {"
     }
+  ], [
+    { label: 'Codex app-server transport types', text: 'type Zero3CodexRpcId = number | string', count: 1 },
+    { label: 'Codex app-server transport client', text: 'class Zero3CodexAppServer', count: 1 }
   ])
 
   patchFile('electron/preload.ts', [
     {
+      appliedMarker: 'contextBridge.exposeInMainWorld(\'zero3Codex\', {',
       label: 'typed Zero3 Codex preload surface',
       from: "contextBridge.exposeInMainWorld('hermesDesktop', {",
       to: preloadBridge
     }
+  ], [
+    { label: 'Zero3 Codex preload surface', text: 'contextBridge.exposeInMainWorld(\'zero3Codex\', {', count: 1 }
   ])
 
   patchFile('src/global.d.ts', [
@@ -1136,13 +1141,16 @@ export function applyZero3CodexTransport() {
       label: 'Zero3 Codex renderer type definitions',
       from: 'export {}\n\ndeclare global {',
       to: 'export {}\n' + globalTypeDefinitions + '\ndeclare global {',
-      appliedMarkers: ['type Zero3CodexStatus = {', 'type Zero3CodexServerResponse =']
+      alreadyAny: ['type Zero3CodexStatus = {', 'type Zero3CodexServerResponse =']
     },
     {
       label: 'Zero3 Codex window surface',
       from: 'interface Window {\n    hermesDesktop:',
       to: globalTypes,
-      appliedMarkers: ['    zero3Codex: {', '      onEvent: (callback: (event: Zero3CodexEvent) => void) => () => void']
+      alreadyAny: ['    zero3Codex: {', '      onEvent: (callback: (event: Zero3CodexEvent) => void) => () => void']
     }
+  ], [
+    { label: 'Zero3 Codex renderer types', text: 'type Zero3CodexStatus = {', count: 1 },
+    { label: 'Zero3 Codex renderer window surface', text: 'zero3Codex: {', count: 1 }
   ])
 }

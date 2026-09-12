@@ -129,6 +129,20 @@ function assertOnlyOverlayChanges() {
   }
 }
 
+function restoreGeneratedShell() {
+  // assertOnlyOverlayChanges() has already proven every tracked change in the
+  // shell is overlay output, and every untracked overlay artifact is rewritten
+  // by its own producer during the same run. Replaying from the pinned shell is
+  // therefore safe, and it keeps a repeated prepare byte-identical instead of
+  // double-applying a block whose anchor survived or drifting on a shape that an
+  // earlier run already rewrote.
+  const changes = trackedHermesChanges()
+  if (changes.length) {
+    exec('git', ['-C', hermesRoot, 'checkout', '--', ...changes])
+    console.log(`[Zero3] Replayed the overlay chain from the pinned shell (${changes.length} files restored).`)
+  }
+}
+
 function refreshGeneratedShell() {
   // The allowlist and pinned HEAD were checked before this function. Preserve
   // the previous generated files before rebuilding them, without resetting Git
@@ -300,6 +314,7 @@ assertPin('Hermes Agent', hermesRoot, pins.hermes)
 assertPin('DeepSeek Harness', deepseekRoot, pins.deepseek)
 assertOnlyOverlayChanges()
 if (process.argv.includes('--refresh-generated')) refreshGeneratedShell()
+restoreGeneratedShell()
 applyBrandOverlay()
 applyZero3ShellPolicy()
 applyZero3ChineseUi()
